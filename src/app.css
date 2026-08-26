@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@page { margin-top: 0.4in; margin-bottom: 0.6in; }
+
+@media print {
+  nav, header, aside, .no-print { display: none !important; }
+  body, .bg-gray-100, .bg-gray-50 { background: white !important; }
+  tr { page-break-inside: avoid; }
+  * { box-shadow: none !important; }
+
+  /* Bezels on cards/tiles since box-shadow is removed */
+  .bg-white.rounded-xl { border: 1px solid #e5e7eb !important; }
+
+  /* Preserve progress bar track in print */
+  .bg-gray-100.rounded-full { background: #f3f4f6 !important; }
+
+  /* Metric tiles: 3 across (2 rows of 3) for print */
+  .grid.grid-cols-2 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 0.5rem !important; }
+
+  /* Tighten venue table for print */
+  table td, table th { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+  html, body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .print\:block { display: block !important; }
+  .print\:table-row-group { display: table-row-group !important; }
+  .print\:hidden { display: none !important; }
+  .print\:break-before-page { break-before: page !important; }
+
+  /* Break out of Layout constraints */
+  html, body, #root { height: auto !important; overflow: visible !important; }
+  div.h-screen { height: auto !important; overflow: visible !important; }
+  div.flex.overflow-hidden { overflow: visible !important; }
+  main.overflow-y-auto { overflow: visible !important; padding: 0 !important; }
+  main { width: 100% !important; max-width: 100% !important; }
+}

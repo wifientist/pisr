@@ -1,0 +1,48 @@
+# PISR runtime dependencies.
+#
+# Versions match rtools2's, so this inherits a combination already proven in
+# production. WeasyPrint's own transitives (pydyf, tinycss2, cssselect2, Pyphen,
+# fontTools, Pillow, tinyhtml5) are deliberately unpinned — let pip resolve what
+# 68.1 actually wants, then lock the result:
+#
+#   docker compose run --rm pisr pip freeze > api/requirements.lock.txt
+#
+# Dropped from rtools2 (23 packages): SQLAlchemy, alembic, psycopg2-binary,
+# redis, APScheduler, boto3, cryptography, python-jose, python-multipart,
+# httpx, aiohttp, playwright, PyYAML, Mako, email_validator, dnspython, ecdsa,
+# rsa, pyasn1, six, greenlet, exceptiongroup, starkbank-ecdsa.
+#
+# cryptography goes with the database: credentials are plaintext in .env now,
+# which is the right trade for a single-purpose tool but worth knowing.
+
+# ── Web framework ──
+fastapi==0.115.11
+starlette==0.46.1
+uvicorn==0.34.0
+h11==0.14.0
+anyio==4.8.0
+sniffio==1.3.1
+click==8.1.8
+
+# ── Validation (FastAPI's own) ──
+pydantic==2.10.6
+pydantic_core==2.27.2
+annotated-types==0.7.0
+typing_extensions==4.12.2
+
+# ── Configuration ──
+python-dotenv==1.0.1
+
+# ── RUCKUS ONE client (r1api/ is requests-based) ──
+requests==2.32.3
+certifi==2025.4.26
+charset-normalizer==3.4.1
+idna==3.10
+urllib3==2.4.0
+
+# ── PDF report ──
+Jinja2==3.1.4
+MarkupSafe==3.0.2
+weasyprint==68.1
+cffi==1.17.1
+pycparser==2.22

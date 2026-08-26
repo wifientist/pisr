@@ -1,0 +1,24 @@
+# Credentials. This is the whole secret store — never commit it.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Generated
+api/requirements.lock.txt
+*.pdf
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

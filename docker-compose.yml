@@ -1,0 +1,22 @@
+# Production: one container, one port, one process.
+#
+# FastAPI serves both the API and the built SPA, so there is no nginx, no node
+# at runtime, no CORS (same origin) and no proxy read-timeout to tune — which
+# matters, because a switch-port crawl on a large venue is exactly the kind of
+# request that brushes up against a default 90s proxy timeout.
+#
+# No volumes: PISR stores nothing. No database, no cache, no snapshot directory.
+
+services:
+  pisr:
+    build: .
+    container_name: pisr
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PISR_PORT:-8080}:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"
