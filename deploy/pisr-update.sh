@@ -28,8 +28,19 @@ APP_DIR="${PISR_APP_DIR:-$HOME/app}"
 BRANCH="${PISR_BRANCH:-main}"
 REMOTE="${PISR_REMOTE:-origin}"
 COMPOSE="${PISR_COMPOSE:-podman-compose}"
-# Must match the published port in docker-compose.yml (PISR_PORT, default 8080).
-HEALTH_URL="${PISR_HEALTH_URL:-http://127.0.0.1:8090/healthz}"
+# The health URL is derived, not guessed. Hardcoding a port here would be a
+# quiet trap: if it disagrees with the port compose actually publishes, every
+# deploy looks unhealthy and rolls itself back, and the journal blames the
+# commit rather than this line. So read PISR_PORT from the same env file
+# compose reads, and fall back to the same default compose falls back to.
+# Setting PISR_HEALTH_URL explicitly still wins over all of it.
+if [ -z "${PISR_HEALTH_URL:-}" ]; then
+  _env_file="${PISR_ENV_FILE:-${PISR_APP_DIR:-$HOME/app}/.env}"
+  _port="$(sed -n 's/^[[:space:]]*PISR_PORT[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+             "$_env_file" 2>/dev/null | tail -1)"
+  PISR_HEALTH_URL="http://127.0.0.1:${_port:-8080}/healthz"
+fi
+HEALTH_URL="$PISR_HEALTH_URL"
 HEALTH_TIMEOUT="${PISR_HEALTH_TIMEOUT:-120}"
 ALLOW_DIRTY="${PISR_UPDATE_ALLOW_DIRTY:-0}"
 LOCK_FILE="${PISR_LOCK_FILE:-${XDG_RUNTIME_DIR:-/tmp}/pisr-update.lock}"

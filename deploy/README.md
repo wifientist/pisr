@@ -48,7 +48,6 @@ mkdir -p ~/.config
 cat > ~/.config/pisr-update.env <<'EOF'
 PISR_APP_DIR=/home/appuser/app
 PISR_ENV_FILE=/home/appuser/pisr-config/pisr.env
-PISR_HEALTH_URL=http://127.0.0.1:8090/healthz
 EOF
 
 # 3. Install the units.
@@ -63,12 +62,20 @@ clone is at `~/app`. If `PISR_APP_DIR` points somewhere else, edit that line to
 match — systemd resolves `ExecStart` itself and will not read it from the
 environment file.
 
-`PISR_HEALTH_URL` must match the port `docker-compose.yml` actually publishes
-(`PISR_PORT`, default 8080). Point it at `/healthz` and not `/api/status` —
-the latter is behind the session gate and would fail every check.
-
 `PISR_ENV_FILE` is read by `docker-compose.yml` itself, not by the script; it
 is here because the script's environment is what podman-compose inherits.
+
+There is deliberately no `PISR_HEALTH_URL` above. The script reads `PISR_PORT`
+out of that same env file and builds the URL from it, falling back to 8080 —
+the same default compose falls back to. Setting the two independently is a
+quiet trap: if the health URL names a port nothing is listening on, every
+deploy looks unhealthy and rolls itself back, and the journal blames the commit
+rather than the setting. Note that `.env.example` ships `PISR_PORT=8090` while
+compose defaults to 8080, so the two really do differ between installs.
+
+Set `PISR_HEALTH_URL` explicitly only if PISR is reachable somewhere the
+derivation cannot work out — and point it at `/healthz`, never `/api/status`,
+which is behind the session gate and would fail every check.
 
 ## Operating it
 
