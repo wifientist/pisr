@@ -1,0 +1,28 @@
+[Unit]
+Description=Pull and redeploy PISR if main has moved
+Documentation=https://github.com/wifientist/pisr/blob/main/deploy/README.md
+# Rootless podman talks to the user's own socket, so this needs the user
+# session up. It is a --user unit; see deploy/README.md for enable-linger,
+# without which the session ends at logout and the timer stops with it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/app/deploy/pisr-update.sh
+
+# Settings live here rather than in the script so an operator changes the
+# deployment without editing a tracked file — which would make the working
+# tree dirty and stop the very script that reads it.
+EnvironmentFile=-%h/.config/pisr-update.env
+
+# A rebuild is slow and this is not urgent; keep it off the back of whatever
+# else the box is doing.
+Nice=10
+IOSchedulingClass=idle
+
+# The script writes nothing outside the app directory and the lock file.
+PrivateTmp=false
+NoNewPrivileges=true
+
+TimeoutStartSec=900

@@ -1,0 +1,23 @@
+[Unit]
+Description=Check for PISR updates every 5 minutes
+Documentation=https://github.com/wifientist/pisr/blob/main/deploy/README.md
+
+[Timer]
+# Two minutes after boot, then every five. The boot run matters more than the
+# interval: it is what brings the box back to the current commit after a
+# reboot or a power cut, without anyone logging in.
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+# Spread the check so a fleet of these does not hit GitHub in lockstep, and so
+# a deploy does not always land on the same wall-clock second.
+RandomizedDelaySec=60
+
+# If the box was off when a check was due, run once on the next start rather
+# than replaying every missed interval.
+Persistent=true
+
+Unit=pisr-update.service
+
+[Install]
+WantedBy=timers.target
