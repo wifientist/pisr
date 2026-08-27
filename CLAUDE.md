@@ -120,6 +120,19 @@ diff rather than an archaeology exercise. If you must diverge, note it here.
 
 ### Known divergences
 
+- **R1 connection pool** — `api/r1api/client.py`. rtools2 has the same bug and
+  could take the same fix. A bare `requests.Session()` gets urllib3's default
+  `pool_maxsize=10`, while `collect.py` fans a report out over asyncio's
+  default executor — `min(32, cpu_count + 4)` threads. On anything with more
+  than six cores that exceeds the pool, and every request past the tenth pays
+  a fresh TCP and TLS handshake and is then discarded rather than pooled;
+  production logged it as "Connection pool is full, discarding connection:
+  api.ruckus.cloud". An `HTTPAdapter` is now mounted with the pool sized off
+  the same expression, floored at 10 so a small box never ends up with less
+  than the default. `R1_POOL_MAXSIZE` overrides. No retries were added: the
+  calls would be safe to repeat, but a silent retry turns a failing R1
+  endpoint into a slow one.
+
 - **Spectrum chart paint order** — `src/pages/PISR.tsx` (`SpectrumChart`) and
   `api/reports/pisr.py` (`_spectrum`). Both sorted blocks by `inUse` alone, so
   states differing only by colour painted in channel order and a translucent

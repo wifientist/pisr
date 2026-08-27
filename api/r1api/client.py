@@ -30,6 +30,47 @@ class R1Client:
         # self.token_expiry = None  # optional if you want expiry management
         self.session = requests.Session()
 
+        # DIVERGENCE FROM rtools2. A bare Session gets urllib3's default
+        # pool_maxsize of 10, and PISR does not make requests one at a time:
+        # collect.py fans a report out with asyncio.gather over
+        # asyncio.to_thread, and asyncio's default executor runs
+        # min(32, cpu_count + 4) threads. So ~30 requests contend for 10 pooled
+        # connections, and every one that misses opens a fresh connection,
+        # completes a TCP handshake and a TLS negotiation, and is then thrown
+        # away rather than returned to the pool. Production logs it as
+        # "Connection pool is full, discarding connection: api.ruckus.cloud".
+        #
+        # The cost is invisible in a small venue and grows with the venue,
+        # which is the wrong way round — the reports that already take longest
+        # pay the most handshakes.
+        #
+        # Sized off the same expression asyncio uses for its default executor,
+        # so the pool tracks the concurrency instead of being a second number
+        # to keep in step. Floored at urllib3's own default of 10: on a small
+        # box that expression comes out BELOW 10 — four cores gives eight — and
+        # sizing "correctly" there would shrink the pool and make the very
+        # problem this is fixing worse. The floor costs nothing; an unused
+        # slot in a pool is not an open connection.
+        #
+        # This is also why the default bites on bigger hosts and not smaller
+        # ones: eight cores gives twelve threads against a pool of ten.
+        #
+        # R1_POOL_MAXSIZE overrides for anyone who has tuned the executor.
+        pool_maxsize = int(os.getenv("R1_POOL_MAXSIZE") or
+                           max(10, min(32, (os.cpu_count() or 1) + 4)))
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=4,   # distinct hosts; there is only ever one
+            pool_maxsize=pool_maxsize,
+            # Deliberately no retries. Every call here is a GET or a */query
+            # POST and would be safe to repeat, but a silent retry turns a
+            # failing R1 endpoint into a slow one, and the 404s this tool
+            # surfaces are findings rather than faults.
+            max_retries=0,
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        logger.debug("R1 connection pool sized to %s", pool_maxsize)
+
         if region == 'EU':
             self.host = 'api.eu.ruckus.cloud'
         elif region == 'ASIA':
