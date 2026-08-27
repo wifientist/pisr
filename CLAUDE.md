@@ -57,9 +57,23 @@ RUCKUS ONE venue, shape it, check it, render it.
   not the header.** A header is a claim anyone can make. If you ever find PISR
   in proxy mode published on `0.0.0.0`, that is a live authentication bypass —
   `expose:`, not `ports:`.
-- **`SessionGateMiddleware` is registered after CORS** so CORS stays outermost
-  and a preflight isn't answered with a 401. It gates by path prefix, not by
-  route, so a router added later is gated by default.
+- **`SessionGateMiddleware` gates by path prefix, not by route**, so a router
+  added later is gated by default. Note that Starlette's `add_middleware` does
+  `insert(0, ...)`, so the LAST middleware added is the OUTERMOST — the reverse
+  of the intuitive reading, and the reason the gate sits in front of CORS. That
+  is the safe direction; the cost is that a CORS preflight to a gated path gets
+  a 401 with no CORS headers, which only matters if the frontend ever moves to
+  its own origin.
+- **A forwarded header is believed only from a peer in
+  `PISR_TRUSTED_PROXY_IPS`** — `X-Forwarded-Proto` for the cookie's `Secure`
+  flag, and `PISR_CLIENT_IP_HEADER` for the address the login throttle counts
+  against. Both fail closed to the TCP peer. Do not "simplify" either into
+  reading the header unconditionally: a client-address header any caller can
+  set makes the throttle *weaker* than no header at all, because an attacker
+  varies it per request and is never counted twice.
+- **`_proxy_identity` keys off `_peer_ip`, never `_client_ip`.** Who may assert
+  an identity is a question about who opened the socket. Resolving a forwarded
+  address first would let a header decide whether that same header is trusted.
 - **`R1_EC_TYPE` and `R1_VERBOSE` are literal-compared** in `api/services/pisr/fetch.py`
   and `api/r1api/client.py` respectively. Don't rename `R1_VERBOSE`; don't
   lowercase `MSP`.

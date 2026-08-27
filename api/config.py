@@ -97,8 +97,14 @@ class AuthConfig:
 
     # proxy mode
     proxy_header: str
-    trusted_proxies: Tuple[ipaddress._BaseNetwork, ...]
     proxy_logout_url: str
+
+    # Both modes. In proxy mode this list is the whole of the security — only
+    # these peers may assert an identity. In passphrase mode it is narrower:
+    # it says whose `client_ip_header` may be believed when working out who a
+    # request is really from, which is what the login throttle counts against.
+    trusted_proxies: Tuple[ipaddress._BaseNetwork, ...]
+    client_ip_header: str
 
 
 def _env(name: str) -> str:
@@ -169,9 +175,11 @@ def _load() -> ControllerConfig:
     )
 
 
-def _trusted_proxies() -> Tuple[ipaddress._BaseNetwork, ...]:
+def _trusted_proxies(required: bool) -> Tuple[ipaddress._BaseNetwork, ...]:
     """
-    Which source addresses are allowed to assert an identity header.
+    Which source addresses are allowed to speak for someone other than
+    themselves — to assert an identity header in proxy mode, or a
+    client-address header in either mode.
 
     This list is the entire security of proxy mode, so it is required rather
     than defaulted. A header is a claim, not proof: if PISR is reachable from
@@ -182,6 +190,11 @@ def _trusted_proxies() -> Tuple[ipaddress._BaseNetwork, ...]:
     """
     raw = _env("PISR_TRUSTED_PROXY_IPS")
     if not raw:
+        if not required:
+            # Passphrase mode. No proxy declared means no forwarded header is
+            # believed and the TCP peer is taken at face value, which is right
+            # for a directly-reachable instance and fails closed for any other.
+            return ()
         raise RuntimeError(
             "PISR_AUTH_MODE=proxy requires PISR_TRUSTED_PROXY_IPS — the "
             "address or CIDR the authenticating proxy connects from. Without "
@@ -213,8 +226,8 @@ def _load_auth() -> AuthConfig:
         return AuthConfig(
             enabled=False, mode="disabled", passphrase="", session_secret="",
             session_seconds=0, cookie_secure=False, max_attempts=0,
-            lockout_seconds=0, proxy_header="", trusted_proxies=(),
-            proxy_logout_url="",
+            lockout_seconds=0, proxy_header="", proxy_logout_url="",
+            trusted_proxies=(), client_ip_header="",
         )
 
     mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
@@ -231,8 +244,9 @@ def _load_auth() -> AuthConfig:
             cookie_secure=_flag("PISR_COOKIE_SECURE", False),
             max_attempts=0, lockout_seconds=0,
             proxy_header=header,
-            trusted_proxies=_trusted_proxies(),
             proxy_logout_url=_env("PISR_PROXY_LOGOUT_URL"),
+            trusted_proxies=_trusted_proxies(required=True),
+            client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
         )
 
     passphrase = _env("PISR_AUTH_PASSPHRASE")
@@ -262,7 +276,9 @@ def _load_auth() -> AuthConfig:
         cookie_secure=_flag("PISR_COOKIE_SECURE", False),
         max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
         lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
-        proxy_header="", trusted_proxies=(), proxy_logout_url="",
+        proxy_header="", proxy_logout_url="",
+        trusted_proxies=_trusted_proxies(required=False),
+        client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
     )
 
 

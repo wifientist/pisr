@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 # raises if anything required is missing or malformed, so a misconfigured
 # container fails to start rather than failing every request.
 from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
-from auth import SessionGateMiddleware, router as auth_router  # noqa: E402
+from auth import (  # noqa: E402
+    SecurityHeadersMiddleware, SessionGateMiddleware, router as auth_router)
 from routers import config_router, msp_router, pisr_router  # noqa: E402
 
 app = FastAPI(
@@ -49,10 +50,18 @@ if _origins:
     )
     logger.info("CORS enabled for %s", _origins)
 
-# Added after CORS on purpose. Starlette builds the stack so that the first
-# middleware added is the outermost, which keeps a CORS preflight from being
-# answered with a 401 by the gate underneath it.
+# Note the ordering, which is the opposite of the intuitive reading:
+# Starlette's add_middleware does user_middleware.insert(0, ...), so the LAST
+# one added ends up OUTERMOST. The gate is therefore in front of CORS, which is
+# the safe direction — nothing reaches a route without passing it — but it does
+# mean a CORS preflight to a gated path is answered 401 without CORS headers.
+# That costs nothing in the shipped layout, where FastAPI serves the SPA from
+# its own origin and no preflight happens. If you ever put the frontend on a
+# different origin, move CORS after this line so it becomes the outer one.
 app.add_middleware(SessionGateMiddleware)
+
+# Outermost of all, so it also covers the SPA, the 401s and the error pages.
+app.add_middleware(SecurityHeadersMiddleware)
 
 if not AUTH.enabled:
     logger.warning(

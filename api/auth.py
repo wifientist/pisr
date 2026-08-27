@@ -116,22 +116,91 @@ def _valid(token: str) -> bool:
         return False
 
 
+# ── Who is this request from? ────────────────────────────────────────
+
+def _peer_ip(request: Request) -> str:
+    """The other end of the TCP connection, and the only thing not asserted."""
+    return request.client.host if request.client else "unknown"
+
+
+def _client_ip(request: Request) -> str:
+    """
+    The caller's own address, as well as it can be known.
+
+    The peer address is the truthful answer only when the caller connected
+    directly. Behind a reverse proxy the peer is the proxy, and every request
+    in the world looks like it came from one address — which quietly turns the
+    per-IP login throttle below into a global one: five wrong guesses from
+    anyone lock out everyone, repeatably, for as long as the attacker cares to
+    keep it up.
+
+    So a forwarded header is read INSTEAD, under two conditions that have to
+    hold together:
+
+      * an operator named the header in PISR_CLIENT_IP_HEADER, and
+      * the peer is inside PISR_TRUSTED_PROXY_IPS.
+
+    Both, because a header on its own is worth nothing: if any peer could set
+    it, an attacker would simply vary it per request and never be throttled at
+    all — strictly worse than counting the proxy. Neither set means the peer
+    address is used unchanged, which is correct for a direct deployment.
+
+    X-Forwarded-For is a chain the proxies append to, so the entries a client
+    sent itself sit at the LEFT and are forgeable. This walks from the right,
+    skipping the proxies it already trusts, and takes the first address that
+    is not one of them — the last hop nobody in the trusted set vouched for.
+    Cf-Connecting-IP and X-Real-IP carry a single value and fall out of the
+    same walk unchanged.
+    """
+    peer = _peer_ip(request)
+    if not AUTH.client_ip_header or not _from_trusted_proxy(peer):
+        return peer
+
+    chain = request.headers.get(AUTH.client_ip_header, "")
+    for candidate in reversed([c.strip() for c in chain.split(",")]):
+        if not candidate:
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            # Garbage in the chain. Stop rather than skip past it: everything
+            # further left is behind something unparseable and cannot be
+            # reasoned about.
+            break
+        if not _from_trusted_proxy(candidate):
+            return candidate
+    return peer
+
+
+def _request_is_https(request: Request) -> bool:
+    """
+    Did the CLIENT reach us over TLS?
+
+    request.url.scheme is the scheme of the last hop, which behind a
+    terminating proxy is the plaintext one — so on its own it would say "http"
+    for a connection the user made over HTTPS, and the cookie would go out
+    without Secure on exactly the deployments that most need it. So the
+    forwarded scheme wins, on the same terms as the forwarded address: only
+    from a peer inside PISR_TRUSTED_PROXY_IPS. An untrusted peer's header is
+    ignored, which can only ever err towards marking the cookie Secure less
+    often, never towards trusting a plaintext hop.
+    """
+    if _from_trusted_proxy(_peer_ip(request)):
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        if forwarded:
+            return forwarded.lower() == "https"
+    return request.url.scheme == "https"
+
+
 # ── Brute-force throttle ─────────────────────────────────────────────
 #
 # A shared passphrase with unlimited guesses is a passphrase with no length.
 # One process, no Redis, so this is an in-memory dict — which means it resets on
-# restart, and means it counts per source IP as seen by the app. Behind a
-# reverse proxy every request would appear to come from the proxy; PISR is meant
-# to be reached directly, and if that changes this needs to read a forwarded-for
-# header from a trusted proxy rather than request.client.
+# restart, and means it counts per client address as resolved above.
 
 _attempts: Dict[str, Tuple[int, float]] = {}
 _attempts_lock = Lock()
 _ATTEMPTS_MAX_TRACKED = 2048
-
-
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 
 def _locked_until(ip: str) -> float:
@@ -164,7 +233,7 @@ def _clear_failures(ip: str) -> None:
 
 # ── Proxy identity ───────────────────────────────────────────────────
 
-def _from_trusted_proxy(ip: str) -> bool:
+def _from_trusted_proxy(ip: str) -> bool:  # noqa: E302  (used by _client_ip above)
     """
     Is this connection coming from an address allowed to assert an identity?
 
@@ -193,7 +262,10 @@ def _proxy_identity(request: Request) -> Optional[str]:
     an identity header arriving from an untrusted address is either a
     misconfigured trusted-proxy list or someone trying it on.
     """
-    ip = _client_ip(request)
+    # The PEER, deliberately, not _client_ip(). Who may assert an identity is
+    # a question about who opened the socket; resolving a forwarded address
+    # first would let a header decide whether that same header is believed.
+    ip = _peer_ip(request)
     claimed = request.headers.get(AUTH.proxy_header, "").strip()
 
     if not _from_trusted_proxy(ip):
@@ -257,6 +329,66 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
         return _denied("Not signed in.")
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    The headers a browser needs in order to defend the page it is given.
+
+    Registered outermost in main.py so these land on everything — the SPA, a
+    401 from the gate, a 500 from a router — rather than only on the responses
+    that happened to reach a route.
+
+    Nothing here is a substitute for the gate. These narrow what a browser will
+    do with a response that has already been decided on, which is a different
+    job from deciding it.
+    """
+
+    # frame-ancestors 'none' rather than X-Frame-Options: same intent, but the
+    # CSP directive is the one still specified, and it is what stops the login
+    # form being framed invisibly over someone else's page and typed into.
+    #
+    # The connect-src/img-src/style-src set is what the built SPA actually
+    # uses: it talks only to its own origin, and Tailwind ships as one stylesheet
+    # with inline styles from React's style props. No 'unsafe-eval', which Vite
+    # needs in dev and the production bundle does not.
+    _CSP = ("default-src 'self'; "
+            "img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
+            "connect-src 'self'; "
+            "font-src 'self' data:; "
+            "object-src 'none'; "
+            "base-uri 'none'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'")
+
+    _HEADERS = {
+        "Content-Security-Policy": _CSP,
+        "X-Content-Type-Options": "nosniff",
+        # A report URL carries a venue id and a tenant id in the query string.
+        # same-origin keeps those out of the Referer on any outbound link.
+        "Referrer-Policy": "same-origin",
+        # PISR asks for none of these. Saying so means a compromised bundle
+        # cannot either.
+        "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+        # Belt and braces for the older browsers that never learned
+        # frame-ancestors.
+        "X-Frame-Options": "DENY",
+    }
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        for name, value in self._HEADERS.items():
+            response.headers.setdefault(name, value)
+
+        # HSTS only on a connection that was actually HTTPS. Sent over plain
+        # HTTP it is ignored by a browser, but sent from a LAN deployment on
+        # http://<ip>:8090 it would be a promise PISR cannot keep.
+        if _request_is_https(request):
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
+
 # ── Routes ───────────────────────────────────────────────────────────
 
 router = APIRouter(tags=["Auth"])
@@ -266,14 +398,24 @@ class LoginBody(BaseModel):
     passphrase: str
 
 
-def _set_session_cookie(response: Response) -> None:
+def _set_session_cookie(response: Response, request: Request) -> None:
+    # Secure is set whenever the request arrived over HTTPS, whatever the
+    # config says; PISR_COOKIE_SECURE=1 forces it on for the case where a
+    # deployment knows it is behind TLS that this process cannot see.
+    #
+    # Not defaulted to True outright: a browser refuses to store a Secure
+    # cookie from http://192.168.1.20:8090, and silently — the login POST
+    # succeeds, no cookie is kept, and the user is bounced back to the form
+    # with nothing to explain why. The LAN-over-HTTP deployment in
+    # docker-compose.yml is a supported one, so it has to keep working.
+    secure = AUTH.cookie_secure or _request_is_https(request)
     response.set_cookie(
         COOKIE_NAME,
         _mint(),
         max_age=AUTH.session_seconds,
         httponly=True,     # not reachable from JS, so an XSS cannot exfiltrate it
         samesite="lax",    # a cross-site POST cannot ride the session
-        secure=AUTH.cookie_secure,
+        secure=secure,
         path="/",
     )
 
@@ -357,7 +499,7 @@ async def login(body: LoginBody, request: Request):
     # Response object directly bypasses FastAPI's injected one entirely, so a
     # cookie set on that one would silently never be sent.
     signed_in = Response(status_code=204)
-    _set_session_cookie(signed_in)
+    _set_session_cookie(signed_in, request)
     return signed_in
 
 
