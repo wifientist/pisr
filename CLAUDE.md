@@ -73,6 +73,13 @@ RUCKUS ONE venue, shape it, check it, render it.
   is the safe direction; the cost is that a CORS preflight to a gated path gets
   a 401 with no CORS headers, which only matters if the frontend ever moves to
   its own origin.
+- **Under rootless podman the peer is never the proxy's real address.**
+  Publishing a port rootlessly rewrites the source, so everything arrives from
+  inside podman's network (10.89.0.0/24 and friends). `PISR_TRUSTED_PROXY_IPS`
+  has to name *that*, found by logging in once and reading "Signed in from" out
+  of the container log — and it then distinguishes nothing, because every
+  caller looks the same. The network boundary is the real control there; the
+  IP check is a backstop for deployments where the peer is genuine.
 - **A forwarded header is believed only from a peer in
   `PISR_TRUSTED_PROXY_IPS`** — `X-Forwarded-Proto` for the cookie's `Secure`
   flag, and `PISR_CLIENT_IP_HEADER` for the address the login throttle counts
