@@ -290,10 +290,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     >
       {children}
       {/*
-        Rendered here rather than in PISR.tsx's header: that file is kept
-        byte-identical to its rtools2 original so upstream changes stay a
-        readable diff. Fixed to the corner so it lands on top of whichever tab
-        is showing, and hidden entirely when there is no gate to sign out of.
+        Rendered here rather than in PISR.tsx's Header: that file is kept as
+        close to its rtools2 original as possible, and Header would additionally
+        need signOut threaded down to it, which the context does not expose.
+        Fixed to the corner so it lands on top of whichever tab is showing, and
+        hidden entirely when there is no gate to sign out of.
+
+        Top right, because that is where a browser user looks for whoever they
+        are signed in as. It overlays PISR.tsx's own header row, which is left
+        aligned and so has the space — except on a narrow phone, where the
+        Alpha and Read-only pills reach far enough right to collide. There the
+        label is dropped and the icon stands alone.
       */}
       {status?.required && (
         (() => {
@@ -302,22 +309,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const canSignOut =
             status.mode !== "proxy" || Boolean(status.logoutUrl);
           const shell =
-            "fixed bottom-4 right-4 z-50 flex items-center gap-1.5 rounded-full " +
-            "border border-gray-300 bg-white/90 px-3 py-1.5 text-xs font-medium " +
-            "text-gray-600 shadow-sm backdrop-blur";
+            "fixed top-3 right-3 z-50 flex items-center gap-1.5 rounded-full " +
+            "border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium " +
+            "text-gray-700 shadow-md";
           return canSignOut ? (
             <button
               onClick={signOut}
               title={status.user ? `Signed in as ${status.user}` : "Sign out of PISR"}
               className={`${shell} hover:bg-white hover:text-gray-900`}
             >
-              <LogOut size={13} />
-              {status.user ? `Sign out · ${status.user}` : "Sign out"}
+              <LogOut size={13} className="shrink-0" />
+              <span className="hidden sm:inline">
+                {status.user ? `Sign out · ${status.user}` : "Sign out"}
+              </span>
             </button>
           ) : (
             <span className={shell} title="Signed in via single sign-on">
-              <Lock size={13} />
-              {status.user}
+              <Lock size={13} className="shrink-0" />
+              <span className="hidden sm:inline">{status.user}</span>
             </span>
           );
         })()
