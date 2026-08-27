@@ -61,7 +61,11 @@ RUCKUS ONE venue, shape it, check it, render it.
 - **Proxy mode's security is `PISR_TRUSTED_PROXY_IPS` plus the port binding,
   not the header.** A header is a claim anyone can make. If you ever find PISR
   in proxy mode published on `0.0.0.0`, that is a live authentication bypass —
-  `expose:`, not `ports:`.
+  `expose:`, not `ports:`. A bind to a specific address is not automatically
+  wrong, though: what matters is whether anything other than the proxy can
+  open a socket to it. An isolated bridge carrying only the proxy and PISR is
+  as sound as loopback, and unlike loopback it works with the proxy on another
+  host.
 - **`SessionGateMiddleware` gates by path prefix, not by route**, so a router
   added later is gated by default. Note that Starlette's `add_middleware` does
   `insert(0, ...)`, so the LAST middleware added is the OUTERMOST — the reverse
