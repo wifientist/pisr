@@ -68,10 +68,35 @@ if not AUTH.enabled:
         "PISR_AUTH_DISABLED=1 — every endpoint is open to anyone who can reach "
         "this port, including the full venue inventory. This is only sane if "
         "the port is bound to localhost.")
-elif SESSION_SECRET_IS_EPHEMERAL:
+else:
+    # Printed every start, because the alternative way to find out whether a
+    # setting took is to sign in and read the address off a later log line —
+    # which needs someone to actually sign in, and says nothing at all if they
+    # still hold a valid cookie. An env file edit that never reached the
+    # container should be visible here, at the moment it fails to happen.
     logger.info(
-        "No PISR_SESSION_SECRET set — a random one was generated, so existing "
-        "sessions end at every restart. Set one in .env to keep them.")
+        "Gate: mode=%s, trusted_proxies=%s, client_ip_header=%s, cookie_secure=%s",
+        AUTH.mode,
+        ",".join(str(net) for net in AUTH.trusted_proxies) or "(none)",
+        AUTH.client_ip_header or "(none — the TCP peer is used as-is)",
+        "forced on" if AUTH.cookie_secure else "per-request (HTTPS only)")
+
+    if AUTH.client_ip_header and not AUTH.trusted_proxies:
+        # The one combination that silently does nothing. Worth a warning
+        # rather than a fact, because whoever set the header believed they
+        # were fixing the throttle and did not.
+        logger.warning(
+            "PISR_CLIENT_IP_HEADER=%s is set but PISR_TRUSTED_PROXY_IPS is "
+            "empty, so the header is ignored and the login throttle still "
+            "counts every caller as one. Set the trusted list to the peer "
+            "address PISR actually sees — under rootless podman that is an "
+            "address on podman's own network, not the proxy's.",
+            AUTH.client_ip_header)
+
+    if SESSION_SECRET_IS_EPHEMERAL:
+        logger.info(
+            "No PISR_SESSION_SECRET set — a random one was generated, so existing "
+            "sessions end at every restart. Set one in .env to keep them.")
 
 
 @app.get("/healthz")
