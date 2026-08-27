@@ -16,8 +16,15 @@ RUCKUS ONE venue, shape it, check it, render it.
 
 - **Backend**: Python FastAPI (`api/`), serves the API *and* the built SPA
 - **Frontend**: React 19 + TypeScript + Vite + Tailwind 3 (`src/`)
-- **No database, no Redis, no scheduler, no auth.** Config is `.env`, read once
-  at import by `api/config.py`.
+- **No database, no Redis, no scheduler.** Config is `.env`, read once at
+  import by `api/config.py`. Any setting can arrive as `<NAME>_FILE` pointing
+  at a file instead, which is how a secret gets in without going through the
+  container environment.
+- **Auth has two modes, both in `api/auth.py`**, gating everything under `/api`
+  plus `/docs`. `passphrase` (default) is one shared secret for a signed
+  HttpOnly cookie. `proxy` trusts an identity header from an authenticating
+  reverse proxy (oauth2-proxy) and switches the passphrase off. No accounts, no
+  roles, no session store, and no OIDC implemented here.
 - **External API**: RuckusONE only. R1 has a 15-SSID-per-AP-Group limit, which
   `checks.py` asserts on.
 
@@ -39,6 +46,20 @@ RUCKUS ONE venue, shape it, check it, render it.
   start. See the docstring on `build_r1_client` in `api/r1_client.py`.
 - **The `StaticFiles` mount in `api/main.py` must stay last** — a `Mount("/")`
   matches everything above it.
+- **The SPA bundle is served unauthenticated, on purpose.** It has to load in
+  order to render the login form, and it carries no tenant data. Everything
+  that *does* know the tenant is behind the gate. Don't "fix" this by gating
+  `/` — you get a blank page with no way to sign in.
+- **The container healthcheck hits `/healthz`, not `/api/status`.** The latter
+  is gated now, and names the tenant besides. If you add a healthcheck
+  anywhere, point it at `/healthz`.
+- **Proxy mode's security is `PISR_TRUSTED_PROXY_IPS` plus the port binding,
+  not the header.** A header is a claim anyone can make. If you ever find PISR
+  in proxy mode published on `0.0.0.0`, that is a live authentication bypass —
+  `expose:`, not `ports:`.
+- **`SessionGateMiddleware` is registered after CORS** so CORS stays outermost
+  and a preflight isn't answered with a 401. It gates by path prefix, not by
+  route, so a router added later is gated by default.
 - **`R1_EC_TYPE` and `R1_VERBOSE` are literal-compared** in `api/services/pisr/fetch.py`
   and `api/r1api/client.py` respectively. Don't rename `R1_VERBOSE`; don't
   lowercase `MSP`.

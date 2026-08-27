@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from functools import lru_cache
 from pathlib import Path
 
@@ -93,7 +93,8 @@ async def get_venues(controller_id: int,
 
 
 @router.get("/{controller_id}/report")
-async def get_report(controller_id: int,
+async def get_report(request: Request,
+                     controller_id: int,
                      venue_id: str = Query(..., description="Venue to report on"),
                      tenant_id: Optional[str] = Query(None)):
     """
@@ -103,7 +104,11 @@ async def get_report(controller_id: int,
     cfg = get_controller(controller_id)
     override = resolve_tenant(cfg, tenant_id)
     r1 = build_r1_client(cfg)
-    logger.info("pisr: controller=%s tenant=%s venue=%s",
+    # `user` is set by SessionGateMiddleware in proxy mode and is "-" under a
+    # shared passphrase, which cannot tell one person from another. This line
+    # is the whole audit trail, and the honest reason to prefer SSO.
+    logger.info("pisr: user=%s controller=%s tenant=%s venue=%s",
+                getattr(request.state, "pisr_user", "-"),
                 cfg.id, override, venue_id)
     return await build_report(r1, override, venue_id)
 

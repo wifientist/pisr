@@ -6,17 +6,58 @@
 # request that brushes up against a default 90s proxy timeout.
 #
 # No volumes: PISR stores nothing. No database, no cache, no snapshot directory.
+#
+# ── Where the secrets live ───────────────────────────────────────────
+#
+# Simplest, and the default: a 0600 .env next to this file.
+#
+# Better on a shared host: keep the file out of the working tree entirely, so a
+# stray `chmod -R`, a backup job or an editor swapfile cannot reach it.
+#
+#   sudo install -d -m 0750 /etc/pisr
+#   sudo install -m 0600 .env /etc/pisr/pisr.env
+#   PISR_ENV_FILE=/etc/pisr/pisr.env docker compose up -d
+#
+# Best, if you want the shared secret out of the container environment
+# altogether: leave the non-secret settings in the env file and hand the two
+# real credentials over as mounted files. `docker inspect` and /proc/1/environ
+# print environment variables; they do not print /run/secrets. config.py reads
+# <NAME>_FILE in preference to <NAME> for every setting, so this needs no code
+# change — uncomment the two blocks below and set, in the env file:
+#
+#   R1_SHARED_SECRET_FILE=/run/secrets/r1_shared_secret
+#   PISR_AUTH_PASSPHRASE_FILE=/run/secrets/pisr_passphrase
+#
+# (and drop the plain R1_SHARED_SECRET / PISR_AUTH_PASSPHRASE lines).
 
 services:
   pisr:
     build: .
     container_name: pisr
     restart: unless-stopped
-    env_file: .env
+    env_file: ${PISR_ENV_FILE:-.env}
     ports:
-      - "${PISR_PORT:-8080}:8080"
+      # Defaults to every interface, which is what makes PISR reachable from
+      # the rest of the LAN — the intent, and also why the gate in
+      # api/auth.py is not optional. Set PISR_BIND in .env to narrow it:
+      #   PISR_BIND=127.0.0.1     this host only
+      #   PISR_BIND=10.0.25.25    one interface, e.g. the VPN side
+      #
+      # In PISR_AUTH_MODE=proxy, delete this block entirely and use
+      # `expose: ["8080"]` instead — a published port there is an
+      # authentication bypass, not a convenience. See README, "SSO".
+      - "${PISR_BIND:-0.0.0.0}:${PISR_PORT:-8080}:8080"
+    # secrets:
+    #   - r1_shared_secret
+    #   - pisr_passphrase
     logging:
       driver: json-file
       options:
         max-size: "2m"
         max-file: "3"
+
+# secrets:
+#   r1_shared_secret:
+#     file: /etc/pisr/r1_shared_secret
+#   pisr_passphrase:
+#     file: /etc/pisr/pisr_passphrase

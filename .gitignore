@@ -22,3 +22,11 @@ api/requirements.lock.txt
 .vscode/
 .idea/
 .DS_Store
+
+# Other env files people end up with. .env.example is the one exception —
+# it holds no values, only the shape and the reasoning.
+.env.*
+!.env.example
+
+# Cookie jars from the curl recipes in the README
+jar

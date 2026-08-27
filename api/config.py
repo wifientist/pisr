@@ -9,11 +9,20 @@ environment at import time.
 It is loaded eagerly and validated strictly. A container that refuses to start
 saying `R1_TENANT_ID is not set` is worth far more than one that boots happily
 and 500s on every request.
+
+Every value below can also be supplied out-of-band as `<NAME>_FILE` pointing at
+a file to read. That is what lets a secret arrive as a Docker/Compose secret
+mounted at /run/secrets/... instead of an environment variable — env vars are
+readable via `docker inspect` and /proc/<pid>/environ by anyone with access to
+the daemon, a mounted file is not.
 """
 
+import ipaddress
 import os
+import secrets as _secrets
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Tuple
 
 from dotenv import load_dotenv
 
@@ -32,6 +41,12 @@ REGIONS = {"NA", "EU", "ASIA"}
 # check below.
 EC_TYPES = {"EC", "MSP"}
 
+# The floor on PISR_AUTH_PASSPHRASE. Low, deliberately: the real brake on
+# guessing is the per-IP lockout in auth.py, not length. Its one weakness is
+# that it lives in memory and resets when the container restarts — which is why
+# there is a floor at all rather than none.
+MIN_PASSPHRASE_LENGTH = 10
+
 
 @dataclass(frozen=True)
 class ControllerConfig:
@@ -47,8 +62,64 @@ class ControllerConfig:
     controller_type: str = "RuckusONE"
 
 
+@dataclass(frozen=True)
+class AuthConfig:
+    """
+    The gate in front of the whole app, in one of two modes.
+
+    `passphrase` — the default, and self-contained. One shared passphrase
+    exchanges for a signed HttpOnly session cookie; every /api route requires
+    that cookie. No accounts, no roles, no registration, no dependency on
+    anything outside this process. The right size for one tool on one tenant.
+
+    `proxy` — the SSO story. An authenticating reverse proxy in front (usually
+    oauth2-proxy against Entra, Okta or Google) does the OIDC dance and
+    forwards the caller's identity in a header. PISR reads that header and
+    implements no OIDC of its own. The passphrase is switched OFF entirely in
+    this mode: leaving both doors open would mean the shared secret is a way
+    around SSO, which would defeat the audit trail and the revocation story
+    that were the reasons to adopt SSO.
+
+    `enabled=False` is reachable only by setting PISR_AUTH_DISABLED=1 on
+    purpose. There is no accidental path to an open instance.
+    """
+
+    enabled: bool
+    mode: str  # "passphrase" | "proxy"
+
+    # passphrase mode
+    passphrase: str
+    session_secret: str
+    session_seconds: int
+    cookie_secure: bool
+    max_attempts: int
+    lockout_seconds: int
+
+    # proxy mode
+    proxy_header: str
+    trusted_proxies: Tuple[ipaddress._BaseNetwork, ...]
+    proxy_logout_url: str
+
+
+def _env(name: str) -> str:
+    """
+    Read `name`, preferring the contents of the file at `<name>_FILE`.
+
+    The file form wins when both are present: if someone has gone to the
+    trouble of mounting a secret, an env var left over from an earlier
+    deployment should not silently take precedence over it.
+    """
+    path = (os.getenv(f"{name}_FILE") or "").strip()
+    if path:
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError(f"{name}_FILE is set to {path!r} but could not be read: {exc}")
+    return (os.getenv(name) or "").strip()
+
+
 def _required(name: str) -> str:
-    value = (os.getenv(name) or "").strip()
+    value = _env(name)
     if not value:
         raise RuntimeError(
             f"{name} is not set. Copy .env.example to .env and fill it in.")
@@ -56,15 +127,32 @@ def _required(name: str) -> str:
 
 
 def _choice(name: str, default: str, allowed: set) -> str:
-    value = (os.getenv(name) or default).strip().upper()
+    value = (_env(name) or default).strip().upper()
     if value not in allowed:
         raise RuntimeError(
             f"{name} must be one of {sorted(allowed)} — got {value!r}.")
     return value
 
 
+def _flag(name: str, default: bool = False) -> bool:
+    raw = _env(name)
+    if not raw:
+        return default
+    return raw.lower() in ("1", "true", "yes", "on")
+
+
+def _int(name: str, default: int) -> int:
+    raw = _env(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} must be an integer — got {raw!r}.")
+
+
 def _load() -> ControllerConfig:
-    raw_id = (os.getenv("R1_CONTROLLER_ID") or "1").strip()
+    raw_id = _env("R1_CONTROLLER_ID") or "1"
     try:
         controller_id = int(raw_id)
     except ValueError:
@@ -72,7 +160,7 @@ def _load() -> ControllerConfig:
 
     return ControllerConfig(
         id=controller_id,
-        name=(os.getenv("R1_CONTROLLER_NAME") or "RUCKUS ONE").strip(),
+        name=(_env("R1_CONTROLLER_NAME") or "RUCKUS ONE"),
         tenant_id=_required("R1_TENANT_ID"),
         client_id=_required("R1_CLIENT_ID"),
         shared_secret=_required("R1_SHARED_SECRET"),
@@ -81,7 +169,110 @@ def _load() -> ControllerConfig:
     )
 
 
+def _trusted_proxies() -> Tuple[ipaddress._BaseNetwork, ...]:
+    """
+    Which source addresses are allowed to assert an identity header.
+
+    This list is the entire security of proxy mode, so it is required rather
+    than defaulted. A header is a claim, not proof: if PISR is reachable from
+    anywhere other than the proxy, anyone who can open a socket to it can send
+    `X-Forwarded-Email: someone.important@corp.example` and be believed. Bind
+    PISR to loopback or to the proxy's own Docker network as well — this check
+    is the second lock, not the first.
+    """
+    raw = _env("PISR_TRUSTED_PROXY_IPS")
+    if not raw:
+        raise RuntimeError(
+            "PISR_AUTH_MODE=proxy requires PISR_TRUSTED_PROXY_IPS — the "
+            "address or CIDR the authenticating proxy connects from. Without "
+            "it, anyone who can reach this port can forge the identity header "
+            "and walk straight in. Example: PISR_TRUSTED_PROXY_IPS=172.20.0.0/16")
+
+    nets = []
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"PISR_TRUSTED_PROXY_IPS entry {entry!r} is not an IP or CIDR: {exc}")
+    if not nets:
+        raise RuntimeError("PISR_TRUSTED_PROXY_IPS is set but contains no usable entries.")
+    return tuple(nets)
+
+
+def _load_auth() -> AuthConfig:
+    """
+    Fails closed in every mode. A missing passphrase, or a proxy mode with no
+    trusted-proxy list, stops the container from starting rather than quietly
+    serving one tenant's whole network inventory to anyone who can reach the
+    port.
+    """
+    if _flag("PISR_AUTH_DISABLED"):
+        return AuthConfig(
+            enabled=False, mode="disabled", passphrase="", session_secret="",
+            session_seconds=0, cookie_secure=False, max_attempts=0,
+            lockout_seconds=0, proxy_header="", trusted_proxies=(),
+            proxy_logout_url="",
+        )
+
+    mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
+    if mode not in ("passphrase", "proxy"):
+        raise RuntimeError(
+            f"PISR_AUTH_MODE must be 'passphrase' or 'proxy' — got {mode!r}.")
+
+    if mode == "proxy":
+        header = _env("PISR_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
+        return AuthConfig(
+            enabled=True,
+            mode="proxy",
+            passphrase="", session_secret="", session_seconds=0,
+            cookie_secure=_flag("PISR_COOKIE_SECURE", False),
+            max_attempts=0, lockout_seconds=0,
+            proxy_header=header,
+            trusted_proxies=_trusted_proxies(),
+            proxy_logout_url=_env("PISR_PROXY_LOGOUT_URL"),
+        )
+
+    passphrase = _env("PISR_AUTH_PASSPHRASE")
+    if not passphrase:
+        raise RuntimeError(
+            "PISR_AUTH_PASSPHRASE is not set. PISR serves a full RUCKUS ONE "
+            "venue inventory and will not start without a gate in front of it. "
+            "Set one in .env, or set PISR_AUTH_DISABLED=1 if this instance is "
+            "genuinely unreachable by anyone else.")
+    if len(passphrase) < MIN_PASSPHRASE_LENGTH:
+        raise RuntimeError(
+            f"PISR_AUTH_PASSPHRASE must be at least {MIN_PASSPHRASE_LENGTH} "
+            "characters. It is the only thing between the network and the "
+            "report.")
+
+    # No secret set means sessions do not survive a restart. That is a safe
+    # default — the cost is re-entering the passphrase after `compose up`, and
+    # the alternative default (a hardcoded key) is not a real alternative.
+    session_secret = _env("PISR_SESSION_SECRET") or _secrets.token_urlsafe(32)
+
+    return AuthConfig(
+        enabled=True,
+        mode="passphrase",
+        passphrase=passphrase,
+        session_secret=session_secret,
+        session_seconds=_int("PISR_SESSION_HOURS", 12) * 3600,
+        cookie_secure=_flag("PISR_COOKIE_SECURE", False),
+        max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
+        lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
+        proxy_header="", trusted_proxies=(), proxy_logout_url="",
+    )
+
+
 CONTROLLER: ControllerConfig = _load()
+AUTH: AuthConfig = _load_auth()
+
+# Whether PISR_SESSION_SECRET was supplied rather than generated. main.py logs
+# this once at startup so "everyone got logged out again" has a visible cause.
+SESSION_SECRET_IS_EPHEMERAL: bool = (
+    AUTH.mode == "passphrase" and not _env("PISR_SESSION_SECRET"))
 
 
 def public_config() -> dict:
@@ -89,6 +280,10 @@ def public_config() -> dict:
     What the SPA is allowed to know. The tenant id is not a secret — it is in
     every URL of the RUCKUS ONE console — but the client id and shared secret
     never leave the process.
+
+    Served behind the session gate: it is not sensitive in the way the shared
+    secret is, but it names the tenant, and an unauthenticated caller has no
+    business knowing which tenant this instance points at.
 
     snake_case on purpose: this matches the shape rtools2 served in
     `controllers[]`, so the frontend shim maps it over unchanged.

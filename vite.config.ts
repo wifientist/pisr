@@ -1,11 +1,18 @@
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "path";
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
+// Deliberately not `loadEnv(mode, process.cwd(), "")`. An empty prefix pulled
+// every variable in .env — R1_SHARED_SECRET included — into this config's
+// scope, where the only thing between it and a JS bundle was Vite's default
+// envPrefix. One `define:` block or one changed prefix and the tenant's API
+// secret ships to the browser. Nothing here needs .env: docker-compose.dev.yml
+// passes what the dev server wants through the container environment.
+const allowedHosts = (process.env.VITE_ALLOWED_HOSTS || "")
+  .split(",").map((h) => h.trim()).filter(Boolean);
 
+export default defineConfig(() => {
   return {
     plugins: [react(), tsconfigPaths()],
     resolve: {
@@ -25,13 +32,13 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
       },
-      allowedHosts: env.VITE_ALLOWED_HOSTS?.split(",") || [],
+      allowedHosts,
     },
     build: {
       sourcemap: false,
     },
     preview: {
-      allowedHosts: env.VITE_ALLOWED_HOSTS?.split(",") || [],
+      allowedHosts,
     },
   };
 });

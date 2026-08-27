@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 # Imported for effect as much as for use: config validates .env at import and
 # raises if anything required is missing or malformed, so a misconfigured
 # container fails to start rather than failing every request.
-from config import CONTROLLER  # noqa: E402
+from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
+from auth import SessionGateMiddleware, router as auth_router  # noqa: E402
 from routers import config_router, msp_router, pisr_router  # noqa: E402
 
 app = FastAPI(
@@ -48,6 +49,32 @@ if _origins:
     )
     logger.info("CORS enabled for %s", _origins)
 
+# Added after CORS on purpose. Starlette builds the stack so that the first
+# middleware added is the outermost, which keeps a CORS preflight from being
+# answered with a 401 by the gate underneath it.
+app.add_middleware(SessionGateMiddleware)
+
+if not AUTH.enabled:
+    logger.warning(
+        "PISR_AUTH_DISABLED=1 — every endpoint is open to anyone who can reach "
+        "this port, including the full venue inventory. This is only sane if "
+        "the port is bound to localhost.")
+elif SESSION_SECRET_IS_EPHEMERAL:
+    logger.info(
+        "No PISR_SESSION_SECRET set — a random one was generated, so existing "
+        "sessions end at every restart. Set one in .env to keep them.")
+
+
+@app.get("/healthz")
+async def healthz():
+    """
+    Public, and says nothing. The container healthcheck needs a target that
+    does not require a session, and /api/status is not it — that one names the
+    tenant, the region and the EC type, which is exactly the reconnaissance an
+    unauthenticated caller would like to start with.
+    """
+    return {"status": "ok"}
+
 
 @app.get("/api/status")
 async def status():
@@ -62,6 +89,7 @@ async def status():
 # No root_path="/api" here. rtools2 needed it because nginx stripped the prefix
 # before the request arrived; this process sees the real path, so the prefix
 # goes on the routers instead.
+app.include_router(auth_router, prefix="/api")
 app.include_router(config_router.router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
