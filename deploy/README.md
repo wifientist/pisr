@@ -28,7 +28,9 @@ and gives all of that up in exchange for nothing.
   restored, and the unit exits non-zero so the failure is visible in
   `systemctl --user status` and the journal.
 - **One at a time.** A `flock` keeps a slow rebuild from overlapping the next
-  timer tick.
+  timer tick — and the compose call closes that lock's file descriptor, so the
+  container's own supervisor processes do not inherit it and lock out every
+  future run.
 - **It notices a stale container, not just a moved branch.** If someone runs
   `git pull` by hand, HEAD equals origin while the container still runs the old
   image — and a script comparing git to git would see nothing to do, forever.

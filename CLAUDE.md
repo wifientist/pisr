@@ -95,6 +95,12 @@ RUCKUS ONE venue, shape it, check it, render it.
   lowercase `MSP`.
 - **`_jinja()` in `pisr_router.py` walks two `.parent`s** to reach
   `api/templates`. It fails at PDF-request time, not import time.
+- **Anything long-lived spawned by `deploy/pisr-update.sh` must close the lock
+  fd with `9>&-`.** `exec 9>` does not set close-on-exec, so conmon and
+  rootlessport would inherit the flock and hold it for the life of the
+  container — every later run then declines with "Another deploy is in
+  progress" on a box where none is. This only became reachable once
+  `KillMode=process` let those processes survive; the two interact.
 - **`KillMode=process` in `deploy/pisr-update.service` is load-bearing.**
   podman leaves `conmon` and `rootlessport` in the unit's cgroup, and a oneshot
   unit's default `KillMode=control-group` SIGKILLs them ~90s after the script

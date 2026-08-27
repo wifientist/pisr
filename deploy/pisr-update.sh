@@ -133,6 +133,19 @@ if ! flock -n 9; then
   exit 0
 fi
 
+# NOTE FOR ANYTHING LONG-LIVED STARTED BELOW: close fd 9 for it, with `9>&-`.
+#
+# A file descriptor is inherited across fork and exec unless it is marked
+# close-on-exec, and `exec 9>` does not mark it. podman-compose leaves conmon
+# and rootlessport running to supervise the container — that is the intent, and
+# the unit sets KillMode=process to allow it — so without `9>&-` those two
+# inherit the lock fd and hold the flock for as long as the container lives.
+# Every later tick then finds the lock taken and declines, forever, having
+# been locked out by the container it successfully started.
+#
+# It presents as "Another deploy is in progress" on a box where no deploy is
+# in progress, which points nowhere near a file descriptor.
+
 cd "$APP_DIR" || die "PISR_APP_DIR=$APP_DIR is not a directory"
 git rev-parse --git-dir >/dev/null 2>&1 || die "$APP_DIR is not a git repository"
 
@@ -205,7 +218,11 @@ deploy() {
 
   # --build because this box builds its own image; there is no registry in
   # this deployment shape.
-  $COMPOSE up -d --build
+  #
+  # 9>&- closes the lock fd for this command and everything it spawns. See the
+  # note by the flock above — without it the container's supervisor processes
+  # inherit the lock and no later run can ever take it.
+  $COMPOSE up -d --build 9>&-
 }
 
 confirm_running() {
