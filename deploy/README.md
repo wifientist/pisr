@@ -198,6 +198,29 @@ exited, and leaves its descendants running. If you ever rewrite this unit,
 keep it — the symptom is a deploy that logs success and takes the service down
 a minute and a half later, and nothing in the deploy output hints at it.
 
+## "podman ps says Up, but nothing answers"
+
+A container can be running with its port forwarding dead. Rootless podman
+publishes a port through a separate `rootlessport` process; kill that and the
+container carries on serving perfectly well to nobody, because there is no
+longer a path from `PISR_BIND:PISR_PORT` into its network namespace.
+
+Two things then mislead you at once. `podman ps` reports `Up 27 minutes`,
+truthfully. And the container's own HEALTHCHECK passes, because it curls
+`localhost:8080` from *inside* the container, where nothing is wrong.
+
+`podman-compose up -d` will not fix it either — it sees a running container
+and does nothing. It needs a full recreate:
+
+```bash
+cd ~/app && export PISR_ENV_FILE=/home/appuser/pisr-config/pisr.env
+podman-compose down && podman-compose up -d
+```
+
+The deploy script's pre-deploy health probe catches this state for what it is,
+from outside, which is the point of probing the published address rather than
+asking podman whether it thinks things are fine.
+
 ## If a deploy fails
 
 The unit will have rolled back already. The journal shows which commit failed:
