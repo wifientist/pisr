@@ -72,9 +72,13 @@ environment file.
 `PISR_ENV_FILE` is read by `docker-compose.yml` itself, not by the script; it
 is here because the script's environment is what podman-compose inherits.
 
-There is deliberately no `PISR_HEALTH_URL` above. The script reads `PISR_PORT`
-out of that same env file and builds the URL from it, falling back to 8080 —
-the same default compose falls back to. Setting the two independently is a
+There is deliberately no `PISR_HEALTH_URL` above. The script reads `PISR_BIND`
+and `PISR_PORT` out of that same env file and builds the URL from both. A
+wildcard bind (or none) means loopback; a specific address means that address,
+because an instance published on `10.10.77.108:8080` has nothing whatsoever on
+`127.0.0.1:8080` and a loopback check would fail against a perfectly healthy
+container. The port falls back to 8080 — the same default compose falls back
+to. Setting the two independently is a
 quiet trap: if the health URL names a port nothing is listening on, every
 deploy looks unhealthy and rolls itself back, and the journal blames the commit
 rather than the setting. Note that `.env.example` ships `PISR_PORT=8090` while

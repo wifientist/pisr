@@ -34,11 +34,30 @@ COMPOSE="${PISR_COMPOSE:-podman-compose}"
 # commit rather than this line. So read PISR_PORT from the same env file
 # compose reads, and fall back to the same default compose falls back to.
 # Setting PISR_HEALTH_URL explicitly still wins over all of it.
+_envget() {  # last uncommented assignment of $1 in the env file, or ""
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\\([^[:space:]#]*\\).*/\\1/p" \
+    "$_env_file" 2>/dev/null | tail -1
+}
+
 if [ -z "${PISR_HEALTH_URL:-}" ]; then
   _env_file="${PISR_ENV_FILE:-${PISR_APP_DIR:-$HOME/app}/.env}"
-  _port="$(sed -n 's/^[[:space:]]*PISR_PORT[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
-             "$_env_file" 2>/dev/null | tail -1)"
-  PISR_HEALTH_URL="http://127.0.0.1:${_port:-8080}/healthz"
+  _port="$(_envget PISR_PORT)"
+
+  # The HOST has to be derived too, not just the port. compose publishes on
+  # ${PISR_BIND}:${PISR_PORT}, and PISR_BIND is frequently a specific address
+  # rather than a wildcard — an instance published on 10.10.77.108:8080 has
+  # nothing at all on 127.0.0.1:8080, so a loopback health check fails against
+  # a perfectly healthy container. Only a wildcard bind (or none) implies
+  # loopback works.
+  _bind="$(_envget PISR_BIND)"
+  case "$_bind" in
+    ""|0.0.0.0|"*") _host="127.0.0.1" ;;
+    "::"|"[::]")    _host="[::1]" ;;
+    *:*)            _host="[$_bind]" ;;   # a bare IPv6 literal needs brackets
+    *)              _host="$_bind" ;;
+  esac
+
+  PISR_HEALTH_URL="http://${_host}:${_port:-8080}/healthz"
 fi
 HEALTH_URL="$PISR_HEALTH_URL"
 HEALTH_TIMEOUT="${PISR_HEALTH_TIMEOUT:-120}"
