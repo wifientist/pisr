@@ -77,3 +77,27 @@ RUCKUS ONE venue, shape it, check it, render it.
 
 Keep them that way where you can — it makes pulling upstream changes a readable
 diff rather than an archaeology exercise. If you must diverge, note it here.
+
+### Known divergences
+
+- **Spectrum chart paint order** — `src/pages/PISR.tsx` (`SpectrumChart`) and
+  `api/reports/pisr.py` (`_spectrum`). Both sorted blocks by `inUse` alone, so
+  states differing only by colour painted in channel order and a translucent
+  not-permitted slot could cover a permitted-but-unused neighbour — 2.4 GHz
+  channel 10 under channel 12. Both now sort by a `rank` of grey < green <
+  blue < amber. The two renderers must keep matching each other; the PDF is
+  meant to be the same picture as the screen.
+
+- **`min-w-0` on flex and grid children** — `src/pages/PISR.tsx`, in `Card`,
+  `MiniTable`, `BarList`, `Meter`, the venue card and the external-address row.
+  A flex or grid item defaults to `min-width: auto`, so it will not shrink
+  below its content's minimum. Anything with `truncate` (`white-space: nowrap`)
+  or an unbreakable token — an IPv6 literal, a long address — therefore widened
+  its column instead of ellipsing, and the page scrolled sideways on a phone.
+  Note that a scroll container only gets an automatic minimum of zero when it
+  is *itself* a flex or grid item: `MiniTable`'s `overflow-auto` wrapper is a
+  plain block, so the fix had to go on the `Card` around it.
+
+  **If you add a grid or flex layout here, put `min-w-0` on the children.** The
+  overflow is invisible on a desktop viewport and only shows up on a phone.
+  `docker compose exec` a headless browser and check `scrollWidth` at 320px.

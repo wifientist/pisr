@@ -238,10 +238,20 @@ def _spectrum(band: Dict[str, Any]) -> Dict[str, Any]:
                 "labelX": round((x0 + x1) / 2, 1),
                 "labelY": round(top + (bottom - top) / 2 + 4, 1),
                 "count": block["count"],
+                # Paint order, least significant first. Sorting only in-use
+                # last left every state that differs by colour alone to paint
+                # in channel order, which on an overlapping row buries
+                # information: a not-permitted slot drawn later lays its
+                # 45%-opacity grey across a permitted-but-unused neighbour
+                # drawn earlier, and the green reads as grey. 2.4 GHz channel
+                # 10 under channel 12 is the case that shows it.
+                "rank": (3 if block["offPlan"] else 2 if block["inUse"]
+                         else 1 if block["allowed"] else 0),
             })
-        # In-use shapes last so they are never buried under a translucent
-        # neighbour drawn after them.
-        shapes.sort(key=lambda sh: 1 if sh["inUse"] else 0)
+        # Ranked by how much each state has to say — grey says least, an
+        # in-use channel outside the plan says most — so the meaningful
+        # colour ends up on top wherever two slots share spectrum.
+        shapes.sort(key=lambda sh: sh["rank"])
         rows.append({
             "label": row.get("label") or f"{row['width']} MHz",
             "labelX": GUTTER - 6, "labelY": round(top + (ROW_H - 6) / 2 + 4, 1),

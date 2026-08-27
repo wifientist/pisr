@@ -79,10 +79,10 @@ function Card({ title, hint, right, icon, children, className = "" }: {
   children: React.ReactNode; className?: string;
 }) {
   return (
-    <div className={`bg-white border border-gray-200 rounded-lg p-4 ${className}`}>
+    <div className={`min-w-0 bg-white border border-gray-200 rounded-lg p-4 ${className}`}>
       {(title || right) && (
         <div className="flex items-start justify-between gap-3 mb-3">
-          <div>
+          <div className="min-w-0">
             <h3 className="font-semibold text-gray-800 flex items-center gap-2">
               {icon}{title}
             </h3>
@@ -175,7 +175,10 @@ function BarList({ rows, limit = 8, unit = "" }: {
       {shown.map((row, i) => (
         <div key={`${row.label}-${i}`}>
           <div className="flex justify-between text-sm mb-0.5">
-            <span className="text-gray-700 truncate pr-2">{row.label}</span>
+            {/* min-w-0: a flex item defaults to min-width:auto, so `truncate`
+                (white-space:nowrap) would otherwise widen the row rather than
+                ellipse. An IPv6 nameserver is the case that shows it. */}
+            <span className="text-gray-700 truncate pr-2 min-w-0">{row.label}</span>
             <span className="text-gray-900 font-medium shrink-0">{fmtNum(row.count)}{unit}</span>
           </div>
           <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -201,7 +204,7 @@ function Meter({ pct, caption, right, tone }: {
   return (
     <div>
       <div className="flex justify-between text-sm mb-1">
-        <span className="text-gray-700 truncate pr-2">{caption}</span>
+        <span className="text-gray-700 truncate pr-2 min-w-0">{caption}</span>
         <span className="text-gray-900 font-medium shrink-0">{right ?? pctText(pct)}</span>
       </div>
       <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
@@ -236,7 +239,7 @@ function MiniTable({ columns, rows, empty = "Nothing to show.", maxHeight = "20r
 }) {
   if (!rows.length) return <p className="text-sm text-gray-400">{empty}</p>;
   return (
-    <div className="overflow-auto border border-gray-200 rounded" style={{ maxHeight }}>
+    <div className="min-w-0 overflow-auto border border-gray-200 rounded" style={{ maxHeight }}>
       {/* min-w-full keeps narrow tables filling the card; w-max lets a wide one
           size to its content so the container scrolls sideways instead of
           crushing every column to unreadable width. */}
@@ -515,11 +518,22 @@ export default function PISR() {
             <p className="text-sm text-gray-500">No venues match.</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* min-w-0 on the card is load-bearing. A grid item defaults to
+                  min-width:auto, so it will not shrink below its content's
+                  minimum — and the address line sets white-space:nowrap via
+                  `truncate`, which makes that minimum the full length of the
+                  address. Without it the column widens to fit a long address,
+                  the card overflows its grid, and the whole page scrolls
+                  sideways on a phone instead of the text ellipsing. */}
               {filteredVenues.map((row) => (
                 <button key={row.id} onClick={() => chooseVenue(row)}
-                        className="text-left border border-gray-200 rounded-lg p-3 hover:border-blue-400 hover:bg-blue-50/40 transition">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="font-medium text-gray-900">{row.name}</span>
+                        className="min-w-0 text-left border border-gray-200 rounded-lg p-3 hover:border-blue-400 hover:bg-blue-50/40 transition">
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    {/* break-words, not truncate: the name is what identifies
+                        the venue, so it wraps rather than being cut off — and
+                        a name with no spaces in it has to be breakable or it
+                        pushes the chevron off the card on its own. */}
+                    <span className="font-medium text-gray-900 min-w-0 break-words">{row.name}</span>
                     <ChevronRight size={16} className="text-gray-400 mt-0.5 shrink-0" />
                   </div>
                   <div className="text-xs text-gray-500 truncate">
@@ -748,6 +762,19 @@ function SpectrumChart({ band }: { band: any }) {
     "#2a78d6": "#1d4ed8", "#f59e0b": "#b45309",
   };
 
+  // Paint order, least significant first.
+  //
+  // Sorting only in-use last left every state that differs by colour alone to
+  // paint in channel order. On an overlapping row that buries information: a
+  // not-permitted slot drawn later lays its 45%-opacity grey across a
+  // permitted-but-unused neighbour drawn earlier, and the green reads as grey.
+  // 2.4 GHz channel 10 under channel 12 is the case that shows it.
+  //
+  // Ranking by how much each state has to say — grey says least, an in-use
+  // channel outside the plan says most — puts the meaningful colour on top
+  // wherever two slots share spectrum.
+  const rank = (b: any) => (b.offPlan ? 3 : b.inUse ? 2 : b.allowed ? 1 : 0);
+
   const rows = band.rows || [];
   const H = TOP + rows.length * ROW_H + AXIS;
   const axisY = TOP + rows.length * ROW_H;
@@ -824,7 +851,7 @@ function SpectrumChart({ band }: { band: any }) {
                   fill={row.radios ? "#374151" : "#9ca3af"}
                   fontWeight={row.radios ? 600 : 400}>{row.label || `${row.width} MHz`}</text>
             {[...row.blocks]
-              .sort((p: any, q: any) => (p.inUse ? 1 : 0) - (q.inUse ? 1 : 0))
+              .sort((p: any, q: any) => rank(p) - rank(q))
               .map((b: any) => {
               const x0 = x(b.loMhz), x1 = x(b.hiMhz);
               const inset = Math.min(22, Math.max(1, (x1 - x0) * 0.18));
@@ -1650,9 +1677,12 @@ function Addressing({ report }: { report: any }) {
           {addressing.external.length ? (
             <div className="space-y-2">
               {addressing.external.map((row: any) => (
-                <div key={row.ip} className="flex items-center justify-between border border-gray-200 rounded p-3">
-                  <div>
-                    <div className="font-mono text-lg text-gray-900">{row.ip}</div>
+                <div key={row.ip} className="flex items-center justify-between gap-3 border border-gray-200 rounded p-3">
+                  <div className="min-w-0">
+                    {/* break-all, because an IPv6 literal offers the browser no
+                        break opportunity of its own and would otherwise set the
+                        width of this card — and through it, of the page. */}
+                    <div className="font-mono text-lg text-gray-900 break-all">{row.ip}</div>
                     <div className="text-xs text-gray-500">
                       {row.private ? "private address — the APs sit behind another NAT" : "public address"}
                     </div>
@@ -1680,10 +1710,10 @@ function Addressing({ report }: { report: any }) {
             {addressing.dhcpPools.map((pool: any) => (
               <div key={pool.name} className="border border-gray-200 rounded p-3">
                 <div className="flex flex-wrap items-center gap-2 mb-2">
-                  <span className="font-medium text-gray-900">{pool.name}</span>
+                  <span className="font-medium text-gray-900 break-words min-w-0">{pool.name}</span>
                   {pool.vlan !== null && pool.vlan !== undefined && <Pill>VLAN {pool.vlan}</Pill>}
                   <Pill tone={pool.active ? "green" : "gray"}>{pool.active ? "active" : "inactive"}</Pill>
-                  <span className="text-xs text-gray-500 font-mono">
+                  <span className="text-xs text-gray-500 font-mono break-all min-w-0">
                     {pool.subnet}/{pool.mask} · {pool.start}–{pool.end}
                   </span>
                 </div>
@@ -2002,7 +2032,11 @@ function Devices({ report, filter, onFilter }: {
                  placeholder="Filter devices by name, serial, model, IP…"
                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
         </div>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+        {/* flex-wrap, not overflow-x-auto: these are the only way to reach
+            the offline and needs-attention lists, and a filter you have to
+            discover by scrolling sideways is a filter most people never find.
+            Five of them do not fit on a 320px phone in one row. */}
+        <div className="flex flex-wrap items-center gap-1 bg-gray-100 rounded-lg p-0.5">
           {FILTERS.map((entry) => {
             const count = tally(allAps, entry.key) + tally(allSwitches, entry.key);
             return (
