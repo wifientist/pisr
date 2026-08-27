@@ -29,6 +29,13 @@ and gives all of that up in exchange for nothing.
   `systemctl --user status` and the journal.
 - **One at a time.** A `flock` keeps a slow rebuild from overlapping the next
   timer tick.
+- **It refuses to deploy what it cannot measure.** If `/healthz` is not
+  answering *before* anything is touched, the run stops and changes nothing.
+  Otherwise a wrong `PISR_HEALTH_URL` produces a confident, entirely false
+  story: deploy, fail, roll back, fail again, announce an outage and blame the
+  commit — when PISR was fine the whole time and only the URL was wrong. If
+  PISR really is down and the deploy is the fix, `PISR_ALLOW_UNHEALTHY_START=1`
+  overrides it.
 
 ## One-time host setup
 

@@ -154,6 +154,26 @@ healthy() {
   return 1
 }
 
+# Before touching anything: is the health check even capable of passing?
+#
+# If PISR is not answering now, it will not answer after a deploy either, and
+# the run would deploy, fail the check, roll back, fail the check again, and
+# announce that PISR is down and the commit is bad — when the truth may simply
+# be that PISR_HEALTH_URL names the wrong port, or that curl cannot reach it
+# from wherever this script runs. Every one of those conclusions is wrong and
+# all of them are expensive to unpick. A deploy whose success cannot be
+# measured should not start.
+if ! curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+  if [ "${PISR_ALLOW_UNHEALTHY_START:-0}" != "1" ]; then
+    die "$HEALTH_URL is not answering, and nothing has been changed yet.
+     Either PISR is already down, or PISR_HEALTH_URL is wrong for this box.
+     Check it by hand before deploying:  curl -v $HEALTH_URL
+     If PISR really is down and you are deploying to fix it, re-run with
+     PISR_ALLOW_UNHEALTHY_START=1."
+  fi
+  log "$HEALTH_URL is not answering; PISR_ALLOW_UNHEALTHY_START=1, continuing."
+fi
+
 log "Deploying ${current:0:12} -> ${target:0:12} ($BRANCH)"
 git log --oneline "$current..$target" | sed 's/^/    /'
 
@@ -175,4 +195,9 @@ if deploy "$current" && healthy; then
   die "Rolled back to ${current:0:12}, which is healthy. ${target:0:12} needs a look."
 fi
 
-die "Rollback to ${current:0:12} ALSO failed to come up. PISR is down and needs a human."
+die "Rollback to ${current:0:12} did not pass the health check either.
+     Both the new commit and the known-good one failed, which points at the
+     check rather than at either commit — $HEALTH_URL may be wrong, or
+     unreachable from here. Confirm before assuming an outage:
+       curl -v $HEALTH_URL
+       $COMPOSE ps"
