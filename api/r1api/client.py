@@ -8,6 +8,9 @@ from r1api.token_cache import get_cached_token, store_token
 from r1api.services.msp import MspService
 
 logger = logging.getLogger(__name__)
+
+# See the pool sizing in R1Client.__init__ — logged once, not per instance.
+_POOL_LOGGED = False
 from r1api.services.venues import VenueService
 from r1api.services.networks import NetworksService
 from r1api.services.tenant import TenantService
@@ -69,7 +72,19 @@ class R1Client:
         )
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
-        logger.debug("R1 connection pool sized to %s", pool_maxsize)
+
+        # Once per process, at info. An R1Client is built per request — never
+        # cached, see build_r1_client — so logging this per instance would put
+        # the same line in the log several times per page view. But at debug it
+        # is invisible in a container running at INFO, which makes "did the
+        # pool sizing take effect" unanswerable without a rebuild. Once, where
+        # it can be read, is the useful amount.
+        global _POOL_LOGGED
+        if not _POOL_LOGGED:
+            _POOL_LOGGED = True
+            logger.info("R1 connection pool sized to %s (asyncio executor is "
+                        "%s threads)", pool_maxsize,
+                        min(32, (os.cpu_count() or 1) + 4))
 
         if region == 'EU':
             self.host = 'api.eu.ruckus.cloud'
