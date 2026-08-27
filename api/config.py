@@ -235,8 +235,13 @@ def _load_auth() -> AuthConfig:
         raise RuntimeError(
             f"PISR_AUTH_MODE must be 'passphrase' or 'proxy' — got {mode!r}.")
 
+    # Resolved in both modes. Passphrase mode never acts on it, but reports
+    # what proxy mode WOULD make of the request — see proxy_preview() — which
+    # is what makes it possible to check a proxy is forwarding identity before
+    # switching to a mode where a wrong answer locks everyone out.
+    header = _env("PISR_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
+
     if mode == "proxy":
-        header = _env("PISR_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
         return AuthConfig(
             enabled=True,
             mode="proxy",
@@ -276,7 +281,7 @@ def _load_auth() -> AuthConfig:
         cookie_secure=_flag("PISR_COOKIE_SECURE", False),
         max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
         lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
-        proxy_header="", proxy_logout_url="",
+        proxy_header=header, proxy_logout_url="",
         trusted_proxies=_trusted_proxies(required=False),
         client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
     )

@@ -330,6 +330,42 @@ network" and "an attacker must only be on some network", which is worth having,
 but it authenticates nobody.
 
 **In `PISR_AUTH_MODE=proxy` this stops being advice and becomes a requirement.**
+### Switching to proxy mode without locking yourself out
+
+Proxy mode turns the passphrase **off**. If the proxy is not forwarding an
+identity when you switch, every caller gets a 401 and there is no login form to
+fall back to — including for whoever has to fix it. The repair is editing the
+env file on the box.
+
+So check first, from behind the existing gate, while the passphrase still
+works:
+
+```bash
+curl -b jar https://pisr.example.com/api/status | jq .proxyPreview
+```
+
+```json
+{
+  "peer": "10.89.0.2",
+  "peerTrusted": true,
+  "trustedProxies": ["10.89.0.0/24"],
+  "header": "Cf-Access-Authenticated-User-Email",
+  "headerPresent": true,
+  "identity": "you@example.com",
+  "wouldAuthenticate": true
+}
+```
+
+`wouldAuthenticate: true` is the whole test — it is the same question the gate
+asks, answered against this very request. Anything else tells you which half is
+wrong: `peerTrusted: false` means `PISR_TRUSTED_PROXY_IPS` does not name the
+address PISR really sees, and `headerPresent: false` means the proxy is not
+sending `header` (check the name, and check the proxy is configured to forward
+it at all).
+
+Get `true`, then switch. Order matters: enable the authenticating proxy first,
+confirm with the preview, and flip PISR last.
+
 Replace the `ports:` block with `expose: ["8080"]` so PISR is reachable only
 from the proxy's network. A published port in proxy mode is an authentication
 bypass: the identity header is a claim, and anyone who can open a socket can

@@ -286,6 +286,38 @@ def _proxy_identity(request: Request) -> Optional[str]:
     return claimed
 
 
+def proxy_preview(request: Request) -> dict:
+    """
+    What proxy mode WOULD make of this request, deciding nothing.
+
+    Switching PISR_AUTH_MODE to proxy turns the passphrase off completely. Get
+    it wrong — a proxy not forwarding the header, the wrong header name, a
+    trusted-proxy list naming an address that is not really the peer — and
+    every caller gets a 401 with no way to authenticate, including whoever
+    needs to fix it. The repair is editing the env file on the box.
+
+    So this reports each input to that decision separately, from behind the
+    existing gate, while the passphrase still works. Run it before flipping and
+    the flip is a formality; run it after and you are reading it over SSH.
+
+    Behind the gate deliberately: it echoes a header value and names the peer,
+    neither of which an unauthenticated caller should be handed.
+    """
+    peer = _peer_ip(request)
+    trusted = _from_trusted_proxy(peer)
+    claimed = request.headers.get(AUTH.proxy_header, "").strip()
+    return {
+        "peer": peer,
+        "peerTrusted": trusted,
+        "trustedProxies": [str(net) for net in AUTH.trusted_proxies] or None,
+        "header": AUTH.proxy_header,
+        "headerPresent": bool(claimed),
+        "identity": claimed or None,
+        # The whole question, answered the same way the middleware answers it.
+        "wouldAuthenticate": bool(trusted and claimed),
+    }
+
+
 # ── Middleware ───────────────────────────────────────────────────────
 
 def _denied(message: str) -> JSONResponse:

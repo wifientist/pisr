@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # container fails to start rather than failing every request.
 from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
 from auth import (  # noqa: E402
-    SecurityHeadersMiddleware, SessionGateMiddleware, router as auth_router)
+    SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
+    router as auth_router)
 from routers import config_router, msp_router, pisr_router  # noqa: E402
 
 app = FastAPI(
@@ -120,7 +121,7 @@ BUILD_TIME = os.getenv("PISR_BUILD_TIME") or None
 
 
 @app.get("/api/status")
-async def status():
+async def status(request: Request):
     return {
         "status": "ok",
         "controller": CONTROLLER.name,
@@ -131,6 +132,9 @@ async def status():
             "short": BUILD_SHA[:12] if BUILD_SHA != "unknown" else "unknown",
             "builtAt": BUILD_TIME,
         },
+        # What PISR_AUTH_MODE=proxy would decide about this very request, so a
+        # switch to it can be checked before it is made rather than after.
+        "proxyPreview": proxy_preview(request),
     }
 
 
