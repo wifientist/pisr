@@ -29,6 +29,17 @@ WORKDIR /app
 # outside Latin-1. WeasyPrint checks for Pango at IMPORT time and raises if it
 # is missing, so trimming this too far shows up as a container that will not
 # start — not as a PDF endpoint that breaks in a week.
+
+# Rootless Podman. apt-get drops to the unprivileged `_apt` user — uid 65534 —
+# before it fetches anything, and in a rootless container that uid only exists
+# if the subuid range mapped into the user namespace reaches it. Most ranges do
+# not, and one that has to fit inside an LXC's own 0-65535 map has no room to,
+# so the drop fails and the build dies in apt rather than in anything of ours.
+# Telling apt to stay root skips the drop. It costs nothing under Docker, where
+# the build is already root: the packages come from Debian's signed repos and
+# this layer is a throwaway either way.
+RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/00sandbox
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libpango-1.0-0 \
       libpangoft2-1.0-0 \

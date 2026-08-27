@@ -68,6 +68,10 @@ RUCKUS ONE venue, shape it, check it, render it.
 - **WeasyPrint needs Pango at import.** If you trim the Dockerfile's apt list
   further, the container stops starting rather than the PDF endpoint breaking
   later.
+- **The `APT::Sandbox::User "root"` line in the Dockerfile is what makes the
+  image build under rootless Podman.** Without it apt drops to uid 65534, which
+  a rootless subuid range usually does not map, and the build fails in apt. It
+  does nothing under Docker, which is exactly why someone will delete it.
 
 ## Files kept byte-identical to rtools2
 
