@@ -127,24 +127,49 @@ done
 # One deploy at a time. A rebuild can outlast the timer interval, and two
 # concurrent `up -d --build` runs on the same project is a good way to end up
 # with no container at all.
-exec 9>"$LOCK_FILE"
+# Taking the lock, and recognising one that was never really taken.
+#
+# flock releases when the last fd on the inode closes, which is normally when
+# this script exits — but any process that inherited the fd keeps it held. That
+# happened here: before `9>&-` below, the container's own supervisors inherited
+# it and held the lock for the life of the container, so every later run
+# declined with "another deploy is in progress" while nothing was in progress.
+#
+# The `9>&-` on the compose call fixes the known source. This is the backstop
+# for the unknown ones: the holder writes its pid into the file, and a run that
+# cannot take the lock checks whether that pid is still a live copy of this
+# script. If it is not, the lock is not held by a deploy at all — it was leaked
+# into something that merely inherited it. Unlinking the file and reopening
+# gets a fresh inode; the leaked fd keeps its lock on the old one, harmlessly,
+# until whatever holds it exits.
+_holder_is_live_deploy() {
+  local pid
+  pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -d "/proc/$pid" ] || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'pisr-update' || return 1
+  return 0
+}
+
+# 9<> and not 9>: `>` truncates on open, which would erase the holder's pid
+# before the check below could read it, and make every genuinely-held lock look
+# leaked — turning a safety net into the concurrency bug it exists to prevent.
+exec 9<>"$LOCK_FILE"
 if ! flock -n 9; then
-  log "Another deploy is in progress; leaving it alone."
-  exit 0
+  if _holder_is_live_deploy; then
+    log "Another deploy is in progress; leaving it alone."
+    exit 0
+  fi
+  log "Lock at $LOCK_FILE is held, but not by a running deploy — it was leaked"
+  log "into a process that inherited it. Taking a fresh one."
+  rm -f "$LOCK_FILE"
+  exec 9<>"$LOCK_FILE"
+  flock -n 9 || die "Could not take $LOCK_FILE even after replacing it."
 fi
 
-# NOTE FOR ANYTHING LONG-LIVED STARTED BELOW: close fd 9 for it, with `9>&-`.
-#
-# A file descriptor is inherited across fork and exec unless it is marked
-# close-on-exec, and `exec 9>` does not mark it. podman-compose leaves conmon
-# and rootlessport running to supervise the container — that is the intent, and
-# the unit sets KillMode=process to allow it — so without `9>&-` those two
-# inherit the lock fd and hold the flock for as long as the container lives.
-# Every later tick then finds the lock taken and declines, forever, having
-# been locked out by the container it successfully started.
-#
-# It presents as "Another deploy is in progress" on a box where no deploy is
-# in progress, which points nowhere near a file descriptor.
+# Truncate-and-write through the path rather than through fd 9, whose offset is
+# wherever the open left it. Safe: the lock is held by this process now.
+printf '%s' "$$" > "$LOCK_FILE"
 
 cd "$APP_DIR" || die "PISR_APP_DIR=$APP_DIR is not a directory"
 git rev-parse --git-dir >/dev/null 2>&1 || die "$APP_DIR is not a git repository"
