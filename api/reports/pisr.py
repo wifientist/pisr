@@ -284,13 +284,16 @@ def _spectrum(band: Dict[str, Any]) -> Dict[str, Any]:
             ticks.append({"x": round(pos, 1), "label": int(freq)})
         freq += step
 
-    # Regulatory sub-bands as background shading behind everything, with DFS
-    # tinted differently — those are the channels a radio must abandon on radar
-    # detection, which is the usual reason an AP "moved on its own".
-    # Adjacent UNII bands were all one pale grey, so on 6 GHz — four regions in
-    # a row, none of them DFS — nothing said where one ended and the next
-    # began. They now alternate between two greys AND carry a divider at each
-    # boundary: the alternation reads at a glance, the divider makes it exact.
+    # Regulatory sub-bands as background shading behind everything. Adjacent
+    # UNII bands were all one pale grey, so on 6 GHz — four regions in a row —
+    # nothing said where one ended and the next began. They alternate between
+    # two greys AND carry a divider at each boundary: the alternation reads at
+    # a glance, the divider makes it exact.
+    #
+    # DFS gets no tint of its own. It used to be amber, which is also the
+    # in-use-but-not-permitted colour of the blocks painted on top, so a whole
+    # sub-band read as a finding at a glance. DFS is named in the label
+    # instead — it is a property of the band worth stating, not a warning.
     REGION_FILLS = ["#f8fafc", "#eceff3"]
     REGION_STROKES = ["#eef2f6", "#dfe4ea"]
 
@@ -302,11 +305,11 @@ def _spectrum(band: Dict[str, Any]) -> Dict[str, Any]:
         regions.append({
             "x": round(x0, 1), "w": round(x1 - x0, 1),
             "y": REGION, "h": round(height - REGION - AXIS + 4, 1),
-            "fill": "#fef3c7" if region["dfs"] else REGION_FILLS[index % 2],
-            "stroke": "#fde68a" if region["dfs"] else REGION_STROKES[index % 2],
+            "fill": REGION_FILLS[index % 2],
+            "stroke": REGION_STROKES[index % 2],
             "label": region["label"] + (" · DFS" if region["dfs"] else ""),
             "labelX": round((x0 + x1) / 2, 1), "labelY": REGION - 4,
-            "labelFill": "#b45309" if region["dfs"] else "#94a3b8",
+            "labelFill": "#94a3b8",
             "showLabel": (x1 - x0) > 46,
         })
         if len(regions) > 1:
