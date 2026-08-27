@@ -63,9 +63,57 @@ HEALTH_URL="$PISR_HEALTH_URL"
 HEALTH_TIMEOUT="${PISR_HEALTH_TIMEOUT:-120}"
 ALLOW_DIRTY="${PISR_UPDATE_ALLOW_DIRTY:-0}"
 LOCK_FILE="${PISR_LOCK_FILE:-${XDG_RUNTIME_DIR:-/tmp}/pisr-update.lock}"
+HOSTNAME_="$(hostname 2>/dev/null || echo host)"
 
 log() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# ── Slack, optional ──────────────────────────────────────────────────
+#
+# Outbound only, like everything else here: the box posts to Slack, Slack never
+# reaches the box. Set PISR_SLACK_WEBHOOK_URL, or PISR_SLACK_WEBHOOK_URL_FILE
+# pointing at a file containing it — the same <NAME>_FILE convention config.py
+# uses, and worth using, because a webhook URL is a credential. Anyone holding
+# it can post to that channel as this app.
+#
+# Nothing here can fail a deploy. Slack being down, slow or misconfigured is
+# not a reason to leave production on the previous commit, so every failure
+# path is swallowed and noted.
+SLACK_URL="${PISR_SLACK_WEBHOOK_URL:-}"
+if [ -z "$SLACK_URL" ] && [ -n "${PISR_SLACK_WEBHOOK_URL_FILE:-}" ]; then
+  SLACK_URL="$(cat "$PISR_SLACK_WEBHOOK_URL_FILE" 2>/dev/null || true)"
+fi
+SLACK_URL="$(printf '%s' "$SLACK_URL" | tr -d '\r\n')"
+
+_json_escape() {
+  # Backslash first or it would escape the escapes. Then quotes, tabs, and
+  # newlines — a commit subject is user-controlled text arriving in a JSON
+  # document, and an unescaped quote in one would silently break the payload.
+  printf '%s' "$1" \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' \
+    | awk 'BEGIN{ORS=""} {print (NR>1 ? "\\n" : "") $0}'
+}
+
+notify() {
+  [ -n "$SLACK_URL" ] || return 0
+  curl -fsS --max-time 10 -X POST -H 'Content-type: application/json' \
+       --data "{\"text\":\"$(_json_escape "$1")\"}" "$SLACK_URL" >/dev/null 2>&1 \
+    || log "  (Slack notification failed; the deploy itself is unaffected)"
+}
+
+# Blocking conditions repeat every tick until a human intervenes, so an
+# unconditional message would be 288 identical Slack posts a day. Only the
+# first of each distinct one is sent; the state resets on any run that gets
+# far enough to attempt a deploy.
+_BLOCK_STATE="${PISR_BLOCK_STATE:-${XDG_RUNTIME_DIR:-/tmp}/pisr-update.blocked}"
+notify_blocked() {
+  [ -n "$SLACK_URL" ] || return 0
+  local seen=""
+  [ -f "$_BLOCK_STATE" ] && seen="$(cat "$_BLOCK_STATE" 2>/dev/null || true)"
+  [ "$seen" = "$1" ] && return 0
+  printf '%s' "$1" > "$_BLOCK_STATE" 2>/dev/null || true
+  notify "$1"
+}
 
 # Checked up front, because of how they fail if they are missing. A absent
 # curl makes every health check fail, which makes every deploy roll back and
@@ -93,6 +141,7 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "$APP_DIR is not a git repository
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   if [ "$ALLOW_DIRTY" != "1" ]; then
     git status --short --untracked-files=no >&2
+    notify_blocked ":warning: PISR deploy blocked on ${HOSTNAME_:-host} — the working tree in $APP_DIR has local modifications, so nothing is being deployed until someone commits or discards them."
     die "Working tree has local modifications — refusing to overwrite them.
      Commit or discard them, or set PISR_UPDATE_ALLOW_DIRTY=1 to lose them."
   fi
@@ -184,6 +233,7 @@ healthy() {
 # measured should not start.
 if ! curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
   if [ "${PISR_ALLOW_UNHEALTHY_START:-0}" != "1" ]; then
+    notify_blocked ":warning: PISR deploy blocked on ${HOSTNAME_:-host} — $HEALTH_URL is not answering before any change was made. Either PISR is already down, or the health URL is wrong. Nothing was deployed."
     die "$HEALTH_URL is not answering, and nothing has been changed yet.
      Either PISR is already down, or PISR_HEALTH_URL is wrong for this box.
      Check it by hand before deploying:  curl -v $HEALTH_URL
@@ -193,14 +243,20 @@ if ! curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
   log "$HEALTH_URL is not answering; PISR_ALLOW_UNHEALTHY_START=1, continuing."
 fi
 
+# Got past every blocking condition, so forget any we notified about.
+rm -f "$_BLOCK_STATE" 2>/dev/null || true
+
 log "Deploying ${current:0:12} -> ${target:0:12} ($BRANCH)"
-git log --oneline "$current..$target" | sed 's/^/    /'
+subjects="$(git log --oneline "$current..$target")"
+printf '%s\n' "$subjects" | sed 's/^/    /'
 
 git reset --hard --quiet "$target"
 
 if deploy "$target" && healthy; then
   log "Deployed ${target:0:12}; $HEALTH_URL is answering."
   confirm_running "$target"
+  notify ":rocket: PISR deployed on ${HOSTNAME_:-host} — ${current:0:12} → ${target:0:12}, healthy.
+$subjects"
   exit 0
 fi
 
@@ -211,9 +267,12 @@ log "Rolling back to ${current:0:12}."
 
 git reset --hard --quiet "$current"
 if deploy "$current" && healthy; then
+  notify ":rewind: PISR ROLLED BACK on ${HOSTNAME_:-host} — ${target:0:12} did not answer $HEALTH_URL within ${HEALTH_TIMEOUT}s. Restored ${current:0:12}, which is healthy and serving. The new commit needs a look:
+$subjects"
   die "Rolled back to ${current:0:12}, which is healthy. ${target:0:12} needs a look."
 fi
 
+notify ":rotating_light: PISR deploy on ${HOSTNAME_:-host} failed BOTH ways — neither ${target:0:12} nor the rollback to ${current:0:12} passed $HEALTH_URL. Both commits failing the same check usually means the check is wrong rather than the code, but this needs a human either way."
 die "Rollback to ${current:0:12} did not pass the health check either.
      Both the new commit and the known-good one failed, which points at the
      check rather than at either commit — $HEALTH_URL may be wrong, or

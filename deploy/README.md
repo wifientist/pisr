@@ -107,6 +107,46 @@ To pause deploys — during an incident, or while debugging on the box:
 systemctl --user stop pisr-update.timer
 ```
 
+## Slack notifications (optional)
+
+Outbound only, like everything else here — the box posts to Slack, Slack never
+reaches the box. Create an Incoming Webhook, then either put the URL in
+`~/.config/pisr-update.env`:
+
+```
+PISR_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00/B00/xxxx
+```
+
+or keep it out of the environment entirely, which is worth doing because a
+webhook URL is a credential — anyone holding it can post to that channel as
+this app:
+
+```bash
+install -m 0600 /dev/stdin ~/.config/pisr-slack-webhook   # paste, then Ctrl-D
+echo 'PISR_SLACK_WEBHOOK_URL_FILE=/home/appuser/.config/pisr-slack-webhook' \
+  >> ~/.config/pisr-update.env
+```
+
+You get a message when something happened and silence otherwise:
+
+- **Deployed** — the commit range and subjects, confirmed healthy
+- **Rolled back** — the new commit failed its health check and the previous one
+  is serving again
+- **Failed both ways** — neither commit passed, which usually means the health
+  check is wrong rather than the code
+- **Blocked** — a dirty working tree, or PISR already unreachable before any
+  change was attempted
+
+Nothing is sent for a run that finds no new commits, which is almost all of
+them. Blocking conditions repeat every tick until someone intervenes, so only
+the first of each distinct one is sent — otherwise a dirty working tree would
+be 288 identical messages a day. That state resets as soon as a run gets far
+enough to attempt a deploy.
+
+Slack cannot fail a deploy. A webhook that is down, slow or wrong is noted in
+the journal and otherwise ignored: it is not a reason to leave production on
+the previous commit.
+
 ## Which build is actually running
 
 The repository on the box tells you what it *fetched*. It does not tell you
