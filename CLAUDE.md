@@ -84,6 +84,12 @@ RUCKUS ONE venue, shape it, check it, render it.
   lowercase `MSP`.
 - **`_jinja()` in `pisr_router.py` walks two `.parent`s** to reach
   `api/templates`. It fails at PDF-request time, not import time.
+- **The build SHA on `/api/status` comes from a Dockerfile `ARG`,** passed by
+  `docker-compose.yml` from the environment and set by `deploy/pisr-update.sh`.
+  It is also an OCI label, which is what lets the deploy script confirm the
+  running container without a session cookie. A hand-built image says
+  `unknown`; that is correct, not a bug. Do not move it to `/healthz` — that
+  endpoint is public and the commit is reconnaissance.
 - **WeasyPrint needs Pango at import.** If you trim the Dockerfile's apt list
   further, the container stops starting rather than the PDF endpoint breaking
   later.

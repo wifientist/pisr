@@ -53,6 +53,24 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ /app/
 COPY --from=web /web/dist /app/static
 
+# Which commit this image is. Passed by docker-compose.yml from the build
+# environment; "unknown" when someone builds by hand without it, which is
+# honest rather than wrong.
+#
+# Recorded twice on purpose. The ENV is what the running process reports on
+# /api/status, behind the gate. The LABEL is readable with `podman inspect`
+# without a session cookie and without a request, which is what lets the
+# deploy script confirm that the container now running is the commit it just
+# built — the repo's HEAD cannot answer that, and diverges from the truth in
+# exactly the cases worth catching.
+ARG PISR_BUILD_SHA=unknown
+ARG PISR_BUILD_TIME=
+ENV PISR_BUILD_SHA=${PISR_BUILD_SHA} \
+    PISR_BUILD_TIME=${PISR_BUILD_TIME}
+LABEL org.opencontainers.image.revision="${PISR_BUILD_SHA}" \
+      org.opencontainers.image.created="${PISR_BUILD_TIME}" \
+      org.opencontainers.image.source="https://github.com/wifientist/pisr"
+
 RUN useradd -m -u 1000 pisr && chown -R pisr:pisr /app
 USER pisr
 

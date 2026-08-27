@@ -96,6 +96,34 @@ To pause deploys — during an incident, or while debugging on the box:
 systemctl --user stop pisr-update.timer
 ```
 
+## Which build is actually running
+
+The repository on the box tells you what it *fetched*. It does not tell you
+what the container is serving, and the two disagree in exactly the situations
+worth catching — a build that failed, a container that never got recreated, a
+stale image. So the commit is baked into the image at build time, and can be
+read two ways:
+
+```bash
+# From the image label. No session cookie, no HTTP request.
+podman inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' pisr
+
+# From the running process, behind the session gate.
+curl -b jar http://127.0.0.1:8080/api/status | jq .build
+```
+
+`/healthz` deliberately does not carry it. That endpoint is public, and naming
+the exact commit an internet-facing instance is running is free reconnaissance
+for anyone deciding which bugs to try.
+
+The deploy script checks the label itself after every successful deploy and
+warns on a mismatch. It warns rather than rolling back: health has already
+passed by that point, so the instance is up and serving, and trading a working
+instance for a tidier label is not a call a timer should make at 3am.
+
+A build done by hand without `PISR_BUILD_SHA` reports `unknown` rather than
+guessing — the deploy script always sets it.
+
 ## If a deploy fails
 
 The unit will have rolled back already. The journal shows which commit failed:

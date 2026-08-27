@@ -85,6 +85,15 @@ async def healthz():
     return {"status": "ok"}
 
 
+# Baked in at image build (see the Dockerfile). Read once here rather than per
+# request: it cannot change while the process lives, and that is the point of
+# it — this is what the RUNNING container is, which is a different question
+# from what the repository on the box says, and they disagree exactly when
+# something has gone wrong with a deploy.
+BUILD_SHA = os.getenv("PISR_BUILD_SHA") or "unknown"
+BUILD_TIME = os.getenv("PISR_BUILD_TIME") or None
+
+
 @app.get("/api/status")
 async def status():
     return {
@@ -92,6 +101,11 @@ async def status():
         "controller": CONTROLLER.name,
         "subtype": CONTROLLER.ec_type,
         "region": CONTROLLER.region,
+        "build": {
+            "sha": BUILD_SHA,
+            "short": BUILD_SHA[:12] if BUILD_SHA != "unknown" else "unknown",
+            "builtAt": BUILD_TIME,
+        },
     }
 
 

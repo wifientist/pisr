@@ -48,6 +48,15 @@ LOCK_FILE="${PISR_LOCK_FILE:-${XDG_RUNTIME_DIR:-/tmp}/pisr-update.lock}"
 log() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# Checked up front, because of how they fail if they are missing. A absent
+# curl makes every health check fail, which makes every deploy roll back and
+# report that the commit is bad — the tool that is actually missing is never
+# named, and the same wrong conclusion is reached again on the next push. Two
+# seconds of checking here saves that entire diagnosis.
+for tool in git curl flock; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed, and this script cannot work without it."
+done
+
 # One deploy at a time. A rebuild can outlast the timer interval, and two
 # concurrent `up -d --build` runs on the same project is a good way to end up
 # with no container at all.
@@ -83,19 +92,65 @@ if [ "$current" = "$target" ]; then
 fi
 
 deploy() {
+  # Stamped into the image as both an env var and an OCI label; see the
+  # Dockerfile. Exported rather than passed, because docker-compose.yml reads
+  # them from the environment as build args.
+  export PISR_BUILD_SHA="$1"
+  export PISR_BUILD_TIME
+  PISR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
   # --build because this box builds its own image; there is no registry in
   # this deployment shape.
   $COMPOSE up -d --build
 }
 
+running_sha() {
+  # What the CONTAINER is, not what the repository says. The two agree only
+  # when the last deploy actually took — a build that failed, a container that
+  # never got recreated, or a stale image all show up right here and nowhere
+  # else. Read from the image label so this needs no session cookie and no
+  # HTTP request.
+  local engine="${PISR_ENGINE:-podman}"
+  command -v "$engine" >/dev/null 2>&1 || { echo ""; return 0; }
+  $engine inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "${PISR_CONTAINER:-pisr}" 2>/dev/null || echo ""
+}
+
+confirm_running() {
+  # Advisory, deliberately. A mismatch here means the deploy did not take, but
+  # health already passed, so PISR is up and serving — rolling back over a
+  # label would trade a working instance for a tidier one. Say it loudly and
+  # let a person decide.
+  local want="$1" got
+  got="$(running_sha)"
+  if [ -z "$got" ]; then
+    log "  (could not read the running container's build label; skipping the check)"
+  elif [ "$got" = "$want" ]; then
+    log "  container is running ${got:0:12}, as expected."
+  else
+    log "  WARNING: expected ${want:0:12} but the container reports ${got:0:12}."
+    log "  The build may not have been picked up. Check: $COMPOSE ps"
+  fi
+}
+
 healthy() {
+  # Announced rather than silent. This loop can legitimately run for two
+  # minutes while an image builds and a container starts, and an unexplained
+  # two-minute pause is indistinguishable from a hang to whoever is watching.
+  log "  waiting up to ${HEALTH_TIMEOUT}s for $HEALTH_URL"
   local deadline=$(( SECONDS + HEALTH_TIMEOUT ))
+  local last=""
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+    if last="$(curl -fsS --max-time 5 -o /dev/null -w '%{http_code}' "$HEALTH_URL" 2>&1)"; then
       return 0
     fi
     sleep 3
   done
+  # The last thing curl said. Usually the whole diagnosis: "Connection
+  # refused" is a container that never came up, a 401 is a health URL pointed
+  # at a gated path, and a timeout is something else entirely.
+  log "  last response from $HEALTH_URL: ${last:-<no response>}"
   return 1
 }
 
@@ -104,8 +159,9 @@ git log --oneline "$current..$target" | sed 's/^/    /'
 
 git reset --hard --quiet "$target"
 
-if deploy && healthy; then
+if deploy "$target" && healthy; then
   log "Deployed ${target:0:12}; $HEALTH_URL is answering."
+  confirm_running "$target"
   exit 0
 fi
 
@@ -115,7 +171,7 @@ log "New commit ${target:0:12} did not come up healthy within ${HEALTH_TIMEOUT}s
 log "Rolling back to ${current:0:12}."
 
 git reset --hard --quiet "$current"
-if deploy && healthy; then
+if deploy "$current" && healthy; then
   die "Rolled back to ${current:0:12}, which is healthy. ${target:0:12} needs a look."
 fi
 

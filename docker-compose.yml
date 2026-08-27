@@ -32,7 +32,13 @@
 
 services:
   pisr:
-    build: .
+    build:
+      context: .
+      args:
+        # deploy/pisr-update.sh exports these. Empty on a hand-run build, which
+        # surfaces as "unknown" on /api/status rather than as a wrong answer.
+        PISR_BUILD_SHA: ${PISR_BUILD_SHA:-unknown}
+        PISR_BUILD_TIME: ${PISR_BUILD_TIME:-}
     container_name: pisr
     restart: unless-stopped
     env_file: ${PISR_ENV_FILE:-.env}
