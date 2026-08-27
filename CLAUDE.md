@@ -11,6 +11,11 @@ RUCKUS ONE venue, shape it, check it, render it.
   <http://localhost:4173>, API <http://127.0.0.1:4174>
 - Run backend commands with `docker compose run --rm pisr <cmd>` (prod compose)
   or `docker compose -f docker-compose.dev.yml exec backend <cmd>` (dev).
+- Production redeploys itself by polling this repo — a systemd user timer on
+  the box, not a webhook. See `deploy/README.md`. Nothing listens inbound for
+  it, deliberately: the box reaches GitHub, GitHub never reaches the box, which
+  is the same property the tunnel is there for. A deploy endpoint inside PISR
+  would need the podman socket, and that makes the container host-root.
 
 ## Architecture
 
