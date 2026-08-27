@@ -11,6 +11,29 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=%h/app/deploy/pisr-update.sh
 
+# LOAD-BEARING. Without it this unit kills the container it just deployed.
+#
+# podman-compose starts the container and returns, but it leaves conmon and
+# rootlessport running — and because they were forked from here, they live in
+# THIS unit's cgroup. systemd's default KillMode=control-group SIGTERMs, waits
+# TimeoutStopSec, then SIGKILLs everything in that cgroup when the unit stops,
+# which a oneshot does the moment its script exits. So a successful deploy
+# reported success, and ninety seconds later systemd killed the container it
+# had just brought up:
+#
+#   pisr-update.service: State 'stop-sigterm' timed out. Killing.
+#   pisr-update.service: Killing process 3998 (rootlessport) with signal SIGKILL.
+#
+# KillMode=process confines the kill to the main process — the script, which
+# has already exited — and leaves its descendants alone. The container survives
+# the unit that started it, which is the entire point of `up -d`.
+KillMode=process
+
+# With KillMode=process there is nothing left to wait for, so a stop that takes
+# more than a few seconds means something is wrong rather than something is
+# slow. The old 90s default is what made the failure above take 90s to arrive.
+TimeoutStopSec=15
+
 # Settings live here rather than in the script so an operator changes the
 # deployment without editing a tracked file — which would make the working
 # tree dirty and stop the very script that reads it.

@@ -175,6 +175,29 @@ instance for a tidier label is not a call a timer should make at 3am.
 A build done by hand without `PISR_BUILD_SHA` reports `unknown` rather than
 guessing — the deploy script always sets it.
 
+## Why the unit sets KillMode=process
+
+Because without it the unit kills the container it just deployed, about ninety
+seconds after reporting success.
+
+`podman-compose up -d` returns once the container is running, but it leaves
+`conmon` and `rootlessport` alive to supervise it — and having been forked from
+the deploy script, those live in the unit's own cgroup. A `Type=oneshot` unit
+stops the instant its script exits, and systemd's default
+`KillMode=control-group` SIGTERMs everything in the cgroup on stop, waits
+`TimeoutStopSec`, then SIGKILLs it. The container goes with it:
+
+```
+pisr-update.service: State 'stop-sigterm' timed out. Killing.
+pisr-update.service: Killing process 3998 (rootlessport) with signal SIGKILL.
+pisr-update.service: Failed with result 'timeout'.
+```
+
+`KillMode=process` confines the kill to the main process, which has already
+exited, and leaves its descendants running. If you ever rewrite this unit,
+keep it — the symptom is a deploy that logs success and takes the service down
+a minute and a half later, and nothing in the deploy output hints at it.
+
 ## If a deploy fails
 
 The unit will have rolled back already. The journal shows which commit failed:

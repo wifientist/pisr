@@ -95,6 +95,11 @@ RUCKUS ONE venue, shape it, check it, render it.
   lowercase `MSP`.
 - **`_jinja()` in `pisr_router.py` walks two `.parent`s** to reach
   `api/templates`. It fails at PDF-request time, not import time.
+- **`KillMode=process` in `deploy/pisr-update.service` is load-bearing.**
+  podman leaves `conmon` and `rootlessport` in the unit's cgroup, and a oneshot
+  unit's default `KillMode=control-group` SIGKILLs them ~90s after the script
+  exits — killing the container the deploy just brought up, having already
+  reported success. Do not remove it.
 - **The build SHA on `/api/status` comes from a Dockerfile `ARG`,** passed by
   `docker-compose.yml` from the environment and set by `deploy/pisr-update.sh`.
   It is also an OCI label, which is what lets the deploy script confirm the
