@@ -29,6 +29,13 @@ and gives all of that up in exchange for nothing.
   `systemctl --user status` and the journal.
 - **One at a time.** A `flock` keeps a slow rebuild from overlapping the next
   timer tick.
+- **It notices a stale container, not just a moved branch.** If someone runs
+  `git pull` by hand, HEAD equals origin while the container still runs the old
+  image — and a script comparing git to git would see nothing to do, forever.
+  The container's build label is checked against the target too, and a mismatch
+  triggers a rebuild. An unreadable label (an image built before the label
+  existed) counts as "cannot tell" and is left alone, since deploying every
+  tick would be worse than deploying on none.
 - **It refuses to deploy what it cannot measure.** If `/healthz` is not
   answering *before* anything is touched, the run stops and changes nothing.
   Otherwise a wrong `PISR_HEALTH_URL` produces a confident, entirely false

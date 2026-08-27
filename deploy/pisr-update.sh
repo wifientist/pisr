@@ -153,10 +153,46 @@ git fetch --quiet "$REMOTE" "$BRANCH" || die "git fetch failed"
 current="$(git rev-parse HEAD)"
 target="$(git rev-parse "$REMOTE/$BRANCH")"
 
-if [ "$current" = "$target" ]; then
+running_sha() {
+  # What the CONTAINER is, not what the repository says. The two agree only
+  # when the last deploy actually took — a build that failed, a container that
+  # never got recreated, or a stale image all show up right here and nowhere
+  # else. Read from the image label so this needs no session cookie and no
+  # HTTP request.
+  local engine="${PISR_ENGINE:-podman}"
+  command -v "$engine" >/dev/null 2>&1 || { echo ""; return 0; }
+  $engine inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "${PISR_CONTAINER:-pisr}" 2>/dev/null || echo ""
+}
+
+
+# Deploy when the repository has moved OR when the container is not what the
+# repository says it should be. The second half matters more than it looks:
+# the script used to compare git to git only, so a `git pull` run by hand left
+# HEAD equal to origin with the container still on the old image, and every
+# subsequent tick concluded there was nothing to do. The repository was up to
+# date and the running code was not, indefinitely, silently.
+#
+# The container's own label is the authority on what is actually serving. An
+# empty answer — an image built before the label existed, or no podman — is
+# treated as "cannot tell" and left alone rather than as drift, since deploying
+# on every tick would be worse than deploying on none.
+running="$(running_sha)"
+drifted=""
+if [ -n "$running" ] && [ "$running" != "$target" ] && [ "$current" = "$target" ]; then
+  drifted="yes"
+fi
+
+if [ "$current" = "$target" ] && [ -z "$drifted" ]; then
   # The quiet path, and the one taken almost every time. Nothing is logged
   # beyond this so the journal stays readable.
   exit 0
+fi
+
+if [ -n "$drifted" ]; then
+  log "Repository is at ${target:0:12} but the container is running ${running:0:12}."
+  log "Rebuilding to close the gap — something deployed outside this script."
 fi
 
 deploy() {
@@ -170,19 +206,6 @@ deploy() {
   # --build because this box builds its own image; there is no registry in
   # this deployment shape.
   $COMPOSE up -d --build
-}
-
-running_sha() {
-  # What the CONTAINER is, not what the repository says. The two agree only
-  # when the last deploy actually took — a build that failed, a container that
-  # never got recreated, or a stale image all show up right here and nowhere
-  # else. Read from the image label so this needs no session cookie and no
-  # HTTP request.
-  local engine="${PISR_ENGINE:-podman}"
-  command -v "$engine" >/dev/null 2>&1 || { echo ""; return 0; }
-  $engine inspect --format \
-    '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "${PISR_CONTAINER:-pisr}" 2>/dev/null || echo ""
 }
 
 confirm_running() {
@@ -246,9 +269,14 @@ fi
 # Got past every blocking condition, so forget any we notified about.
 rm -f "$_BLOCK_STATE" 2>/dev/null || true
 
-log "Deploying ${current:0:12} -> ${target:0:12} ($BRANCH)"
-subjects="$(git log --oneline "$current..$target")"
-printf '%s\n' "$subjects" | sed 's/^/    /'
+if [ "$current" = "$target" ]; then
+  log "Rebuilding ${target:0:12} ($BRANCH) — repository unchanged, container stale."
+  subjects="(no new commits; the container was behind the repository)"
+else
+  log "Deploying ${current:0:12} -> ${target:0:12} ($BRANCH)"
+  subjects="$(git log --oneline "$current..$target")"
+  printf '%s\n' "$subjects" | sed 's/^/    /'
+fi
 
 git reset --hard --quiet "$target"
 
