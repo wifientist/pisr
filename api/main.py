@@ -82,6 +82,28 @@ else:
         AUTH.client_ip_header or "(none — the TCP peer is used as-is)",
         "forced on" if AUTH.cookie_secure else "per-request (HTTPS only)")
 
+    if AUTH.mode == "proxy":
+        # Reported on its own line because it decides what the line above
+        # means. Verifying assertions makes the trusted-proxy list advisory —
+        # it still scopes the client-IP header, but it no longer decides who
+        # gets in. Not verifying them makes that list, and the network it
+        # describes, the only thing standing there.
+        if AUTH.access_team:
+            logger.info(
+                "Gate: verifying Cloudflare Access assertions from %s "
+                "(aud %s…); the peer address is not consulted for identity.",
+                f"https://{AUTH.access_team}.cloudflareaccess.com",
+                AUTH.access_aud[:12])
+        else:
+            logger.warning(
+                "Gate: NOT verifying Access assertions — the identity header "
+                "%s is trusted on the strength of the peer address alone. "
+                "Under rootless podman that address is rewritten and "
+                "distinguishes nothing, so the network the port is published "
+                "on is the only control. Set PISR_ACCESS_TEAM and "
+                "PISR_ACCESS_AUD to verify signatures instead.",
+                AUTH.proxy_header)
+
     if AUTH.client_ip_header and not AUTH.trusted_proxies:
         # The one combination that silently does nothing. Worth a warning
         # rather than a fact, because whoever set the header believed they
