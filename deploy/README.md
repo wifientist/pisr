@@ -97,6 +97,37 @@ Set `PISR_HEALTH_URL` explicitly only if PISR is reachable somewhere the
 derivation cannot work out — and point it at `/healthz`, never `/api/status`,
 which is behind the session gate and would fail every check.
 
+## Two status scripts
+
+Rather than remembering the commands:
+
+```bash
+~/app/deploy/pisr-deploy-status.sh   # is the auto-deploy working, what did it last do
+~/app/deploy/pisr-app-status.sh      # is PISR healthy, how is it configured
+```
+
+Both are read-only and safe to run at any time, including mid-deploy. They live
+in the repo rather than in `$HOME` so a deploy keeps them current; symlink them
+for convenience:
+
+```bash
+ln -sf ~/app/deploy/pisr-deploy-status.sh ~/pisr-deploy-status
+ln -sf ~/app/deploy/pisr-app-status.sh    ~/pisr-app-status
+```
+
+`pisr-deploy-status` prints the timer schedule, the last run's outcome, and the
+three versions that should agree — origin, the local repo, and the commit the
+container was actually built from — saying which way they disagree when they
+do. It then shows recent deploy activity with podman's build chatter filtered
+out, since that is most of the volume and none of the meaning.
+
+`pisr-app-status` probes the PUBLISHED address rather than localhost, on
+purpose: rootless podman forwards through a separate process, and when that
+dies the container keeps running and serving to nobody. In that state `podman
+ps` says Up and the container's own healthcheck passes — it asks localhost from
+inside, where nothing is wrong. Only the published address sees it, and this
+script tells you the recovery when it does.
+
 ## Operating it
 
 ```bash
