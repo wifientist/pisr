@@ -1,0 +1,188 @@
+"""
+Applying a visibility policy to an assembled report.
+
+This is the enforcement point, and it is deliberately the ONLY one. Both
+renderers — the React page and the PDF template — are handed the output of this
+function and draw whatever they are given, so there is no path by which the PDF
+can disagree with the screen about what a reader is allowed to see. That
+matters more than it sounds: `/pisr/{cid}/report.pdf` re-polls the venue and
+rebuilds the report from scratch rather than rendering the one the browser
+already has, so a filter applied in the JSON route only would leave the PDF as
+an unauthenticated-by-role copy of everything.
+
+WHY EMPTY AND NOT DELETE. A hidden path is replaced with an empty value of the
+same type, never removed. Two renderers in two languages read this payload with
+several hundred `.length`, `.map`, `|length` and `.get(...)` calls between them,
+most of them written when the key was guaranteed to exist. Deleting a key turns
+every one of those into a potential blank page; emptying one turns them all
+into an empty list, which every renderer here already handles because a venue
+with no switches produces exactly that.
+
+FINDINGS ARE THE PART PEOPLE FORGET. Checks read the whole report and are
+rendered in one place, so hiding a section without dropping its findings leaves
+the Verification card cheerfully reporting on the cards that are gone. Findings
+owned by hidden sections are removed and the tallies recomputed, so the header
+counts and the "18 of 24 checks passed" line stay true to what is shown rather
+than to what was run.
+
+Nothing here mutates its input. `build_report` is expensive and shared, and a
+future caller that redacts twice for two different roles must not get a report
+that has been emptied twice over.
+"""
+
+import copy
+import logging
+from collections import Counter
+from typing import Any, Dict, Iterable, List
+
+import sections as section_catalogue
+
+logger = logging.getLogger(__name__)
+
+# The five severities `checks.run_checks` tallies, in its order. Recomputed
+# here rather than imported so that `checks.py` stays byte-identical to
+# rtools2 and gains no knowledge that visibility exists.
+_SEVERITIES = ("critical", "warning", "info", "ok", "skipped")
+
+
+def _blank_like(value: Any) -> Any:
+    """
+    An empty value of the same shape.
+
+    Type-preserving on purpose — see the module docstring. `None` stays `None`
+    rather than becoming `0`, because a null in this payload already means
+    "not known" everywhere it appears and both renderers print it as an em dash.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (list, tuple)):
+        return []
+    if isinstance(value, dict):
+        return {}
+    if isinstance(value, str):
+        return ""
+    if isinstance(value, (int, float)):
+        return 0
+    return None
+
+
+def _blank_path(tree: Dict[str, Any], dotted: str) -> bool:
+    """
+    Empty one dotted path in place. Returns whether it found anything.
+
+    A path that does not resolve is not an error at runtime — a report from a
+    venue with no property config genuinely has no `venue.property` — but it IS
+    worth a debug line, because the other reason a path stops resolving is that
+    someone renamed a key in `shape.py` and this catalogue now silently
+    protects nothing.
+    """
+    parts = dotted.split(".")
+    node: Any = tree
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    leaf = parts[-1]
+    if not isinstance(node, dict) or leaf not in node:
+        return False
+    node[leaf] = _blank_like(node[leaf])
+    return True
+
+
+def _filter_findings(verification: Dict[str, Any], hidden_checks) -> None:
+    """
+    Drop findings owned by hidden sections and recompute both tallies in place.
+
+    The counts are rebuilt rather than decremented so that this stays correct
+    if `run_checks` ever emits a severity not in `_SEVERITIES`: a level nobody
+    counted would simply not appear, which is the same thing `run_checks` does.
+    """
+    findings: List[Dict[str, Any]] = verification.get("findings") or []
+    kept = [f for f in findings if f.get("id") not in hidden_checks]
+    if len(kept) == len(findings):
+        return
+
+    verification["findings"] = kept
+    tally = Counter(f.get("severity") for f in kept)
+    verification["counts"] = {level: tally.get(level, 0) for level in _SEVERITIES}
+    verification["score"] = {
+        "passed": tally.get("ok", 0),
+        "ran": len(kept) - tally.get("skipped", 0),
+    }
+
+
+def template_helpers(hidden_ids: Iterable[str]) -> Dict[str, Any]:
+    """
+    The two predicates the PDF template guards on.
+
+    Passed into `template.render()` at the call site rather than added to
+    `build_context`, which keeps `api/reports/pisr.py` byte-identical to its
+    rtools2 original — the template has to diverge for this feature, the
+    context builder does not, and one divergence is cheaper to carry than two.
+
+    `visible(id)`      one section.
+    `visible_tab(tab)` any section on that tab, for the <h2> that would
+                       otherwise print a heading over nothing.
+
+    Both answer True for an id the catalogue does not know, matching the
+    fail-open rule everywhere else: a template guarding on a typo renders its
+    section rather than silently dropping it, which is the failure you notice.
+    """
+    hidden = frozenset(hidden_ids)
+
+    def visible(section_id: str) -> bool:
+        return section_id not in hidden
+
+    def visible_tab(tab: str) -> bool:
+        on_tab = [s.id for s in section_catalogue.SECTIONS if s.tab == tab]
+        return any(section_id not in hidden for section_id in on_tab) if on_tab else True
+
+    return {"visible": visible, "visible_tab": visible_tab}
+
+
+def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
+    """
+    A copy of `report` with every hidden section's data emptied.
+
+    The resolved id list is stamped onto the result as `visibility.hidden` so
+    the renderers can drop the containers as well as the contents — a card that
+    would otherwise render its own "no rows" empty state, which reads as "there
+    are none" rather than "you are not being shown these". That stamp is
+    presentation; the emptying above it is the control.
+    """
+    hidden = sorted({sid for sid in hidden_ids if sid})
+    redacted = copy.deepcopy(report)
+
+    # Stamped even when nothing is hidden. A renderer that has to test for the
+    # key's existence before reading it is a renderer with two code paths, and
+    # the one that never runs in development is the one that breaks.
+    redacted["visibility"] = {
+        "hidden": hidden,
+        # So a reader can tell "this venue has no DHCP pools" from "you are not
+        # shown DHCP pools". The UI says so; the PDF prints it in the footer.
+        "redacted": bool(hidden),
+    }
+
+    if not hidden:
+        return redacted
+
+    unknown = [sid for sid in hidden if sid not in section_catalogue.BY_ID]
+    if unknown:
+        # Left over from a section that was renamed or removed. Ignored rather
+        # than refused: a stale id in the policy file must not take the report
+        # down, and the alternative — treating it as a wildcard — would hide
+        # more than the admin asked for.
+        logger.warning("visibility: policy names %d unknown section(s), ignored: %s",
+                       len(unknown), ", ".join(unknown))
+
+    for path in section_catalogue.paths_for(hidden):
+        if not _blank_path(redacted, path):
+            logger.debug("visibility: path %s did not resolve in this report", path)
+
+    hidden_checks = section_catalogue.checks_for(hidden)
+    if hidden_checks and isinstance(redacted.get("verification"), dict):
+        _filter_findings(redacted["verification"], hidden_checks)
+
+    return redacted

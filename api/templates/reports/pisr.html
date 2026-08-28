@@ -202,7 +202,16 @@
   </div>
 </div>
 
+{#  Section guards. `visible()` and `visible_tab()` come from
+    redact.template_helpers, passed in at render time by pisr_router.
+
+    These are COSMETIC. The data behind a hidden section has already been
+    emptied by redact.py before this template sees it, so a guard that was
+    forgotten leaks an empty table, not the contents. What the guards buy is
+    the difference between "there are none" and "you are not shown these" —
+    an empty state under a heading reads as the first and means the second. #}
 <div class="tiles">
+  {% if visible('overview.verification') %}
   <div class="tile {% if counts.critical %}critical{% endif %}">
     <div class="n">{{ counts.critical or 0 }}</div><div class="l">Critical</div></div>
   <div class="tile {% if counts.warning %}warning{% endif %}">
@@ -210,16 +219,21 @@
   <div class="tile"><div class="n">{{ counts.info or 0 }}</div><div class="l">Info</div></div>
   <div class="tile ok"><div class="n">{{ score.passed or 0 }}/{{ score.ran or 0 }}</div>
     <div class="l">Checks passed</div></div>
+  {% endif %}
+  {% if visible('overview.access-points') %}
   <div class="tile"><div class="n">{{ aps.online or 0 }}/{{ aps.total or 0 }}</div>
     <div class="l">APs online</div></div>
+  {% endif %}
+  {% if visible('overview.summary') %}
   <div class="tile"><div class="n">{{ clients.total or 0 }}</div>
     <div class="l">Clients now</div></div>
+  {% endif %}
 </div>
 
 <div class="meta">
   <div><b>Venue</b> — {{ aps.total or 0 }} AP(s), {{ switches.total or 0 }} switch(es),
     {{ wireless.activated or 0 }} SSID(s) activated, {{ vlans.distinct or 0 }} VLAN(s) seen.</div>
-  {% if is_property %}<div><b>Property</b> — {{ property.unitCount if property.unitCount is not none else "?" }} unit(s),
+  {% if is_property and visible('overview.property') %}<div><b>Property</b> — {{ property.unitCount if property.unitCount is not none else "?" }} unit(s),
     {{ property.unitsWithResident or 0 }} with a resident assigned, status
     {{ property.status or "unknown" }}. Resident portal
     {{ "allowed" if property.residentPortalAllowed else "not allowed" }}; resident comms
@@ -228,6 +242,7 @@
     generated. Client counts and radio state move minute to minute.</div>
 </div>
 
+{% if visible('overview.verification') %}
 <h2>Findings</h2>
 <p class="note">Every check that ran, most serious first. Findings that ask something of
   you come first with their full evidence; the checks that came back clean are listed
@@ -278,23 +293,29 @@
 </div>
 {% endfor %}
 {% endif %}
+{% endif %}
 
+{% if visible('overview.access-points') or visible('overview.switches') %}
 <h2>Inventory</h2>
 <div class="charts">
-  {{ donut(ap_donut, "Access points") }}
-  {{ donut(switch_donut, "Switches") }}
+  {% if visible('overview.access-points') %}{{ donut(ap_donut, "Access points") }}{% endif %}
+  {% if visible('overview.switches') %}{{ donut(switch_donut, "Switches") }}{% endif %}
 </div>
+{% if visible('overview.access-points') %}
 <div class="charts">
   {{ bars(ap_models, "AP models") }}
   {{ bars(ap_firmware, "AP firmware") }}
 </div>
-{% if switch_donut.total %}
+{% endif %}
+{% if visible('overview.switches') and switch_donut.total %}
 <div class="charts">
   {{ bars(switch_models, "Switch models") }}
   {{ bars(switch_firmware, "Switch firmware") }}
 </div>
 {% endif %}
+{% endif %}
 
+{% if visible('overview.venue-config') %}
 <h2>Venue configuration</h2>
 <dl>
   <dt>AP management VLAN</dt><dd>{{ venue.managementVlan if venue.managementVlan is not none else "untagged" }}</dd>
@@ -304,7 +325,8 @@
   <dt>5 GHz radios</dt><dd>{{ "dual 5 GHz configured" if venue.dual5g else "single 5 GHz" }}</dd>
   <dt>AP groups</dt><dd>{{ wireless.groups | length }}</dd>
 </dl>
-{% if spectrum %}
+{% endif %}
+{% if spectrum and visible('wireless.channel-plan') %}
 <h3>Channel plan</h3>
 <p class="note">One row per bonding width, labelled by the bonded centre channel. A block
   is filled where a radio is actually operating at that width, so an 80 MHz radio shows the
@@ -379,7 +401,7 @@
 {% endfor %}
 {% endif %}
 
-{% if venue.radio %}
+{% if venue.radio and visible('overview.venue-config') %}
 <h3>Radio defaults</h3>
 <table>
   <thead><tr><th>Band</th><th>Channel method</th><th>Width</th><th>Tx power</th><th>Allowed channels</th></tr></thead>
@@ -393,25 +415,33 @@
 </table>
 {% endif %}
 
+{% if visible_tab('wireless') %}
 <h2>Wireless</h2>
 <div class="tiles">
+  {% if visible('wireless.ssids') %}
   <div class="tile"><div class="n">{{ wireless.activated or 0 }}</div><div class="l">SSIDs here</div></div>
   <div class="tile"><div class="n">{{ wireless.rows | selectattr("clientsNow") | list | length }}</div>
     <div class="l">Carrying clients</div></div>
+  {% endif %}
+  {% if visible('wireless.ap-groups') %}
   <div class="tile"><div class="n">{{ wireless.groups | length }}</div><div class="l">AP groups</div></div>
+  {% endif %}
   <div class="tile"><div class="n">{{ clients.total or 0 }}</div><div class="l">Clients now</div></div>
 </div>
 <div class="charts">
-  {{ bars(clients_by_band, "Clients by band") }}
-  {{ bars(clients_by_rssi, "Signal quality (RSSI)") }}
+  {% if visible('wireless.clients-by-band') %}{{ bars(clients_by_band, "Clients by band") }}{% endif %}
+  {% if visible('wireless.signal-quality') %}{{ bars(clients_by_rssi, "Signal quality (RSSI)") }}{% endif %}
 </div>
 <div class="charts">
-  {{ bars(clients_by_ssid, "Clients per SSID") }}
-  {{ bars(clients_by_health, "Connection health") }}
+  {% if visible('wireless.clients-per-ssid') %}{{ bars(clients_by_ssid, "Clients per SSID") }}{% endif %}
+  {% if visible('wireless.connection-health') %}{{ bars(clients_by_health, "Connection health") }}{% endif %}
 </div>
+{% if visible('wireless.busiest-aps') %}
 <div class="charts">
   {{ bars(top_aps, "Busiest APs") }}
 </div>
+{% endif %}
+{% if visible('wireless.ssids') %}
 {% if wireless_table.count %}
   <table>
     <thead><tr>{% for c in wireless_table.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
@@ -419,7 +449,10 @@
       <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
   </table>
 {% else %}<p class="empty">No Wi-Fi network is activated on this venue.</p>{% endif %}
+{% endif %}
+{% endif %}
 
+{% if visible('wired.vlans') %}
 <h2>VLANs</h2>
 {% if not vlans.portsKnown %}
 <p class="note">No switch ports were read for this venue, so the tagged and untagged
@@ -432,8 +465,11 @@
       <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
   </table>
 {% else %}<p class="empty">No VLAN information was returned.</p>{% endif %}
+{% endif %}
 
+{% if visible_tab('addressing') %}
 <h2>Addressing</h2>
+{% if visible('addressing.ap-subnets') %}
 <h3>Where the APs landed</h3>
 {% if ap_subnet_table.count %}
   <table>
@@ -445,8 +481,9 @@
 <p class="note"><b>Prefix from</b> — <i>reported</i> is the device's own netmask, a fact.
   <i>Inferred</i> is the smallest subnet spanning devices that share a gateway, so the real
   subnet may be larger. <i>Assumed</i> is a /24 placeholder where neither was available.</p>
+{% endif %}
 
-{% if switch_subnet_table.count %}
+{% if switch_subnet_table.count and visible('addressing.switch-subnets') %}
 <h3>Where the switches landed</h3>
   <table>
     <thead><tr>{% for c in switch_subnet_table.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
@@ -455,7 +492,7 @@
   </table>
 {% endif %}
 
-{% if addressing.dhcpPools %}
+{% if addressing.dhcpPools and visible('addressing.dhcp-pools') %}
 <h3>DHCP pools</h3>
 <table>
   <thead><tr><th>Pool</th><th>Subnet</th><th>VLAN</th><th>Range</th><th>Used</th><th>Total</th><th>%</th></tr></thead>
@@ -467,16 +504,21 @@
 </table>
 {% endif %}
 
+{% endif %}
+
+{% if visible_tab('identity') %}
 <h2>Identity &amp; policy</h2>
 {% if dpsk.inUse %}
+  {% if visible('identity.dpsk-pools') %}
   <h3>DPSK pools</h3>
   <table>
     <thead><tr>{% for c in identity.pools.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
     <tbody>{% for row in identity.pools.rows %}
       <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
   </table>
+  {% endif %}
 
-  {% if identity.groups.count %}
+  {% if identity.groups.count and visible('identity.other-groups') %}
   <h3>Identity groups</h3>
   <table>
     <thead><tr>{% for c in identity.groups.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
@@ -485,7 +527,7 @@
   </table>
   {% endif %}
 
-  {% for section in identity.policySets %}
+  {% for section in identity.policySets if visible('identity.policy-sets') %}
   <h3>{{ section.title }}</h3>
   <p class="note">{{ section.subtitle }}</p>
   <table>
@@ -495,7 +537,7 @@
   </table>
   {% endfor %}
 
-  {% if identity.radius.count %}
+  {% if identity.radius.count and visible('identity.radius') %}
   <h3>RADIUS attribute groups</h3>
   <table>
     <thead><tr>{% for c in identity.radius.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
@@ -510,7 +552,14 @@
   <p class="empty">No DPSK pool backs an SSID on this venue, and no identity group names
     it as a property.</p>
 {% endif %}
+{% endif %}
 
+{#  No guard on the PoE section, and that is the design working rather than an
+    omission: `_poe_tables` is built from poe.switches and poe.apsOnPoe, both of
+    which redact.py has already emptied, so hiding those sections leaves this
+    list empty and the existing `{% if poe_tables %}` drops the heading. Where
+    the data filter is sufficient on its own, adding a guard would be a second
+    thing to keep in step for no gain. #}
 {% if poe_tables %}
 <h2>PoE</h2>
 {% for section in poe_tables %}
@@ -526,11 +575,12 @@
 <!-- Device inventory: landscape, and each table split in two. Sixteen columns
      do not fit a portrait page at a size anyone would read. -->
 <div class="landscape">
+  {% if visible_tab('devices') %}
   <h2>Device inventory</h2>
   <p class="note">Each device table is split in two for width; the device name repeats
     in both halves so the rows can be lined back up.</p>
 
-  {% for section in ap_tables %}
+  {% for section in ap_tables if visible('devices.aps') %}
     <h3>{{ section.title }} ({{ section.table.count }})</h3>
     {% if section.table.count %}
     <table>
@@ -541,7 +591,7 @@
     {% else %}<p class="empty">No APs are assigned to this venue.</p>{% endif %}
   {% endfor %}
 
-  {% for section in switch_tables %}
+  {% for section in switch_tables if visible('devices.switches') %}
     <h3>{{ section.title }} ({{ section.table.count }})</h3>
     {% if section.table.count %}
     <table>
@@ -551,6 +601,7 @@
     </table>
     {% else %}<p class="empty">No switches are assigned to this venue.</p>{% endif %}
   {% endfor %}
+  {% endif %}
 </div>
 
 <div class="caveat">
@@ -564,6 +615,15 @@
       the device. Only <i>reported</i> comes from a device's own netmask.</li>
     <li>PISR reads only. It changes nothing in RUCKUS ONE, and stores nothing after the
       report is delivered.</li>
+    {% if report_visibility and report_visibility.redacted %}
+    {#  Said out loud, because a PDF outlives the session that made it. Without
+        this line a reader has no way to tell a section that was withheld from
+        one the venue simply does not have, and would reasonably read a missing
+        DHCP table as "this venue runs no DHCP". #}
+    <li>Some sections of this report are not shown at the access level it was
+      generated under. {{ report_visibility.hidden | length }} section(s) were
+      omitted; an administrator can produce the full version.</li>
+    {% endif %}
   </ul>
 </div>
 

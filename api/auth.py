@@ -42,10 +42,30 @@ need. Swapping modes is a compose change, not a code change.
   away the audit trail and the revocation story that were the reasons to adopt
   it.
 
+ROLES. Both modes resolve one of two: `admin` or `user`. An admin edits the
+section visibility policy and is never subject to it; a user sees the report
+with the hidden sections removed. This is decoration on top of the gate, not a
+second gate — both roles are fully authenticated, and the difference between
+them is which cards a report contains, never whether they may have one.
+
+  In PROXY mode the role comes from the verified identity against
+  PISR_ADMIN_EMAILS. That is the real deployment, and it is the only one where
+  the role means anything durable: revoking someone is an env change, and the
+  assertion is signed, so the role cannot be asserted by the caller.
+
+  In PASSPHRASE mode the role comes from WHICH passphrase was used — see
+  `_role_keys`, which puts it in the signing key rather than in the cookie.
+  This exists so the split can be exercised in development, where there is no
+  identity provider. It is not a way to run two tiers of staff on one shared
+  secret: a shared secret cannot be revoked for one person, and the user
+  passphrase will be in a group chat by Thursday.
+
 Everything under /api (and /docs, /redoc, /openapi.json) requires proof in
 whichever form the mode calls for. The static SPA bundle is deliberately NOT
 gated: it contains no tenant data, and it has to load in order to render the
-login form.
+login form. That is also why the role is never a secret the frontend keeps —
+`require_admin` on the route is the check, and what the bundle chooses to
+render is a convenience for the person using it.
 """
 
 import hmac
@@ -56,7 +76,7 @@ from hashlib import sha256
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -73,6 +93,15 @@ if AUTH.access_team and AUTH.access_aud:
     _ACCESS = AccessVerifier(AUTH.access_team, AUTH.access_aud)
 
 COOKIE_NAME = "pisr_session"
+
+# The two roles. Deliberately two: "admin" edits the visibility policy and is
+# never subject to it, "user" is everyone else and sees what the policy allows.
+# A third would be a new entry in visibility.MANAGED_ROLES and a column in the
+# portal — but resist it until something actually needs one. Per-person
+# visibility is a permissions system, and a permissions system wants the user
+# table this tool deliberately does not have.
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
 
 # Cloudflare sends the assertion both ways; the header is canonical and the
 # cookie is the fallback for a request that lost it somewhere in between.
@@ -93,7 +122,7 @@ _PUBLIC_PATHS = {"/api/login", "/api/logout", "/api/auth/status"}
 
 # ── Session token ────────────────────────────────────────────────────
 
-def _signing_key() -> bytes:
+def _signing_key(passphrase: str) -> bytes:
     """
     Passphrase mode only — proxy mode mints no cookies.
 
@@ -103,29 +132,79 @@ def _signing_key() -> bytes:
     valid cookie would keep their access, and only honest users would notice.
     """
     return hmac.new(
-        AUTH.session_secret.encode(), AUTH.passphrase.encode(), sha256
+        AUTH.session_secret.encode(), passphrase.encode(), sha256
     ).digest()
 
 
-def _mint(now: Optional[float] = None) -> str:
+def _role_keys() -> Tuple[Tuple[str, bytes], ...]:
+    """
+    Each role that can hold a session, paired with the key that signs for it.
+
+    THIS IS HOW THE ROLE IS CARRIED, and it is worth understanding rather than
+    simplifying. The obvious design puts `role=admin` in the cookie payload and
+    signs the lot; this puts the role in the KEY instead, so the cookie says
+    only when it expires and there is no role field to tamper with. Verifying
+    means trying each key and seeing which one the signature belongs to — a
+    user cookie simply does not verify under the admin key, so holding one
+    passphrase cannot mint a session for the other.
+
+    It also preserves the property `_signing_key` exists for, per role: rotating
+    the admin passphrase ends every admin session and leaves user sessions
+    alone, which is what you want at 2am when one of the two has leaked.
+
+    With no admin passphrase set, there is one door and it is the operator's.
+    That is the historical behaviour of this mode and the right default for a
+    single-operator LAN instance — the alternative, making the lone passphrase
+    a *user*, would leave an instance where the admin portal is unreachable and
+    nothing can ever be unhidden.
+    """
+    if AUTH.admin_passphrase:
+        return ((ROLE_ADMIN, _signing_key(AUTH.admin_passphrase)),
+                (ROLE_USER, _signing_key(AUTH.passphrase)))
+    return ((ROLE_ADMIN, _signing_key(AUTH.passphrase)),)
+
+
+def _mint(role: str, now: Optional[float] = None) -> str:
     expires = int((now or time.time()) + AUTH.session_seconds)
     payload = str(expires)
-    sig = hmac.new(_signing_key(), payload.encode(), sha256).hexdigest()
+    key = dict(_role_keys()).get(role)
+    if key is None:
+        # Unreachable from login(), which only ever mints a role it just
+        # matched a passphrase for. Refusing beats minting an unverifiable
+        # cookie that would send someone back to the form with no explanation.
+        raise ValueError(f"no signing key for role {role!r}")
+    sig = hmac.new(key, payload.encode(), sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def _valid(token: str) -> bool:
-    """Signature first, then expiry. Both in constant time where it matters."""
+def _valid(token: str) -> Optional[str]:
+    """
+    The role this cookie proves, or None.
+
+    Signature first, then expiry, and every configured key is tried before
+    giving up — compare_digest on each, so a near-miss costs the same as a
+    wild one. Expiry is checked after the signature because an unsigned token
+    has no trustworthy expiry to read.
+    """
     if not token or "." not in token:
-        return False
+        return None
     payload, _, sig = token.rpartition(".")
-    expected = hmac.new(_signing_key(), payload.encode(), sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        return False
+
+    matched: Optional[str] = None
+    for role, key in _role_keys():
+        expected = hmac.new(key, payload.encode(), sha256).hexdigest()
+        if hmac.compare_digest(sig, expected):
+            matched = role
+            # No break: with two keys configured the loop is two HMACs either
+            # way, and a constant number of them keeps the timing of "admin
+            # cookie" and "user cookie" indistinguishable.
+    if matched is None:
+        return None
+
     try:
-        return int(payload) > time.time()
+        return matched if int(payload) > time.time() else None
     except ValueError:
-        return False
+        return None
 
 
 # ── Who is this request from? ────────────────────────────────────────
@@ -316,6 +395,83 @@ def _proxy_identity(request: Request) -> Optional[str]:
     return claimed
 
 
+def _role_for_identity(identity: Optional[str]) -> str:
+    """
+    Admin or user, for a caller PISR actually knows the name of.
+
+    Case-folded on both sides. An identity provider's idea of an address's case
+    is not stable — Entra will hand back the casing a user typed at enrolment —
+    and losing admin to a capital letter is the kind of failure nobody
+    diagnoses quickly.
+
+    An empty admin list means nobody is an admin, which is the safe direction:
+    the alternative reading, "unset means everyone", would promote an entire
+    corporate directory on the day proxy mode is switched on.
+    """
+    if not identity:
+        return ROLE_USER
+    return ROLE_ADMIN if identity.casefold() in AUTH.admin_emails else ROLE_USER
+
+
+def identity_and_role(request: Request) -> Optional[Tuple[Optional[str], str]]:
+    """
+    Who this request is and what they may see, or None if it is not signed in.
+
+    The single answer to that question — the middleware, /api/auth/status and
+    the admin routes all come through here, so there is no second opinion to
+    drift. The identity is None in passphrase mode by definition: a shared
+    secret proves someone knew it, never who.
+    """
+    if not AUTH.enabled:
+        # PISR_AUTH_DISABLED. One caller, who is standing at the machine;
+        # giving them the user role would hide sections from the only person
+        # in a position to unhide them.
+        return (None, ROLE_ADMIN)
+
+    if AUTH.mode == "proxy":
+        identity = _proxy_identity(request)
+        if not identity:
+            return None
+        return (identity, _role_for_identity(identity))
+
+    role = _valid(request.cookies.get(COOKIE_NAME, ""))
+    if not role:
+        return None
+    return (None, role)
+
+
+def role_of(request: Request) -> str:
+    """
+    The role the gate decided for this request, for a route to act on.
+
+    Read back from request.state rather than recomputed: the middleware has
+    already done the work, and a route that re-derived it could disagree with
+    the gate that let the request through. Falls back to `user` — the least
+    that can be seen — for the case that should not happen, a gated route
+    somehow reached without the middleware having run.
+    """
+    return getattr(request.state, "pisr_role", None) or ROLE_USER
+
+
+def require_admin(request: Request) -> str:
+    """
+    FastAPI dependency: 403 unless this caller is an admin.
+
+    403 and not 404. Hiding the route's existence would be pointless — it is in
+    the SPA bundle, which is served unauthenticated — and a plain "you are not
+    an admin" is what stops someone spending an afternoon on a bug that is
+    actually a missing entry in PISR_ADMIN_EMAILS.
+    """
+    role = role_of(request)
+    if role != ROLE_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="This needs the admin role. In SSO mode that means being "
+                   "named in PISR_ADMIN_EMAILS; in passphrase mode it means "
+                   "signing in with PISR_AUTH_ADMIN_PASSPHRASE.")
+    return role
+
+
 def proxy_preview(request: Request) -> dict:
     """
     What proxy mode WOULD make of this request, deciding nothing.
@@ -353,6 +509,12 @@ def proxy_preview(request: Request) -> dict:
             "peerTrusted": trusted,
             "peerMatters": False,
             "wouldAuthenticate": verified is not None,
+            # Which role this identity would land in, so "why can I not see
+            # the admin portal" is answerable before the switch rather than
+            # after. Named separately from the count so a preview against an
+            # empty list reads as "no admins configured", not "not you".
+            "wouldBeRole": _role_for_identity(verified) if verified else None,
+            "adminsConfigured": len(AUTH.admin_emails),
         }
 
     return {
@@ -366,6 +528,8 @@ def proxy_preview(request: Request) -> dict:
         "identity": claimed or None,
         # The whole question, answered the same way the middleware answers it.
         "wouldAuthenticate": bool(trusted and claimed),
+        "wouldBeRole": _role_for_identity(claimed) if (trusted and claimed) else None,
+        "adminsConfigured": len(AUTH.admin_emails),
     }
 
 
@@ -397,19 +561,21 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
         if not gated or path in _PUBLIC_PATHS:
             return await call_next(request)
 
-        if AUTH.mode == "proxy":
-            identity = _proxy_identity(request)
-            if identity:
-                # Read back by pisr_router to name who ran a report. This is
-                # the audit trail that a shared passphrase cannot give you.
-                request.state.pisr_user = identity
-                return await call_next(request)
-            return _denied("Not signed in — no identity from the proxy.")
+        resolved = identity_and_role(request)
+        if resolved is None:
+            return _denied("Not signed in — no identity from the proxy."
+                           if AUTH.mode == "proxy" else "Not signed in.")
 
-        if _valid(request.cookies.get(COOKIE_NAME, "")):
-            return await call_next(request)
-
-        return _denied("Not signed in.")
+        identity, role = resolved
+        # Read back by pisr_router to name who ran a report. This is the audit
+        # trail that a shared passphrase cannot give you.
+        request.state.pisr_user = identity
+        # And read back by every route that renders a report, to decide which
+        # sections that report is allowed to contain. Set HERE rather than in
+        # each route so that a router added later is role-aware by existing,
+        # the same way it is gated by existing.
+        request.state.pisr_role = role
+        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -511,7 +677,7 @@ class LoginBody(BaseModel):
     passphrase: str
 
 
-def _set_session_cookie(response: Response, request: Request) -> None:
+def _set_session_cookie(response: Response, request: Request, role: str) -> None:
     # Secure is set whenever the request arrived over HTTPS, whatever the
     # config says; PISR_COOKIE_SECURE=1 forces it on for the case where a
     # deployment knows it is behind TLS that this process cannot see.
@@ -524,7 +690,7 @@ def _set_session_cookie(response: Response, request: Request) -> None:
     secure = AUTH.cookie_secure or _request_is_https(request)
     response.set_cookie(
         COOKIE_NAME,
-        _mint(),
+        _mint(role),
         max_age=AUTH.session_seconds,
         httponly=True,     # not reachable from JS, so an XSS cannot exfiltrate it
         samesite="lax",    # a cross-site POST cannot ride the session
@@ -544,15 +710,22 @@ async def auth_status(request: Request):
     """
     if not AUTH.enabled:
         return {"mode": "disabled", "required": False, "authenticated": True,
-                "user": None, "logoutUrl": None}
+                "user": None, "role": ROLE_ADMIN, "logoutUrl": None}
+
+    resolved = identity_and_role(request)
+    identity, role = resolved if resolved else (None, None)
 
     if AUTH.mode == "proxy":
-        identity = _proxy_identity(request)
         return {
             "mode": "proxy",
             "required": True,
-            "authenticated": identity is not None,
+            "authenticated": resolved is not None,
             "user": identity,
+            # The SPA shows the admin portal on the strength of this. It is a
+            # convenience, not a control: the bundle is served unauthenticated
+            # and anyone can read what it would render. require_admin on the
+            # route is what actually decides.
+            "role": role,
             # oauth2-proxy's own sign-out, if the operator pointed us at it.
             # PISR cannot end an SSO session itself — it never held one.
             "logoutUrl": AUTH.proxy_logout_url or None,
@@ -561,8 +734,9 @@ async def auth_status(request: Request):
     return {
         "mode": "passphrase",
         "required": True,
-        "authenticated": _valid(request.cookies.get(COOKIE_NAME, "")),
+        "authenticated": resolved is not None,
         "user": None,
+        "role": role,
         "logoutUrl": None,
     }
 
@@ -597,7 +771,16 @@ async def login(body: LoginBody, request: Request):
             },
         )
 
-    if not hmac.compare_digest(body.passphrase.encode(), AUTH.passphrase.encode()):
+    # Both compares run unconditionally rather than short-circuiting on the
+    # first match, so the time this takes does not say which passphrase was
+    # tried. compare_digest against an empty admin passphrase is cheap and
+    # never matches a submission, which the length floor in config.py rules out.
+    offered = body.passphrase.encode()
+    is_admin_pass = bool(AUTH.admin_passphrase) and hmac.compare_digest(
+        offered, AUTH.admin_passphrase.encode())
+    is_user_pass = hmac.compare_digest(offered, AUTH.passphrase.encode())
+
+    if not (is_admin_pass or is_user_pass):
         _record_failure(ip)
         logger.warning("Failed login from %s", ip)
         return JSONResponse(
@@ -605,14 +788,19 @@ async def login(body: LoginBody, request: Request):
             content={"detail": "Incorrect passphrase.", "error": "Incorrect passphrase."},
         )
 
+    # With no admin passphrase configured there is one door and it is the
+    # operator's — see _role_keys. With one configured, the ordinary passphrase
+    # is a user and this second one is the admin.
+    role = ROLE_ADMIN if (is_admin_pass or not AUTH.admin_passphrase) else ROLE_USER
+
     _clear_failures(ip)
-    logger.info("Signed in from %s", ip)
+    logger.info("Signed in from %s as %s", ip, role)
 
     # Built here rather than mutating an injected `response`: returning a
     # Response object directly bypasses FastAPI's injected one entirely, so a
     # cookie set on that one would silently never be sent.
     signed_in = Response(status_code=204)
-    _set_session_cookie(signed_in, request)
+    _set_session_cookie(signed_in, request, role)
     return signed_in
 
 

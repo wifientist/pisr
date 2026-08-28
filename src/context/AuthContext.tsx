@@ -1,8 +1,9 @@
 import {
   createContext, useCallback, useContext, useEffect, useState, type ReactNode,
 } from "react";
-import { Lock, LogOut, ShieldAlert } from "lucide-react";
+import { Lock, LogOut, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import { UNAUTHENTICATED_EVENT } from "@/utils/api";
+import AdminVisibility from "@/pages/AdminVisibility";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -21,6 +22,9 @@ interface AuthContextType {
   activeControllerType: string | null;
   activeControllerSubtype: string | null;
   controllers: ControllerRow[];
+  /** See AuthStatus.role — presentation only. */
+  role: "admin" | "user" | null;
+  isAdmin: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,6 +40,17 @@ interface AuthStatus {
   required: boolean;
   authenticated: boolean;
   user: string | null;
+  /**
+   * "admin" or "user", or null when not signed in.
+   *
+   * Used only to decide what to RENDER — the admin portal button, and which
+   * cards to draw. It is not a control and must never be treated as one: this
+   * bundle is served unauthenticated by design, so anyone can read what it
+   * would do with a different value. The server filters the report before it
+   * is sent and `require_admin` guards the portal's routes; both of those hold
+   * whatever this says.
+   */
+  role: "admin" | "user" | null;
   logoutUrl: string | null;
 }
 
@@ -180,6 +195,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [controller, setController] = useState<ControllerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [portalOpen, setPortalOpen] = useState(false);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -286,6 +302,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         activeControllerType: controller.controller_type,
         activeControllerSubtype: controller.controller_subtype,
         controllers: [controller],
+        role: status?.role ?? null,
+        // A gate-disabled instance reports mode "disabled" and role "admin";
+        // treating a missing role as admin as well would promote every caller
+        // the moment /api/auth/status changed shape, so this asks for the word.
+        isAdmin: status?.role === "admin",
       }}
     >
       {children}
@@ -302,35 +323,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         Alpha and Read-only pills reach far enough right to collide. There the
         label is dropped and the icon stands alone.
       */}
-      {status?.required && (
-        (() => {
-          // In proxy mode the button is only a button if there is somewhere to
-          // send them; otherwise it is a label saying who PISR thinks you are.
-          const canSignOut =
-            status.mode !== "proxy" || Boolean(status.logoutUrl);
-          const shell =
-            "fixed top-3 right-3 z-50 flex items-center gap-1.5 rounded-full " +
-            "border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium " +
-            "text-gray-700 shadow-md";
-          return canSignOut ? (
-            <button
-              onClick={signOut}
-              title={status.user ? `Signed in as ${status.user}` : "Sign out of PISR"}
-              className={`${shell} hover:bg-white hover:text-gray-900`}
-            >
-              <LogOut size={13} className="shrink-0" />
-              <span className="hidden sm:inline">
-                {status.user ? `Sign out · ${status.user}` : "Sign out"}
+      {(() => {
+        // In proxy mode the sign-out is only a button if there is somewhere to
+        // send them; otherwise it is a label saying who PISR thinks you are.
+        const canSignOut =
+          !status || status.mode !== "proxy" || Boolean(status.logoutUrl);
+        const shell =
+          "flex items-center gap-1.5 rounded-full border border-gray-300 " +
+          "bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-md";
+        // The admin chip is offered on `role`, which the server decided. It is
+        // a convenience only: this bundle is served unauthenticated, so anyone
+        // can read that the portal exists and call its routes directly —
+        // require_admin on the router is what refuses them.
+        const isAdmin = status?.role === "admin";
+        if (!status?.required && !isAdmin) return null;
+        return (
+          <div className="fixed top-3 right-3 z-50 flex items-center gap-2">
+            {isAdmin && (
+              <button
+                onClick={() => setPortalOpen(true)}
+                title="Choose which report sections users see"
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <SlidersHorizontal size={13} className="shrink-0" />
+                <span className="hidden sm:inline">Sections</span>
+              </button>
+            )}
+            {status?.required && (canSignOut ? (
+              <button
+                onClick={signOut}
+                title={status.user ? `Signed in as ${status.user}` : "Sign out of PISR"}
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <LogOut size={13} className="shrink-0" />
+                <span className="hidden sm:inline">
+                  {status.user ? `Sign out · ${status.user}` : "Sign out"}
+                </span>
+              </button>
+            ) : (
+              <span className={shell} title="Signed in via single sign-on">
+                <Lock size={13} className="shrink-0" />
+                <span className="hidden sm:inline">{status.user}</span>
               </span>
-            </button>
-          ) : (
-            <span className={shell} title="Signed in via single sign-on">
-              <Lock size={13} className="shrink-0" />
-              <span className="hidden sm:inline">{status.user}</span>
-            </span>
-          );
-        })()
-      )}
+            ))}
+          </div>
+        );
+      })()}
+      {/*
+        The portal changes what OTHER people see, never this admin's own page,
+        so there is nothing to re-fetch when it closes. An admin checking their
+        work has to sign in as a user — which is the honest thing to make them
+        do, since a preview rendered by the same bundle that hides things is a
+        preview of the bundle, not of the server's answer.
+      */}
+      {portalOpen && <AdminVisibility onClose={() => setPortalOpen(false)} />}
     </AuthContext.Provider>
   );
 }

@@ -17,6 +17,7 @@ readable via `docker inspect` and /proc/<pid>/environ by anyone with access to
 the daemon, a mounted file is not.
 """
 
+import hmac
 import ipaddress
 import os
 import secrets as _secrets
@@ -95,6 +96,14 @@ class AuthConfig:
     max_attempts: int
     lockout_seconds: int
 
+    # An OPTIONAL second passphrase that signs in as admin. Its whole purpose
+    # is development: passphrase mode has no identity, so it cannot tell an
+    # admin from anyone else, and without this there is no way to exercise the
+    # role split before deploying behind SSO. Unset, every passphrase session
+    # is an admin — which is the historical behaviour and right for a
+    # single-operator LAN instance.
+    admin_passphrase: str
+
     # proxy mode
     proxy_header: str
     proxy_logout_url: str
@@ -103,6 +112,18 @@ class AuthConfig:
     # empty means proxy mode trusts the identity header as before.
     access_team: str
     access_aud: str
+
+    # Who is an admin once there IS an identity. Case-folded on the way in,
+    # because an identity provider's idea of an address's case is not stable
+    # and nobody should lose their access to a capital letter. Empty means
+    # every authenticated caller is an ordinary user — deliberately, so that
+    # turning on SSO does not silently promote the whole directory.
+    admin_emails: frozenset
+
+    # Where the section visibility policy is stored. The one file PISR writes;
+    # see visibility.py for why that is not a contradiction of "stores
+    # nothing". Empty means the admin portal is read-only.
+    visibility_file: str
 
     # Both modes. In proxy mode this list is the whole of the security — only
     # these peers may assert an identity. In passphrase mode it is narrower:
@@ -220,6 +241,38 @@ def _trusted_proxies(required: bool) -> Tuple[ipaddress._BaseNetwork, ...]:
     return tuple(nets)
 
 
+def _admin_emails() -> frozenset:
+    """
+    The identities that get the admin role, case-folded.
+
+    Only consulted when there IS an identity, which means proxy mode. Setting
+    it in passphrase mode is not an error — an operator migrating to SSO wants
+    the list in place before the switch, exactly like the trusted-proxy list —
+    but it decides nothing until a request carries a name.
+
+    Empty is not "everyone". An SSO deployment with no list has no admins, so
+    the portal is unreachable and nothing can be hidden; that is the safe
+    direction for a setting whose other failure mode is promoting an entire
+    corporate directory the day someone turns proxy mode on.
+    """
+    raw = _env("PISR_ADMIN_EMAILS")
+    entries = {e.strip().casefold() for e in raw.split(",") if e.strip()}
+    return frozenset(entries)
+
+
+def _visibility_file() -> str:
+    """
+    Where the section visibility policy lives, or "" for nowhere.
+
+    Defaulted rather than required: an instance that never opens the portal
+    should not have to know this exists, and a path inside the image works
+    perfectly until the next deploy replaces it — at which point the policy
+    resets to "show everything", which is the harmless direction. The compose
+    file mounts a volume here so it does not come to that.
+    """
+    return _env("PISR_VISIBILITY_FILE") or "/data/visibility.json"
+
+
 def _load_auth() -> AuthConfig:
     """
     Fails closed in every mode. A missing passphrase, or a proxy mode with no
@@ -231,9 +284,14 @@ def _load_auth() -> AuthConfig:
         return AuthConfig(
             enabled=False, mode="disabled", passphrase="", session_secret="",
             session_seconds=0, cookie_secure=False, max_attempts=0,
-            lockout_seconds=0, proxy_header="", proxy_logout_url="",
+            lockout_seconds=0, admin_passphrase="", proxy_header="",
+            proxy_logout_url="",
             trusted_proxies=(), client_ip_header="",
             access_team="", access_aud="",
+            # An instance with the gate switched off has one caller and it is
+            # whoever is standing at the machine. Giving them the user role
+            # would hide sections from the only person who could unhide them.
+            admin_emails=frozenset(), visibility_file=_visibility_file(),
         )
 
     mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
@@ -260,6 +318,12 @@ def _load_auth() -> AuthConfig:
             "Without the audience, a token minted for any other Cloudflare "
             "Access application in this account would be accepted here.")
 
+    # Resolved in both modes for the same reason as `header` above: an operator
+    # preparing to switch to SSO wants the admin list already in the env file,
+    # and reading it early means a malformed one is a startup failure rather
+    # than a surprise at the moment the mode flips.
+    admin_emails = _admin_emails()
+
     if mode == "proxy":
         return AuthConfig(
             enabled=True,
@@ -267,11 +331,13 @@ def _load_auth() -> AuthConfig:
             passphrase="", session_secret="", session_seconds=0,
             cookie_secure=_flag("PISR_COOKIE_SECURE", False),
             max_attempts=0, lockout_seconds=0,
+            admin_passphrase="",
             proxy_header=header,
             proxy_logout_url=_env("PISR_PROXY_LOGOUT_URL"),
             trusted_proxies=_trusted_proxies(required=True),
             client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
+            admin_emails=admin_emails, visibility_file=_visibility_file(),
         )
 
     passphrase = _env("PISR_AUTH_PASSPHRASE")
@@ -287,6 +353,25 @@ def _load_auth() -> AuthConfig:
             "characters. It is the only thing between the network and the "
             "report.")
 
+    # The optional admin passphrase. Held to the same floor — it is a second
+    # door into the same building, and the one that also opens the portal.
+    admin_passphrase = _env("PISR_AUTH_ADMIN_PASSPHRASE")
+    if admin_passphrase:
+        if len(admin_passphrase) < MIN_PASSPHRASE_LENGTH:
+            raise RuntimeError(
+                f"PISR_AUTH_ADMIN_PASSPHRASE must be at least "
+                f"{MIN_PASSPHRASE_LENGTH} characters, like PISR_AUTH_PASSPHRASE.")
+        if hmac.compare_digest(admin_passphrase.encode(), passphrase.encode()):
+            # Not a harmless duplicate. auth.py tells the two roles apart by
+            # which passphrase's derived key signed the cookie, so identical
+            # passphrases derive one key, and which role you get would depend
+            # on the order the keys happen to be tried. Refuse rather than
+            # resolve it arbitrarily.
+            raise RuntimeError(
+                "PISR_AUTH_ADMIN_PASSPHRASE is the same as PISR_AUTH_PASSPHRASE. "
+                "The two roles are distinguished by which one you signed in "
+                "with, so they have to differ.")
+
     # No secret set means sessions do not survive a restart. That is a safe
     # default — the cost is re-entering the passphrase after `compose up`, and
     # the alternative default (a hardcoded key) is not a real alternative.
@@ -301,10 +386,12 @@ def _load_auth() -> AuthConfig:
         cookie_secure=_flag("PISR_COOKIE_SECURE", False),
         max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
         lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
+        admin_passphrase=admin_passphrase,
         proxy_header=header, proxy_logout_url="",
         trusted_proxies=_trusted_proxies(required=False),
         client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
         access_team=access_team, access_aud=access_aud,
+        admin_emails=admin_emails, visibility_file=_visibility_file(),
     )
 
 

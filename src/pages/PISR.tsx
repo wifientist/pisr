@@ -5,6 +5,9 @@ import {
   Search, ArrowLeft, Radio, Key, ShieldCheck, FileDown,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import {
+  registerSections, tabVisible, useVisible, VisibilityProvider,
+} from "@/context/VisibilityContext";
 import SingleEcSelector from "@/components/SingleEcSelector";
 import { apiFetch } from "@/utils/api";
 
@@ -22,6 +25,14 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  */
 
 type Tab = "overview" | "wireless" | "wired" | "addressing" | "identity" | "devices";
+
+// The tab ids in bar order, separate from the labelled `allTabs` array further
+// down because the effect that falls back off a hidden tab has to run ABOVE
+// this component's early returns — React counts hooks, and a hook that only
+// runs once a venue is chosen is a hook that changes count mid-session.
+const TAB_ORDER: Tab[] = [
+  "overview", "wireless", "wired", "addressing", "identity", "devices",
+];
 
 interface VenueRow {
   id: string;
@@ -61,6 +72,63 @@ const SEVERITY: Record<string, {
   },
 };
 
+/**
+ * Every section id this file renders, and the ONLY place the frontend holds
+ * them as a list.
+ *
+ * Not fetched from /api/admin/visibility: that endpoint is admin-only, and an
+ * ordinary user's page needs to know how many sections a tab has in order to
+ * decide whether the tab still has anything on it. Not imported from the
+ * Python catalogue either — the web build stage of the Dockerfile does not
+ * copy api/, and adding it there to share one list of strings would couple the
+ * frontend build to the backend tree for no real gain.
+ *
+ * So it is duplicated, deliberately, and `api/tests/test_sections.py` asserts
+ * the two lists are identical. If you add a card, add its id to
+ * api/sections.py, tag the card below, and the test will tell you if you
+ * missed the PDF.
+ */
+export const SECTION_IDS = [
+  "addressing.ap-subnets",
+  "addressing.dhcp-pools",
+  "addressing.dns",
+  "addressing.external",
+  "addressing.gateways",
+  "addressing.switch-subnets",
+  "devices.aps",
+  "devices.switches",
+  "identity.dpsk-pools",
+  "identity.dpsk-summary",
+  "identity.other-groups",
+  "identity.policy-sets",
+  "identity.radius",
+  "overview.access-points",
+  "overview.property",
+  "overview.summary",
+  "overview.switches",
+  "overview.venue-config",
+  "overview.verification",
+  "report.sources",
+  "wired.aps-on-ports",
+  "wired.link-speeds",
+  "wired.poe-budget",
+  "wired.poe-standard",
+  "wired.port-errors",
+  "wired.summary",
+  "wired.top-poe-draws",
+  "wired.vlans",
+  "wireless.ap-groups",
+  "wireless.busiest-aps",
+  "wireless.channel-plan",
+  "wireless.clients-by-band",
+  "wireless.clients-per-ssid",
+  "wireless.connection-health",
+  "wireless.signal-quality",
+  "wireless.ssids",
+] as const;
+
+registerSections(SECTION_IDS);
+
 const CHART_COLORS = ["#2563eb", "#0891b2", "#7c3aed", "#db2777", "#ea580c",
                       "#65a30d", "#0d9488", "#4f46e5"];
 
@@ -74,10 +142,27 @@ const pctText = (p: number | null | undefined) => (p === null || p === undefined
 
 // ── presentational pieces ─────────────────────────────────────
 
-function Card({ title, hint, right, icon, children, className = "" }: {
-  title?: string; hint?: string; right?: React.ReactNode; icon?: React.ReactNode;
-  children: React.ReactNode; className?: string;
+/**
+ * A card, which knows whether it is being shown.
+ *
+ * `id` names a section in api/sections.py. A card with one asks the visibility
+ * context about itself and renders nothing when hidden; a card without one —
+ * the venue picker, the loading placeholder — is always shown.
+ *
+ * Self-hiding rather than being wrapped at every call site because a wrapper
+ * is a thing you can forget to add, and the failure of forgetting is an empty
+ * card under a heading saying there are none. Doing it here means the id is
+ * the only thing to get right.
+ *
+ * NOT A CONTROL. The data behind a hidden section arrives already emptied by
+ * api/redact.py — see src/context/VisibilityContext.tsx. This removes the
+ * container, not the contents.
+ */
+function Card({ id, title, hint, right, icon, children, className = "" }: {
+  id?: string; title?: string; hint?: string; right?: React.ReactNode;
+  icon?: React.ReactNode; children: React.ReactNode; className?: string;
 }) {
+  if (!useVisible(id)) return null;
   return (
     <div className={`min-w-0 bg-white border border-gray-200 rounded-lg p-4 ${className}`}>
       {(title || right) && (
@@ -94,6 +179,18 @@ function Card({ title, hint, right, icon, children, className = "" }: {
       {children}
     </div>
   );
+}
+
+/**
+ * The same self-hiding as `Card`, for blocks that are not cards — the tile
+ * rows at the top of a tab, the sources footer.
+ *
+ * Kept as a wrapper rather than folded into each block because these have no
+ * common component to hang an `id` prop off, and inventing one would mean
+ * restructuring layout that is otherwise unchanged from its rtools2 original.
+ */
+function Section({ id, children }: { id: string; children: React.ReactNode }) {
+  return useVisible(id) ? <>{children}</> : null;
 }
 
 function Stat({ label, value, sub, tone = "gray" }: {
@@ -447,6 +544,21 @@ export default function PISR() {
     poll(row);
   };
 
+  // Which sections this reader is not being shown, as the server decided it.
+  // Read here rather than at the tab bar so the effect below can sit with the
+  // other hooks: everything from `if (!activeControllerId)` onwards is an early
+  // return, and a hook after one of those is only sometimes called.
+  const hiddenSections: string[] | undefined = report?.visibility?.hidden;
+
+  // If the selected tab just vanished under a policy change — or the first
+  // report arrives with it already hidden — fall back to the first tab that
+  // survived, rather than rendering a page with nothing on it.
+  useEffect(() => {
+    if (tabVisible(hiddenSections, tab)) return;
+    const fallback = TAB_ORDER.find((id) => tabVisible(hiddenSections, id));
+    if (fallback) setTab(fallback);
+  }, [hiddenSections, tab]);
+
   const filteredVenues = useMemo(() => {
     const needle = venueFilter.trim().toLowerCase();
     if (!needle) return venues;
@@ -566,7 +678,7 @@ export default function PISR() {
     ? findings
     : findings.filter((f) => f.severity !== "ok" && f.severity !== "skipped");
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const allTabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "overview", label: "Overview", icon: <Building2 size={15} /> },
     { id: "wireless", label: "Wireless", icon: <Wifi size={15} /> },
     { id: "wired", label: "Wired & PoE", icon: <Cable size={15} /> },
@@ -574,6 +686,11 @@ export default function PISR() {
     { id: "identity", label: "Identity & Policy", icon: <Key size={15} /> },
     { id: "devices", label: "Devices", icon: <Server size={15} /> },
   ];
+  // A tab whose every section is hidden is dropped rather than shown empty.
+  // The hidden list rides on the report, so this is undefined until the first
+  // poll, and `tabVisible` answers true for everything until then — which is
+  // what keeps the bar stable rather than reshuffling as the report lands.
+  const tabs = allTabs.filter((entry) => tabVisible(hiddenSections, entry.id));
 
   return (
     <div className="p-6 max-w-7xl">
@@ -624,7 +741,10 @@ export default function PISR() {
       )}
 
       {report && (
-        <>
+        // Everything that renders report data sits inside the provider, which
+        // is fed from the report itself — so a card and the policy it was
+        // rendered under can never be a version apart.
+        <VisibilityProvider hidden={hiddenSections}>
           <div className="flex gap-1 border-b border-gray-200 mb-4 overflow-x-auto">
             {tabs.map((entry) => (
               <button key={entry.id} onClick={() => setTab(entry.id)}
@@ -649,8 +769,10 @@ export default function PISR() {
             <Devices report={report} filter={deviceFilter} onFilter={setDeviceFilter} />
           )}
 
-          <Sources meta={report.meta} />
-        </>
+          <Section id="report.sources">
+            <Sources meta={report.meta} />
+          </Section>
+        </VisibilityProvider>
       )}
     </div>
   );
@@ -969,6 +1091,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
 
   return (
     <div className="space-y-4">
+      <Section id="overview.summary">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Stat label="APs online" value={`${aps.online}/${aps.total}`}
               tone={reachTone(aps)} sub={reachSub(aps)} />
@@ -994,8 +1117,9 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
                   : "no switches at this venue"} />
         )}
       </div>
+      </Section>
 
-      <Card
+      <Card id="overview.verification"
         title="Verification"
         icon={<CheckCircle2 size={17} className="text-gray-400" />}
         hint={`${report.verification?.score?.passed} of ${report.verification?.score?.ran} checks passed.`}
@@ -1025,7 +1149,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Access points" icon={<Wifi size={17} className="text-gray-400" />}
+        <Card id="overview.access-points" title="Access points" icon={<Wifi size={17} className="text-gray-400" />}
               hint="Status as RUCKUS ONE reports it.">
           <Donut
             centerLabel="APs"
@@ -1047,7 +1171,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
           </div>
         </Card>
 
-        <Card title="Switches" icon={<Cable size={17} className="text-gray-400" />}
+        <Card id="overview.switches" title="Switches" icon={<Cable size={17} className="text-gray-400" />}
               hint="Wired estate in this venue.">
           {switches.total ? (
             <>
@@ -1077,7 +1201,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
       </div>
 
       <div className="space-y-4">
-        <Card title="Venue configuration" icon={<Building2 size={17} className="text-gray-400" />}
+        <Card id="overview.venue-config" title="Venue configuration" icon={<Building2 size={17} className="text-gray-400" />}
               hint="What the venue is set to, as opposed to what the hardware landed on.">
           <dl className="grid grid-cols-2 gap-y-2 text-sm">
             <dt className="text-gray-500">AP management VLAN</dt>
@@ -1161,7 +1285,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
           )}
         </Card>
 
-        <Card title="MDU Property Features" icon={<Building2 size={17} className="text-gray-400" />}
+        <Card id="overview.property" title="MDU Property Features" icon={<Building2 size={17} className="text-gray-400" />}
               hint={property
                 ? "Property Management is enabled on this venue."
                 : "Property Management is a RUCKUS ONE feature enabled per venue."}>
@@ -1253,14 +1377,14 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
 
   if (!rows.length) {
     return (
-      <Card title="SSIDs activated on this venue" icon={<Wifi size={17} className="text-gray-400" />}>
+      <Card id="wireless.ssids" title="SSIDs activated on this venue" icon={<Wifi size={17} className="text-gray-400" />}>
         <p className="text-sm text-red-700">No Wi-Fi network is activated on this venue.</p>
       </Card>
     );
   }
 
   return (
-    <Card title={`SSIDs activated on this venue (${rows.length})`}
+    <Card id="wireless.ssids" title={`SSIDs activated on this venue (${rows.length})`}
           icon={<Wifi size={17} className="text-gray-400" />}
           hint="Config on the left, live evidence on the right. An SSID with clients on it is working; a quiet one is only untested."
           right={
@@ -1391,37 +1515,39 @@ function Wireless({ report }: { report: any }) {
   const rows: any[] = report.wireless.rows || [];
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-4">
-        <Stat label="SSIDs here" value={report.wireless.activated} tone="blue" />
-        <Stat label="Carrying clients" value={rows.filter((r) => r.clientsNow > 0).length}
-              tone={rows.some((r) => r.clientsNow > 0) ? "green" : "amber"}
-              sub="proof, not config" />
-        <Stat label="AP groups" value={report.wireless.groups.length} />
-        <Stat label="Clients now" value={fmtNum(report.clients.total)} tone="blue" />
-      </div>
+      <Section id="wireless.ssids">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Stat label="SSIDs here" value={report.wireless.activated} tone="blue" />
+          <Stat label="Carrying clients" value={rows.filter((r) => r.clientsNow > 0).length}
+                tone={rows.some((r) => r.clientsNow > 0) ? "green" : "amber"}
+                sub="proof, not config" />
+          <Stat label="AP groups" value={report.wireless.groups.length} />
+          <Stat label="Clients now" value={fmtNum(report.clients.total)} tone="blue" />
+        </div>
+      </Section>
 
       <SsidTable report={report} rows={rows} />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Clients by band" icon={<Radio size={17} className="text-gray-400" />}>
+        <Card id="wireless.clients-by-band" title="Clients by band" icon={<Radio size={17} className="text-gray-400" />}>
           <BarList rows={report.clients.byBand} limit={6} />
         </Card>
-        <Card title="Signal quality" icon={<Radio size={17} className="text-gray-400" />}
+        <Card id="wireless.signal-quality" title="Signal quality" icon={<Radio size={17} className="text-gray-400" />}
               hint="RSSI of currently associated clients.">
           <BarList rows={report.clients.byRssi} limit={4} />
         </Card>
-        <Card title="Clients per SSID" icon={<Wifi size={17} className="text-gray-400" />}>
+        <Card id="wireless.clients-per-ssid" title="Clients per SSID" icon={<Wifi size={17} className="text-gray-400" />}>
           <BarList rows={report.clients.bySsid} limit={8} />
         </Card>
-        <Card title="Connection health" hint="R1's own verdict per client.">
+        <Card id="wireless.connection-health" title="Connection health" hint="R1's own verdict per client.">
           <BarList rows={report.clients.byHealth} limit={4} />
         </Card>
-        <Card title="Busiest APs" icon={<Users size={17} className="text-gray-400" />}>
+        <Card id="wireless.busiest-aps" title="Busiest APs" icon={<Users size={17} className="text-gray-400" />}>
           <BarList rows={report.clients.topAps} limit={8} />
         </Card>
       </div>
 
-      <Card title="Channel plan" icon={<Radio size={17} className="text-gray-400" />}
+      <Card id="wireless.channel-plan" title="Channel plan" icon={<Radio size={17} className="text-gray-400" />}
             hint="What the venue asks for, and what the online APs actually landed on.">
         <div className="grid gap-4 md:grid-cols-3">
           {(report.radios.bands || []).map((band: any) => {
@@ -1461,7 +1587,7 @@ function Wireless({ report }: { report: any }) {
         </div>
       </Card>
 
-      <Card title="AP groups" hint="SSID scopes land on these.">
+      <Card id="wireless.ap-groups" title="AP groups" hint="SSID scopes land on these.">
         <MiniTable
           columns={[
             { key: "name", header: "Group" },
@@ -1484,6 +1610,7 @@ function Wired({ report }: { report: any }) {
   const ports = report.ports;
   return (
     <div className="space-y-4">
+      <Section id="wired.summary">
       <div className="grid gap-3 sm:grid-cols-4">
         <Stat label="PoE capacity" value={`${fmtNum(poe.capacityWatts, 1)} W`} sub="chassis budget" />
         <Stat label="Allocated" value={`${fmtNum(poe.allocatedWatts, 1)} W`}
@@ -1494,8 +1621,9 @@ function Wired({ report }: { report: any }) {
               tone={ports.erroredCount ? "amber" : "gray"}
               sub={ports.erroredCount ? `${ports.erroredCount} counting errors` : "no errors counted"} />
       </div>
+      </Section>
 
-      <Card title="PoE budget per switch" icon={<Zap size={17} className="text-gray-400" />}
+      <Card id="wired.poe-budget" title="PoE budget per switch" icon={<Zap size={17} className="text-gray-400" />}
             hint="Allocated is power committed to attached devices; drawn is what they are actually pulling. A wide gap is class negotiation, not capacity.">
         {poe.switches.length ? (
           <div className="space-y-3">
@@ -1519,15 +1647,15 @@ function Wired({ report }: { report: any }) {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="PoE standard in use" hint="Per powered port.">
+        <Card id="wired.poe-standard" title="PoE standard in use" hint="Per powered port.">
           <BarList rows={poe.byType} limit={6} />
         </Card>
-        <Card title="Link speeds" hint="Ports that are up.">
+        <Card id="wired.link-speeds" title="Link speeds" hint="Ports that are up.">
           <BarList rows={ports.bySpeed} limit={6} />
         </Card>
       </div>
 
-      <Card title="APs on switch ports" icon={<Zap size={17} className="text-gray-400" />}
+      <Card id="wired.aps-on-ports" title="APs on switch ports" icon={<Zap size={17} className="text-gray-400" />}
             hint="Joined by LLDP — the port reports the AP it can see. Watts and port speed are blank where the switch is not in this tenant.">
         <MiniTable
           columns={[
@@ -1550,7 +1678,7 @@ function Wired({ report }: { report: any }) {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Biggest PoE draws">
+        <Card id="wired.top-poe-draws" title="Biggest PoE draws">
           <MiniTable
             columns={[
               { key: "switch", header: "Switch" },
@@ -1563,7 +1691,7 @@ function Wired({ report }: { report: any }) {
             empty="No port is drawing power."
           />
         </Card>
-        <Card title="Ports counting errors" hint="Up ports with CRC or interface errors — cabling and optics show up here first.">
+        <Card id="wired.port-errors" title="Ports counting errors" hint="Up ports with CRC or interface errors — cabling and optics show up here first.">
           <MiniTable
             columns={[
               { key: "switch", header: "Switch" },
@@ -1579,7 +1707,7 @@ function Wired({ report }: { report: any }) {
         </Card>
       </div>
 
-      <Card title="VLANs seen in this venue" icon={<Network size={17} className="text-gray-400" />}
+      <Card id="wired.vlans" title="VLANs seen in this venue" icon={<Network size={17} className="text-gray-400" />}
             hint="Where each VLAN is declared by configuration, and where it shows up in live traffic. The two are not the same thing.">
         {!report.vlans.portsKnown && (
           <p className="mb-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-3 py-2">
@@ -1667,7 +1795,7 @@ function Addressing({ report }: { report: any }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Where the APs landed" icon={<Network size={17} className="text-gray-400" />}
+        <Card id="addressing.ap-subnets" title="Where the APs landed" icon={<Network size={17} className="text-gray-400" />}
               hint="Subnets from each AP's own netmask where it reports one, otherwise inferred from a shared gateway.">
           <SubnetTable rows={addressing.apSubnets} noun="APs" />
           {!!addressing.apsWithoutIp && (
@@ -1677,7 +1805,7 @@ function Addressing({ report }: { report: any }) {
           )}
         </Card>
 
-        <Card title="How the site looks from outside" hint="The public address APs egress through.">
+        <Card id="addressing.external" title="How the site looks from outside" hint="The public address APs egress through.">
           {addressing.external.length ? (
             <div className="space-y-2">
               {addressing.external.map((row: any) => (
@@ -1702,12 +1830,12 @@ function Addressing({ report }: { report: any }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Switch subnets"><SubnetTable rows={addressing.switchSubnets} noun="switches" /></Card>
-        <Card title="Gateways"><BarList rows={addressing.gateways} limit={6} /></Card>
-        <Card title="DNS servers"><BarList rows={addressing.dns} limit={6} /></Card>
+        <Card id="addressing.switch-subnets" title="Switch subnets"><SubnetTable rows={addressing.switchSubnets} noun="switches" /></Card>
+        <Card id="addressing.gateways" title="Gateways"><BarList rows={addressing.gateways} limit={6} /></Card>
+        <Card id="addressing.dns" title="DNS servers"><BarList rows={addressing.dns} limit={6} /></Card>
       </div>
 
-      <Card title="DHCP pools" icon={<Network size={17} className="text-gray-400" />}
+      <Card id="addressing.dhcp-pools" title="DHCP pools" icon={<Network size={17} className="text-gray-400" />}
             hint="R1-managed pools on this venue, with how full they are.">
         {addressing.dhcpPools.length ? (
           <div className="space-y-4">
@@ -1753,7 +1881,7 @@ function Dpsk({ report }: { report: any }) {
   if (!dpsk.inUse) {
     return (
       <div className="space-y-4">
-        <Card title="DPSK" icon={<Key size={17} className="text-gray-400" />}>
+        <Card id="identity.dpsk-summary" title="DPSK" icon={<Key size={17} className="text-gray-400" />}>
           <p className="text-sm text-gray-700">
             No DPSK pool backs any SSID activated on this venue — DPSK is not in use here.
           </p>
@@ -1770,6 +1898,7 @@ function Dpsk({ report }: { report: any }) {
 
   return (
     <div className="space-y-4">
+      <Section id="identity.dpsk-summary">
       <div className="grid gap-3 sm:grid-cols-4">
         <Stat label="DPSK pools" value={dpsk.poolCount} tone="blue" sub="used by this venue" />
         <Stat label="Passphrases" value={fmtNum(dpsk.passphraseTotal)} tone="blue"
@@ -1781,7 +1910,12 @@ function Dpsk({ report }: { report: any }) {
                 : "in the linked groups"} />
         <Stat label="DPSK SSIDs" value={(dpsk.dpskSsids || []).length} sub="backed by a pool" />
       </div>
+      </Section>
 
+      {/* Stays with the DPSK cards rather than the summary tiles: it is a
+          statement about what the identity data below contains, and it would
+          be stranded — and misleading — above a tab whose pools are hidden. */}
+      <Section id="identity.dpsk-pools">
       <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
         <ShieldCheck size={15} className="text-gray-400 mt-0.5 shrink-0" />
         <p className="text-xs text-gray-600">
@@ -1789,9 +1923,10 @@ function Dpsk({ report }: { report: any }) {
           numbers and device MAC addresses are never read into this report.
         </p>
       </div>
+      </Section>
 
       {pools.map((pool) => (
-        <Card key={pool.id} title={pool.name || "Unnamed pool"}
+        <Card key={pool.id} id="identity.dpsk-pools" title={pool.name || "Unnamed pool"}
               icon={<Key size={17} className="text-gray-400" />}
               hint={(pool.networksHere
                       ? `Backs ${pool.networksHere} SSID(s) activated here`
@@ -1878,7 +2013,7 @@ function Dpsk({ report }: { report: any }) {
       ))}
 
       {!!(dpsk.otherIdentityGroups || []).length && (
-        <Card title="Other identity groups on this property"
+        <Card id="identity.other-groups" title="Other identity groups on this property"
               icon={<Users size={17} className="text-gray-400" />}
               hint="Attached to this property but not to a DPSK pool used here — MAC registration or certificate groups.">
           <MiniTable
@@ -1916,7 +2051,7 @@ function PolicyChain({ report }: { report: any }) {
 
   if (!policy.inUse) {
     return (
-      <Card title="Adaptive policy" icon={<ShieldCheck size={17} className="text-gray-400" />}>
+      <Card id="identity.policy-sets" title="Adaptive policy" icon={<ShieldCheck size={17} className="text-gray-400" />}>
         <p className="text-sm text-gray-700">
           No adaptive policy set is attached to this venue's DPSK pools or identity groups.
         </p>
@@ -1932,7 +2067,7 @@ function PolicyChain({ report }: { report: any }) {
   return (
     <>
       {sets.map((set) => (
-        <Card key={set.id} title={`Policy set — ${set.name}`}
+        <Card key={set.id} id="identity.policy-sets" title={`Policy set — ${set.name}`}
               icon={<ShieldCheck size={17} className="text-gray-400" />}
               hint={(set.assignedTo?.length ? `Assigned to ${set.assignedTo.join(", ")}` : "Not assigned")
                     + ` · ${set.policies?.length ?? 0} policy/policies, evaluated in priority order`}>
@@ -1967,7 +2102,7 @@ function PolicyChain({ report }: { report: any }) {
         </Card>
       ))}
 
-      <Card title="RADIUS attribute groups" icon={<ShieldCheck size={17} className="text-gray-400" />}
+      <Card id="identity.radius" title="RADIUS attribute groups" icon={<ShieldCheck size={17} className="text-gray-400" />}
             hint="The rate tiers policies hand back on match. Policy counts come from each policy's own onMatchResponse — the group's assignments list paginates and cannot be counted.">
         <MiniTable
           columns={[
@@ -2066,7 +2201,7 @@ function Devices({ report, filter, onFilter }: {
         </p>
       )}
 
-      <Card title={`Access points (${aps.length})`} icon={<Wifi size={17} className="text-gray-400" />}
+      <Card id="devices.aps" title={`Access points (${aps.length})`} icon={<Wifi size={17} className="text-gray-400" />}
             hint="Full per-AP detail including addressing — scroll sideways for the rest of the columns.">
         <MiniTable
           maxHeight="30rem"
@@ -2097,7 +2232,7 @@ function Devices({ report, filter, onFilter }: {
         />
       </Card>
 
-      <Card title={`Switches (${switches.length})`} icon={<Cable size={17} className="text-gray-400" />}
+      <Card id="devices.switches" title={`Switches (${switches.length})`} icon={<Cable size={17} className="text-gray-400" />}
             hint="Full per-switch detail including management addressing — scroll sideways for the rest.">
         <MiniTable
           maxHeight="24rem"
