@@ -208,7 +208,20 @@ class R1Client:
             logger.debug(f"{method.upper()} {url} --> {response.status_code}")
 
         if not response.ok:
-            logger.warning(f"Request error: {response.status_code} - {response.text[:500]}")
+            # DIVERGENCE FROM rtools2. A 404 is not necessarily a fault, and
+            # here it usually is not: fetch.property_config asks every venue for
+            # its Property configuration and treats a 404 as "this is a plain
+            # venue", which is the answer for most of them. Logging that at
+            # warning put two alarming PROPERTY-MANAGEMENT-002 blocks in the log
+            # on every single report, for nothing being wrong.
+            #
+            # A warning that fires when nothing is wrong is worse than no
+            # warning: it trains whoever reads the log to skim past the level,
+            # and the real ones are in the same colour. 404 drops to info — the
+            # caller decides whether it is a finding, which is exactly what
+            # property_config does. Everything else stays at warning.
+            level = logger.info if response.status_code == 404 else logger.warning
+            level(f"Request error: {response.status_code} - {response.text[:500]}")
 
         return response
 

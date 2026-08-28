@@ -241,6 +241,14 @@ deploy() {
   export PISR_BUILD_TIME
   PISR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+  # podman defaults to the OCI image format, which has no field for a
+  # HEALTHCHECK — so the one in the Dockerfile was silently discarded, with a
+  # warning on every build and no health status on `podman ps` ever. Docker's
+  # manifest format has the field. The image is built locally and never pushed,
+  # so the format costs nothing, and this keeps one Dockerfile working under
+  # both engines rather than a healthcheck that only means something under one.
+  export BUILDAH_FORMAT="${BUILDAH_FORMAT:-docker}"
+
   # --build because this box builds its own image; there is no registry in
   # this deployment shape.
   #

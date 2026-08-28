@@ -78,6 +78,18 @@ EXPOSE 8080
 
 # /healthz, not /api/status: everything under /api now requires a session
 # cookie, and /api/status names the tenant, region and EC type besides.
+#
+# Under podman this is only honoured when the image is built in docker format —
+# OCI has no healthcheck field and podman discards it with a warning. The
+# deploy script exports BUILDAH_FORMAT=docker for that reason. A hand-built
+# podman image without it simply has no healthcheck, which is a missing check
+# rather than a broken one.
+#
+# Note what this can and cannot see. It runs INSIDE the container and asks
+# localhost, so it answers "is the app serving", not "can anyone reach it" —
+# during the rootlessport incident it would have passed throughout, while the
+# published port was dead. The deploy script probes the published address from
+# outside for exactly that reason; the two checks are not redundant.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')" || exit 1
 

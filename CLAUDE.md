@@ -57,7 +57,11 @@ RUCKUS ONE venue, shape it, check it, render it.
   `/` — you get a blank page with no way to sign in.
 - **The container healthcheck hits `/healthz`, not `/api/status`.** The latter
   is gated now, and names the tenant besides. If you add a healthcheck
-  anywhere, point it at `/healthz`.
+  anywhere, point it at `/healthz`. It also needs `BUILDAH_FORMAT=docker`,
+  which `deploy/pisr-update.sh` exports — podman's default OCI format has no
+  healthcheck field and discards it with a build warning. And it checks
+  localhost from inside the container, so it cannot see a dead published port;
+  the deploy script's external probe is what catches that.
 - **Proxy mode's security is `PISR_TRUSTED_PROXY_IPS` plus the port binding,
   not the header.** A header is a claim anyone can make. If you ever find PISR
   in proxy mode published on `0.0.0.0`, that is a live authentication bypass —
