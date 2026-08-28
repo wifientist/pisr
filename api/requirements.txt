@@ -40,6 +40,19 @@ charset-normalizer==3.4.1
 idna==3.10
 urllib3==2.4.0
 
+# ── Cloudflare Access JWT verification (optional; PISR_ACCESS_TEAM) ──
+#
+# cryptography was dropped when PISR was extracted — see the note above, it
+# went with the database. It comes back for one reason: verifying an RS256
+# assertion is the difference between proxy mode resting on proof and proxy
+# mode resting on the network boundary alone. Wheels exist for python:3.11-slim
+# so nothing is compiled at build time.
+#
+# Imported only when PISR_ACCESS_TEAM and PISR_ACCESS_AUD are both set. An
+# oauth2-proxy deployment never loads either package.
+PyJWT==2.10.1
+cryptography==44.0.2
+
 # ── PDF report ──
 Jinja2==3.1.4
 MarkupSafe==3.0.2

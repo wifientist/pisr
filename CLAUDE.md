@@ -91,6 +91,13 @@ RUCKUS ONE venue, shape it, check it, render it.
   reading the header unconditionally: a client-address header any caller can
   set makes the throttle *weaker* than no header at all, because an attacker
   varies it per request and is never counted twice.
+- **When `PISR_ACCESS_TEAM`/`PISR_ACCESS_AUD` are set, the verified assertion
+  is the identity and the peer address is not consulted at all** — that is the
+  point of it, since under rootless podman the peer distinguishes nothing.
+  `api/cf_access.py` fails closed on every path: bad signature, wrong `aud`,
+  wrong issuer, expired, unreachable JWKS. The `aud` check is the one that
+  binds a token to *this* application; without it any app in the account
+  passes. Half-configuring it stops the container starting.
 - **`_proxy_identity` keys off `_peer_ip`, never `_client_ip`.** Who may assert
   an identity is a question about who opened the socket. Resolving a forwarded
   address first would let a header decide whether that same header is trusted.

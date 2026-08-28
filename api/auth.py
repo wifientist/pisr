@@ -65,7 +65,19 @@ from config import AUTH
 
 logger = logging.getLogger(__name__)
 
+# Built only when configured, so an unconfigured deployment never imports PyJWT
+# or cryptography and never reaches Cloudflare for a key set.
+_ACCESS = None
+if AUTH.access_team and AUTH.access_aud:
+    from cf_access import AccessVerifier
+    _ACCESS = AccessVerifier(AUTH.access_team, AUTH.access_aud)
+
 COOKIE_NAME = "pisr_session"
+
+# Cloudflare sends the assertion both ways; the header is canonical and the
+# cookie is the fallback for a request that lost it somewhere in between.
+_ACCESS_HEADER = "Cf-Access-Jwt-Assertion"
+_ACCESS_COOKIE = "CF_Authorization"
 
 # Gated prefixes. The SPA bundle at "/" is not among them on purpose — see the
 # module docstring. /docs and friends are: they publish the whole route surface,
@@ -265,6 +277,24 @@ def _proxy_identity(request: Request) -> Optional[str]:
     # The PEER, deliberately, not _client_ip(). Who may assert an identity is
     # a question about who opened the socket; resolving a forwarded address
     # first would let a header decide whether that same header is believed.
+    # A verified assertion outranks everything below it, and deliberately does
+    # not consult the peer address. That is the entire point: the signature
+    # proves the request came through this Access application, which is a
+    # stronger claim than "it arrived from an address on the allow-list" — and
+    # under rootless podman the peer address distinguishes nothing anyway.
+    if _ACCESS is not None:
+        token = (request.headers.get(_ACCESS_HEADER, "").strip()
+                 or request.cookies.get(_ACCESS_COOKIE, "").strip())
+        identity = _ACCESS.verify(token)
+        if identity:
+            return identity
+        logger.warning(
+            "No valid Cloudflare Access assertion on a request to %s. The "
+            "header is %s; check Access is in front of this hostname and that "
+            "PISR_ACCESS_AUD matches this application's Audience Tag.",
+            request.url.path, _ACCESS_HEADER)
+        return None
+
     ip = _peer_ip(request)
     claimed = request.headers.get(AUTH.proxy_header, "").strip()
 
@@ -306,7 +336,28 @@ def proxy_preview(request: Request) -> dict:
     peer = _peer_ip(request)
     trusted = _from_trusted_proxy(peer)
     claimed = request.headers.get(AUTH.proxy_header, "").strip()
+
+    if _ACCESS is not None:
+        token = (request.headers.get(_ACCESS_HEADER, "").strip()
+                 or request.cookies.get(_ACCESS_COOKIE, "").strip())
+        verified = _ACCESS.verify(token)
+        return {
+            "peer": peer,
+            "verifyingAssertions": True,
+            "issuer": _ACCESS.issuer,
+            "assertionPresent": bool(token),
+            "assertionVerified": verified is not None,
+            "identity": verified,
+            # The peer no longer decides anything, and saying so stops someone
+            # "fixing" a trusted-proxy list that is not being consulted.
+            "peerTrusted": trusted,
+            "peerMatters": False,
+            "wouldAuthenticate": verified is not None,
+        }
+
     return {
+        "verifyingAssertions": False,
+        "peerMatters": True,
         "peer": peer,
         "peerTrusted": trusted,
         "trustedProxies": [str(net) for net in AUTH.trusted_proxies] or None,

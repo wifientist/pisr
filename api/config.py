@@ -99,6 +99,11 @@ class AuthConfig:
     proxy_header: str
     proxy_logout_url: str
 
+    # Cloudflare Access assertion verification. Both must be set to enable it;
+    # empty means proxy mode trusts the identity header as before.
+    access_team: str
+    access_aud: str
+
     # Both modes. In proxy mode this list is the whole of the security — only
     # these peers may assert an identity. In passphrase mode it is narrower:
     # it says whose `client_ip_header` may be believed when working out who a
@@ -228,6 +233,7 @@ def _load_auth() -> AuthConfig:
             session_seconds=0, cookie_secure=False, max_attempts=0,
             lockout_seconds=0, proxy_header="", proxy_logout_url="",
             trusted_proxies=(), client_ip_header="",
+            access_team="", access_aud="",
         )
 
     mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
@@ -241,6 +247,19 @@ def _load_auth() -> AuthConfig:
     # switching to a mode where a wrong answer locks everyone out.
     header = _env("PISR_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
 
+    # Half-configured is refused rather than silently ignored. Someone who set
+    # the team and not the audience believes assertions are being verified, and
+    # the audience is the check that binds a token to THIS application — an
+    # instance running without it would accept a token minted for any other
+    # Access app in the same account.
+    access_team = _env("PISR_ACCESS_TEAM")
+    access_aud = _env("PISR_ACCESS_AUD")
+    if bool(access_team) != bool(access_aud):
+        raise RuntimeError(
+            "PISR_ACCESS_TEAM and PISR_ACCESS_AUD must be set together. "
+            "Without the audience, a token minted for any other Cloudflare "
+            "Access application in this account would be accepted here.")
+
     if mode == "proxy":
         return AuthConfig(
             enabled=True,
@@ -252,6 +271,7 @@ def _load_auth() -> AuthConfig:
             proxy_logout_url=_env("PISR_PROXY_LOGOUT_URL"),
             trusted_proxies=_trusted_proxies(required=True),
             client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+            access_team=access_team, access_aud=access_aud,
         )
 
     passphrase = _env("PISR_AUTH_PASSPHRASE")
@@ -284,6 +304,7 @@ def _load_auth() -> AuthConfig:
         proxy_header=header, proxy_logout_url="",
         trusted_proxies=_trusted_proxies(required=False),
         client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+        access_team=access_team, access_aud=access_aud,
     )
 
 
