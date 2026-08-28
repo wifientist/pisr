@@ -393,18 +393,48 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "form-action 'self'; "
             "frame-ancestors 'none'")
 
+    # PISR asks for none of these, so all of them are denied outright — the
+    # point being that a compromised or injected bundle cannot ask either.
+    # The list is broad because the app's own use of browser APIs is nil: it
+    # renders a report and downloads a PDF, and neither touches a device, a
+    # sensor, a payment sheet or a credential store.
+    #
+    # Two deliberate omissions. `clipboard-write` and `fullscreen` are not
+    # denied, because they are the two a reporting tool plausibly grows — a
+    # copy-the-serial button, a spectrum chart worth expanding — and a denied
+    # feature fails silently in a way that looks like a bug in the feature
+    # rather than a line in this list. Everything here is something whose
+    # absence nobody will ever have to debug.
+    _PERMISSIONS = ", ".join(f"{feature}=()" for feature in (
+        "accelerometer", "ambient-light-sensor", "autoplay", "battery",
+        "bluetooth", "browsing-topics", "camera", "display-capture",
+        "encrypted-media", "gamepad", "geolocation", "gyroscope", "hid",
+        "idle-detection", "interest-cohort", "local-fonts", "magnetometer",
+        "microphone", "midi", "payment", "picture-in-picture",
+        "publickey-credentials-create", "publickey-credentials-get",
+        "screen-wake-lock", "serial", "speaker-selection", "sync-xhr", "usb",
+        "web-share", "xr-spatial-tracking",
+    ))
+
     _HEADERS = {
         "Content-Security-Policy": _CSP,
         "X-Content-Type-Options": "nosniff",
         # A report URL carries a venue id and a tenant id in the query string.
         # same-origin keeps those out of the Referer on any outbound link.
         "Referrer-Policy": "same-origin",
-        # PISR asks for none of these. Saying so means a compromised bundle
-        # cannot either.
-        "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+        "Permissions-Policy": _PERMISSIONS,
         # Belt and braces for the older browsers that never learned
         # frame-ancestors.
         "X-Frame-Options": "DENY",
+        # Nothing here is meant to be opened by, or opened into, another
+        # origin. same-origin severs window.opener both ways, so a page that
+        # somehow opens PISR cannot reach into it.
+        "Cross-Origin-Opener-Policy": "same-origin",
+        # And nothing here is meant to be embedded elsewhere — no image, no
+        # script, no JSON. This is the resource-level counterpart to
+        # frame-ancestors, covering the ways a page can pull a resource in
+        # without framing it.
+        "Cross-Origin-Resource-Policy": "same-origin",
     }
 
     async def dispatch(self, request: Request, call_next):
