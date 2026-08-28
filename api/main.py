@@ -29,7 +29,8 @@ from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
 from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
-from routers import config_router, msp_router, pisr_router  # noqa: E402
+from routers import admin_router, config_router, msp_router, pisr_router  # noqa: E402
+import visibility  # noqa: E402
 
 app = FastAPI(
     title="PISR",
@@ -121,6 +122,40 @@ else:
             "No PISR_SESSION_SECRET set — a random one was generated, so existing "
             "sessions end at every restart. Set one in .env to keep them.")
 
+    # Roles, on their own line for the same reason the gate is: the way to find
+    # out whether PISR_ADMIN_EMAILS reached the container should not be to sign
+    # in as someone and see whether the portal appears.
+    if AUTH.mode == "proxy":
+        logger.info("Roles: %d admin identit(ies) configured; everyone else is a user.",
+                    len(AUTH.admin_emails))
+        if not AUTH.admin_emails:
+            logger.warning(
+                "Roles: PISR_ADMIN_EMAILS is empty, so nobody is an admin and "
+                "the section visibility portal is unreachable. That is the safe "
+                "default — an empty list is not 'everyone' — but if you meant to "
+                "name someone, this is why they cannot see it.")
+    elif AUTH.admin_passphrase:
+        logger.info(
+            "Roles: PISR_AUTH_ADMIN_PASSPHRASE is set, so the ordinary "
+            "passphrase signs in as a user and the second one as an admin. "
+            "This is the development shim — a shared secret is not identity, "
+            "and it cannot be revoked for one person.")
+    else:
+        logger.info(
+            "Roles: no PISR_AUTH_ADMIN_PASSPHRASE, so every passphrase session "
+            "is an admin and no section is hidden from anyone.")
+
+if visibility.STORE.configured and not visibility.STORE.writable:
+    # Deliberately outside the auth block: it is true whatever the gate is
+    # doing, and it is the failure that looks like success. The portal loads,
+    # the tick boxes move, and the save fails — or worse, an older image's
+    # policy silently comes back at the next deploy because the file was
+    # written inside the container rather than onto a volume.
+    logger.warning(
+        "Visibility: %s is not writable, so the admin portal is read-only. "
+        "Mount a writable volume at its directory — see docker-compose.yml.",
+        AUTH.visibility_file)
+
 
 @app.get("/healthz")
 async def healthz():
@@ -165,6 +200,7 @@ async def status(request: Request):
 # goes on the routers instead.
 app.include_router(auth_router, prefix="/api")
 app.include_router(config_router.router, prefix="/api")
+app.include_router(admin_router.router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
 

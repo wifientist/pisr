@@ -22,6 +22,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
     volumes:
       - ./api:/app
+      # The visibility policy, same path as production. Its own volume rather
+      # than the production one so that experimenting in dev cannot change what
+      # the live instance shows anyone.
+      - pisr-config-dev:/data
     ports:
       - "127.0.0.1:${API_DEV_PORT:-4174}:8080"
     command: uvicorn main:app --host 0.0.0.0 --port 8080 --reload
@@ -41,3 +45,6 @@ services:
     ports:
       - "${VITE_DEV_PORT:-4173}:4173"
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 4173"
+
+volumes:
+  pisr-config-dev:

@@ -5,7 +5,19 @@
 # matters, because a switch-port crawl on a large venue is exactly the kind of
 # request that brushes up against a default 90s proxy timeout.
 #
-# No volumes: PISR stores nothing. No database, no cache, no snapshot directory.
+# One volume, and it holds one small JSON file. PISR still stores no TENANT
+# data — no database, no cache, no snapshot directory, no report that outlives
+# the response that carried it. What `pisr-config` holds is the section
+# visibility policy: which report cards an ordinary user is shown, written by
+# an admin through the portal. See api/visibility.py for why that is an
+# exception to the rule rather than a hole in it, and guard the distinction —
+# if something later wants to keep a *report* here, that is a different feature
+# with its own argument to make.
+#
+# Without the volume PISR still runs: the policy file lives inside the
+# container, the portal reports itself read-only, and nothing is hidden from
+# anyone. That is the harmless direction, and it is what a hand-run
+# `docker run` gets.
 #
 # ── Where the secrets live ───────────────────────────────────────────
 #
@@ -53,6 +65,13 @@ services:
       # `expose: ["8080"]` instead — a published port there is an
       # authentication bypass, not a convenience. See README, "SSO".
       - "${PISR_BIND:-0.0.0.0}:${PISR_PORT:-8080}:8080"
+    volumes:
+      # The visibility policy, and nothing else. Named rather than a bind mount
+      # so it survives `docker compose down` and the image rebuild that every
+      # deploy performs — a policy written into the image's own filesystem
+      # would silently revert at the next deploy, which reads as the save
+      # having quietly undone itself hours later.
+      - pisr-config:/data
     # secrets:
     #   - r1_shared_secret
     #   - pisr_passphrase
@@ -61,6 +80,9 @@ services:
       options:
         max-size: "2m"
         max-file: "3"
+
+volumes:
+  pisr-config:
 
 # secrets:
 #   r1_shared_secret:

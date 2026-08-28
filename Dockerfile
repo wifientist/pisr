@@ -71,7 +71,21 @@ LABEL org.opencontainers.image.revision="${PISR_BUILD_SHA}" \
       org.opencontainers.image.created="${PISR_BUILD_TIME}" \
       org.opencontainers.image.source="https://github.com/wifientist/pisr"
 
-RUN useradd -m -u 1000 pisr && chown -R pisr:pisr /app
+# /data holds one file: the section visibility policy (see api/visibility.py).
+#
+# Created HERE, owned by pisr, and that ordering is the whole point. Docker and
+# podman seed a fresh NAMED volume from whatever the image has at the mount
+# point, ownership included — so a directory that does not exist in the image,
+# or exists owned by root, produces a root-owned volume that the uid-1000
+# process cannot write. The failure is quiet: the container starts, the portal
+# loads, and saving is the only thing that does not work.
+#
+# This does NOT help a BIND mount, where the host directory's ownership wins.
+# If you bind-mount a config directory, chown it to 1000:1000 on the host (or,
+# rootless, to the uid that maps to 1000 inside).
+RUN useradd -m -u 1000 pisr \
+ && mkdir -p /data \
+ && chown -R pisr:pisr /app /data
 USER pisr
 
 EXPOSE 8080

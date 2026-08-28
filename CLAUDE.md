@@ -29,7 +29,13 @@ RUCKUS ONE venue, shape it, check it, render it.
   plus `/docs`. `passphrase` (default) is one shared secret for a signed
   HttpOnly cookie. `proxy` trusts an identity header from an authenticating
   reverse proxy (oauth2-proxy) and switches the passphrase off. No accounts, no
-  roles, no session store, and no OIDC implemented here.
+  session store, and no OIDC implemented here.
+- **Two roles, `admin` and `user`.** In proxy mode the role comes from the
+  verified identity against `PISR_ADMIN_EMAILS`; in passphrase mode from which
+  of two passphrases signed the cookie. An admin sets a policy — which report
+  sections a user is shown, and which MSP-ECs and venues a user may reach —
+  stored as one JSON file. Both roles are fully authenticated; the role decides
+  what a report contains, not whether you may have one.
 - **External API**: RuckusONE only. R1 has a 15-SSID-per-AP-Group limit, which
   `checks.py` asserts on.
 
@@ -41,8 +47,26 @@ RUCKUS ONE venue, shape it, check it, render it.
   docstrings and the README.
 - **Human-triggered.** No scheduler, no background tasks, no recurring polls. If
   something needs to happen repeatedly, a person clicks the button.
-- **PISR stores nothing.** No snapshot files, no cache, no database. A report
-  lives for the length of one HTTP response.
+- **PISR stores nothing — of the tenant.** No snapshot files, no cache, no
+  database, no report that outlives the response carrying it. The ONE file it
+  writes is the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`,
+  backed by the `pisr-config` volume): a list of section ids and venue ids, no
+  venue data, no device, no credential. See `api/visibility.py` for the
+  argument. Guard the distinction — if something later wants to keep a *report*
+  there, that is a different feature and it has to make its own case.
+
+## The role policy, in four files
+
+Read them in this order; each explains the next.
+
+- `api/sections.py` — the catalogue of hideable report sections. Each names the
+  report paths it OWNS and the check ids its findings come from.
+- `api/redact.py` — empties those paths and drops those findings. **The single
+  enforcement point for section visibility**, applied at `build_report`'s
+  boundary so the JSON route and the PDF route cannot disagree.
+- `api/scope.py` — which MSP-ECs and venues a role may reach. A different kind
+  of control with different rules; see the trap below.
+- `api/visibility.py` — the file on disk, holding both halves.
 
 ## Traps
 
@@ -101,6 +125,64 @@ RUCKUS ONE venue, shape it, check it, render it.
 - **`_proxy_identity` keys off `_peer_ip`, never `_client_ip`.** Who may assert
   an identity is a question about who opened the socket. Resolving a forwarded
   address first would let a header decide whether that same header is trusted.
+- **Section visibility fails OPEN; EC/venue scope fails CLOSED.** They live in
+  one file and one dialog and they are not the same kind of control. Hiding a
+  section is de-cluttering — a corrupt policy, an unknown id, a missing file
+  all resolve to "hide nothing", because the alternative is an app that renders
+  nothing and explains nothing. Scope is access: once an admin names a single
+  EC, anything unnamed is refused, an empty venue list means NO venues rather
+  than all of them, and an EC row with no identifiable id is dropped rather
+  than passed through. On an MSP tenant the ECs are different companies. Do not
+  let a refactor make the two consistent with each other.
+
+- **Scope is enforced at the route, not by filtering a response.**
+  `pisr_router._require_scope` 403s on the report, the PDF and the venue list;
+  the filtering in `msp_router` and `get_venues` only keeps other customers'
+  names off a picker. Both exist on purpose — a filter that is also the check
+  is a filter somebody later "optimises" into a UI concern.
+
+- **The PDF route re-polls, so every control has to be applied twice.**
+  `get_report_pdf` calls `build_report` itself rather than rendering what the
+  browser holds. Both the scope check and `redact` are repeated there. Add a
+  control to `get_report` and not to `get_report_pdf` and the download is the
+  way around it.
+
+- **Redaction empties, it never deletes.** `redact._blank_like` replaces a
+  hidden path with an empty value of the same type. Two renderers in two
+  languages call `.length`, `.map` and `|length` on this payload assuming the
+  keys exist; deleting one turns a hidden card into a blank page.
+
+- **Findings are cross-cutting and get forgotten.** Checks read the whole
+  report, so hiding the PoE cards without dropping their findings leaves the
+  Verification card reporting on cards that are not there. Each section names
+  its check ids and `redact` recomputes the tallies. Note that a check
+  function's name and its finding id can differ — `check_empty_ap_groups`
+  emits `ssid-scope` — and the finding id is what is filtered.
+  `api/tests/test_sections.py::test_checks_exist` is what caught that.
+
+- **`api/tests/test_sections.py` is the only thing stopping the three id lists
+  drifting.** Section ids are hand-written into `api/sections.py`,
+  `src/pages/PISR.tsx` and `api/templates/reports/pisr.html`, because the
+  Dockerfile's web stage does not copy `api/` and there is no module both sides
+  can import. It needs the working tree, not the runtime image:
+
+      docker compose -f docker-compose.dev.yml run --rm --no-deps \
+        -v "$PWD:/repo" backend python /repo/api/tests/test_sections.py
+
+- **Hooks in `PISR.tsx` must sit above its early returns.** The component
+  returns early three times before a venue is chosen (no controller, no EC, no
+  venue). A `useEffect` added below one of those is called only after a venue
+  is picked, which React sees as the hook count changing mid-session — "rendered
+  more hooks than during the previous render", and a blank page. The tab
+  fallback effect is up with the other hooks for exactly this reason.
+
+- **`/data` is created and chowned in the Dockerfile before `USER pisr`.**
+  Docker and podman seed a fresh named volume from what the image has at the
+  mount point, ownership included — so without that `mkdir`/`chown` the volume
+  arrives root-owned, the uid-1000 process cannot write it, and the portal
+  silently reports itself read-only. This does not help a BIND mount, where the
+  host's ownership wins.
+
 - **`R1_EC_TYPE` and `R1_VERBOSE` are literal-compared** in `api/services/pisr/fetch.py`
   and `api/r1api/client.py` respectively. Don't rename `R1_VERBOSE`; don't
   lowercase `MSP`.
@@ -134,8 +216,11 @@ RUCKUS ONE venue, shape it, check it, render it.
 ## Files kept byte-identical to rtools2
 
 `api/r1api/**`, `api/services/pisr/{collect,fetch,shape,checks}.py`,
-`api/reports/pisr.py`, `api/templates/reports/pisr.html`, `src/pages/PISR.tsx`,
-`src/components/SingleEcSelector.tsx`, `src/hooks/useSingleEc.tsx`.
+`api/reports/pisr.py`, `src/components/SingleEcSelector.tsx`,
+`src/hooks/useSingleEc.tsx`.
+
+`api/templates/reports/pisr.html` and `src/pages/PISR.tsx` were on this list and
+are no longer — see the divergence below.
 
 Keep them that way where you can — it makes pulling upstream changes a readable
 diff rather than an archaeology exercise. If you must diverge, note it here.
@@ -162,6 +247,22 @@ diff rather than an archaeology exercise. If you must diverge, note it here.
   channel 10 under channel 12. Both now sort by a `rank` of grey < green <
   blue < amber. The two renderers must keep matching each other; the PDF is
   meant to be the same picture as the screen.
+
+- **Section visibility markup** — `src/pages/PISR.tsx` and
+  `api/templates/reports/pisr.html`. Both now carry section ids: `Card` takes an
+  `id` and returns null when hidden, non-card blocks are wrapped in `Section`,
+  and the template guards blocks with `{% if visible('...') %}` /
+  `{% if visible_tab('...') %}`. This is a permanent, structural divergence from
+  rtools2 for the two largest files on the list, and it was taken deliberately:
+  pulling upstream changes into these two is now a merge, not a diff.
+
+  The guards are COSMETIC. `redact.py` has already emptied the data, so a guard
+  that was forgotten leaves an empty table rather than a leak. What they buy is
+  the difference between "there are none" and "you are not shown these".
+
+  `api/reports/pisr.py` deliberately did NOT diverge: `visible`/`visible_tab`
+  are injected at `template.render()` in `pisr_router`, not added to
+  `build_context`, so the context builder stays byte-identical.
 
 - **`min-w-0` on flex and grid children** — `src/pages/PISR.tsx`, in `Card`,
   `MiniTable`, `BarList`, `Meter`, the venue card and the external-address row.

@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,7 +36,11 @@ from fastapi import Response
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML as WeasyHTML
 
+import sections as section_catalogue
+import visibility
+from auth import role_of
 from r1_client import build_r1_client, get_controller, resolve_tenant
+from redact import redact, template_helpers as redact_helpers
 from reports.pisr import build_context as build_pdf_context
 from services.pisr import checks as check_registry
 from services.pisr.collect import build_report, list_venues
@@ -67,6 +71,34 @@ def _export_name(venue_name: str, extension: str) -> str:
     return f"site-review-{safe}-{stamp}.{extension}"
 
 
+def _require_scope(request: Request, tenant_id, venue_id=None) -> None:
+    """
+    Refuse a tenant or venue this caller's role may not reach.
+
+    THE CONTROL, as opposed to the list filtering further down. Filtering a
+    picker keeps other customers' names off someone's screen; this is what
+    stops a hand-written URL. They are enforced separately on purpose — a
+    filter that is also the check is a filter somebody will later "optimise"
+    into a UI concern.
+
+    403 rather than 404: pretending the venue does not exist would make a
+    misconfigured scope indistinguishable from a deleted venue, and send
+    someone hunting for a site that is sitting there working. See api/scope.py.
+    """
+    allowed = visibility.scope_for(role_of(request))
+    if not allowed.allows_ec(tenant_id):
+        logger.warning("scope: refused tenant=%s to user=%s role=%s",
+                       tenant_id, getattr(request.state, "pisr_user", "-"),
+                       role_of(request))
+        raise HTTPException(
+            403, "This account is not scoped to that RUCKUS ONE customer.")
+    if venue_id is not None and not allowed.allows_venue(tenant_id, venue_id):
+        logger.warning("scope: refused venue=%s on tenant=%s to user=%s role=%s",
+                       venue_id, tenant_id,
+                       getattr(request.state, "pisr_user", "-"), role_of(request))
+        raise HTTPException(403, "This account is not scoped to that venue.")
+
+
 @router.get("/{controller_id}/scope")
 async def get_scope(controller_id: int) -> Dict[str, Any]:
     """Tells the UI whether it has to ask for an MSP-EC before anything else."""
@@ -82,14 +114,26 @@ async def get_scope(controller_id: int) -> Dict[str, Any]:
 
 
 @router.get("/{controller_id}/venues")
-async def get_venues(controller_id: int,
+async def get_venues(request: Request,
+                     controller_id: int,
                      tenant_id: Optional[str] = Query(None)):
-    """Every venue on the EC, for the venue picker. One query, no per-venue fan-out."""
+    """
+    Every venue on the EC that this caller may reach, for the venue picker.
+
+    Filtered rather than refused when the EC is allowed but only some of its
+    venues are — a picker is a list, and a list is allowed to be short. The EC
+    itself is still checked first: an EC nobody scoped this caller to is a 403,
+    not an empty list, because an empty venue list reads as "this customer has
+    no sites" and would have someone chasing R1 for an answer.
+    """
     cfg = get_controller(controller_id)
     override = resolve_tenant(cfg, tenant_id)
+    _require_scope(request, override)
     r1 = build_r1_client(cfg)
     venues = await list_venues(r1, override)
-    return {"tenantId": override or cfg.tenant_id, "venues": venues}
+    allowed = visibility.scope_for(role_of(request))
+    return {"tenantId": override or cfg.tenant_id,
+            "venues": allowed.filter_venues(override, venues)}
 
 
 @router.get("/{controller_id}/report")
@@ -103,18 +147,23 @@ async def get_report(request: Request,
     """
     cfg = get_controller(controller_id)
     override = resolve_tenant(cfg, tenant_id)
+    # Before the R1 client is built, so a refused request costs no upstream call.
+    _require_scope(request, override, venue_id)
     r1 = build_r1_client(cfg)
     # `user` is set by SessionGateMiddleware in proxy mode and is "-" under a
     # shared passphrase, which cannot tell one person from another. This line
     # is the whole audit trail, and the honest reason to prefer SSO.
-    logger.info("pisr: user=%s controller=%s tenant=%s venue=%s",
-                getattr(request.state, "pisr_user", "-"),
+    role = role_of(request)
+    logger.info("pisr: user=%s role=%s controller=%s tenant=%s venue=%s",
+                getattr(request.state, "pisr_user", "-"), role,
                 cfg.id, override, venue_id)
-    return await build_report(r1, override, venue_id)
+    return redact(await build_report(r1, override, venue_id),
+                  visibility.hidden_for(role))
 
 
 @router.get("/{controller_id}/report.pdf")
-async def get_report_pdf(controller_id: int,
+async def get_report_pdf(request: Request,
+                         controller_id: int,
                          venue_id: str = Query(..., description="Venue to report on"),
                          tenant_id: Optional[str] = Query(None),
                          label: Optional[str] = Query(
@@ -135,30 +184,69 @@ async def get_report_pdf(controller_id: int,
     """
     cfg = get_controller(controller_id)
     override = resolve_tenant(cfg, tenant_id)
+    # Same check as the JSON route, and for the same reason the redaction below
+    # is repeated here: this endpoint re-polls independently, so every control
+    # the JSON route applies has to be applied again or the download is the way
+    # around it.
+    _require_scope(request, override, venue_id)
     r1 = build_r1_client(cfg)
 
-    report = await build_report(r1, override, venue_id)
+    # Redacted on the same terms as the JSON report, and this is the line that
+    # matters most in this file. The PDF re-polls rather than rendering the one
+    # the browser already has, so it is a second, independent path to the same
+    # data — filter one and not the other and the download is the way around
+    # the policy. Both go through `redact` for exactly that reason.
+    role = role_of(request)
+    hidden = visibility.hidden_for(role)
+    report = redact(await build_report(r1, override, venue_id), hidden)
     context = build_pdf_context(report, cfg.name, label or tenant_id)
 
     template = _jinja().get_template("reports/pisr.html")
-    pdf = WeasyHTML(string=template.render(**context)).write_pdf()
+    # The section guards, injected here rather than added to build_context so
+    # that api/reports/pisr.py stays byte-identical to its rtools2 original.
+    # They only remove headings — the data behind a hidden section was already
+    # emptied by `redact` above, which is the part that actually enforces.
+    pdf = WeasyHTML(string=template.render(
+        **context,
+        **redact_helpers(hidden),
+        report_visibility=report.get("visibility"),
+    )).write_pdf()
 
     venue_name = (report.get("venue") or {}).get("name") or venue_id
     filename = _export_name(venue_name, "pdf")
-    logger.info("pisr: PDF for venue=%s (%d findings, %d bytes)",
-                venue_id, context["findings_total"], len(pdf))
+    logger.info("pisr: PDF for venue=%s user=%s role=%s (%d findings, %d "
+                "sections hidden, %d bytes)",
+                venue_id, getattr(request.state, "pisr_user", "-"), role,
+                context["findings_total"], len(hidden), len(pdf))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.get("/{controller_id}/checks")
-async def get_checks(controller_id: int):
-    """The check catalogue — what a report verifies, without running one."""
+async def get_checks(request: Request, controller_id: int):
+    """
+    The check catalogue — what a report verifies, without running one.
+
+    Filtered by role like everything else. A check whose section is hidden
+    would otherwise announce itself here — "AP naming follows a convention" —
+    for a reader who is never shown the result, which is a worse experience
+    than not listing it at all.
+
+    Note the id here is derived from the function name, while the ids a section
+    owns come from each check's own `_finding(check_id, ...)`. They agree for
+    most checks and not for all, and the mismatch fails open: an id this cannot
+    match stays listed. That is the right direction for a catalogue, but it is
+    why `redact.py` filters findings by the finding's own id rather than
+    reusing this expression.
+    """
     get_controller(controller_id)
+    hidden_checks = section_catalogue.checks_for(visibility.hidden_for(role_of(request)))
     return {
-        "checks": [{"id": fn.__name__.replace("check_", "").replace("_", "-"),
+        "checks": [{"id": check_id,
                     "description": (fn.__doc__ or "").strip()}
-                   for fn in check_registry.CHECKS],
+                   for fn in check_registry.CHECKS
+                   if (check_id := fn.__name__.replace("check_", "").replace("_", "-"))
+                   not in hidden_checks],
         "thresholds": {
             "apGroupSsidLimit": check_registry.AP_GROUP_SSID_LIMIT,
             "poeWarnPct": check_registry.POE_WARN_PCT,
