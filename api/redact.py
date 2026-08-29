@@ -30,18 +30,20 @@ future caller that redacts twice for two different roles must not get a report
 that has been emptied twice over.
 """
 
-import copy
 import logging
 from collections import Counter
 from typing import Any, Dict, Iterable, List
 
+import scrub as secret_scrub
 import sections as section_catalogue
 
 logger = logging.getLogger(__name__)
 
 # The five severities `checks.run_checks` tallies, in its order. Recomputed
-# here rather than imported so that `checks.py` stays byte-identical to
-# rtools2 and gains no knowledge that visibility exists.
+# here rather than imported so `checks.py` stays a pure reader over the report
+# and gains no knowledge that a visibility policy exists — findings are
+# filtered by id from the outside, which is why a check can be renamed without
+# anything here noticing (and why the drift test checks that it was not).
 _SEVERITIES = ("critical", "warning", "info", "ok", "skipped")
 
 
@@ -118,9 +120,10 @@ def template_helpers(hidden_ids: Iterable[str]) -> Dict[str, Any]:
     The two predicates the PDF template guards on.
 
     Passed into `template.render()` at the call site rather than added to
-    `build_context`, which keeps `api/reports/pisr.py` byte-identical to its
-    rtools2 original — the template has to diverge for this feature, the
-    context builder does not, and one divergence is cheaper to carry than two.
+    `build_context`. The guards are a rendering concern: which sections a
+    reader may see is decided per request, while the context builder shapes
+    one report the same way every time. Keeping the two apart means a change
+    to the policy never touches the shaping code.
 
     `visible(id)`      one section.
     `visible_tab(tab)` any section on that tab, for the <h2> that would
@@ -144,7 +147,15 @@ def template_helpers(hidden_ids: Iterable[str]) -> Dict[str, Any]:
 
 def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
     """
-    A copy of `report` with every hidden section's data emptied.
+    A copy of `report`, scrubbed of credentials and with hidden sections emptied.
+
+    Two different jobs, deliberately in one place because it is the one place
+    every report passes through on its way out — the JSON route and the PDF
+    route both call it, and neither can be served without it.
+
+      * Credential scrubbing is unconditional and role-independent. Nobody
+        gets a customer's switch password.
+      * Section hiding is the visibility policy, and depends on the role.
 
     The resolved id list is stamped onto the result as `visibility.hidden` so
     the renderers can drop the containers as well as the contents — a card that
@@ -153,7 +164,16 @@ def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
     presentation; the emptying above it is the control.
     """
     hidden = sorted({sid for sid in hidden_ids if sid})
-    redacted = copy.deepcopy(report)
+
+    # BEFORE anything else, and regardless of role. RUCKUS ONE returns live
+    # switch and AP admin passwords inside ordinary configuration responses
+    # (see api/scrub.py), and no role in this tool has any business receiving
+    # one in a report. This is not part of the visibility policy — an admin is
+    # not more entitled to a customer's switch password than a user is.
+    #
+    # It also deep-copies, which is why there is no separate copy below: scrub
+    # rebuilds every dict and list it walks.
+    redacted = secret_scrub.scrub_report(report)
 
     # Stamped even when nothing is hidden. A renderer that has to test for the
     # key's existence before reading it is a renderer with two code paths, and
