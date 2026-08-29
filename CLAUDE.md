@@ -1,7 +1,11 @@
 # Project: pisr
 
-Standalone extraction of the PISR tool from rtools2. One purpose: poll one
-RUCKUS ONE venue, shape it, check it, render it.
+Poll one RUCKUS ONE venue, shape it, check it, render it. One purpose, done
+properly.
+
+It began as an extraction from rtools2 and has since diverged into its own
+thing — see "Lineage" below before assuming any file is meant to match an
+upstream copy. It is not.
 
 ## Development Environment
 
@@ -213,22 +217,41 @@ Read them in this order; each explains the next.
   a rootless subuid range usually does not map, and the build fails in apt. It
   does nothing under Docker, which is exactly why someone will delete it.
 
-## Files kept byte-identical to rtools2
+## Lineage: PISR is freestanding now
 
-`api/r1api/**`, `api/services/pisr/{collect,fetch,shape,checks}.py`,
-`api/reports/pisr.py`, `src/components/SingleEcSelector.tsx`,
-`src/hooks/useSingleEc.tsx`.
+This started as an extraction from rtools2, and for a while the rule was to keep
+the carried-over files byte-identical so upstream changes stayed a readable
+diff. **That rule is retired.** The report pipeline, both renderers and the
+whole role-policy layer have diverged deliberately and substantially, and the
+pretence that a future `git diff` against rtools2 would mean anything was
+costing more than it bought — it pushed real fixes into awkward shapes to avoid
+touching a file.
 
-`api/templates/reports/pisr.html` and `src/pages/PISR.tsx` were on this list and
-are no longer — see the divergence below.
+What that changes, practically:
 
-Keep them that way where you can — it makes pulling upstream changes a readable
-diff rather than an archaeology exercise. If you must diverge, note it here.
+- **Edit any file here on its merits.** No file is frozen. If `shape.py` wants
+  a new tally, give it one; if `collect.py` should read another endpoint, add
+  it. Judge the change by whether it is right for PISR.
+- **The constraints in the section above still bind.** Read-only,
+  human-triggered, no tenant data stored. Those were never about rtools2 — they
+  are what this tool promises in its own docstrings and README.
+- **`api/r1api/**` is still the odd one out**, and worth leaving alone by
+  default. Not because of upstream, but because it is a general RUCKUS ONE
+  client with its own semantics (pagination quirks, the ES window, the
+  page-0/1 alias) that took live tenants to work out, and PISR uses a fraction
+  of it. Changing it to suit one caller is how those hard-won notes rot.
+- If something here would genuinely help rtools2, port it deliberately as a
+  patch. Do not shape PISR around making that easy.
 
-### Known divergences
+The notes below started life as a divergence list. They are kept because the
+reasoning is still load-bearing, not because anything is being tracked against
+an upstream.
 
-- **R1 connection pool** — `api/r1api/client.py`. rtools2 has the same bug and
-  could take the same fix. A bare `requests.Session()` gets urllib3's default
+## Design notes
+
+- **R1 connection pool** — `api/r1api/client.py`. One of the few edits made to
+  the R1 client, and the reason to know about it is that rtools2 still carries
+  the bug. A bare `requests.Session()` gets urllib3's default
   `pool_maxsize=10`, while `collect.py` fans a report out over asyncio's
   default executor — `min(32, cpu_count + 4)` threads. On anything with more
   than six cores that exceeds the pool, and every request past the tenth pays
@@ -248,21 +271,284 @@ diff rather than an archaeology exercise. If you must diverge, note it here.
   blue < amber. The two renderers must keep matching each other; the PDF is
   meant to be the same picture as the screen.
 
+- **The Config tab, and why it is split in two.** Venue-level settings (35
+  categories, one per R1 endpoint) load with the report. AP-group and per-AP
+  settings do NOT — they are one R1 call per object, and an MDU with a
+  per-unit AP group would put several hundred requests behind every report for
+  a tab most readers never open. `/pisr/{cid}/config/detail` fetches them on a
+  button press, capped at `fetch.AP_CONFIG_LIMIT` APs.
+
+  The bulk `/venues/aps/query` cannot substitute: it ACCEPTS the nested field
+  names (`radio`, `clientAdmissionControl`, `useVenueSettings`) and echoes them
+  in its `fields` reply, then returns none of them. Verified 2026-08-28 — do
+  not spend an afternoon rediscovering that.
+
+  **The detail route repeats every control the report route applies** — the
+  scope check and the scrub — because it is a second, independent path to R1
+  data. The PDF route taught that lesson already.
+
+  Categories are grouped by ENDPOINT, not by meaning. A settings dump has no
+  natural taxonomy, R1's console groups these differently again, and a third
+  grouping invented here would leave a reader unable to map the tab onto
+  either. It also makes each category a unit an admin can hide — and
+  `redact.py` filters `config.categories` by slug, because they live in a list
+  and no dotted path can own one.
+
+  `GET /venues/aps/{serial}` is the AP config. Its sibling
+  `GET /venues/{venueId}/aps/{serial}` is a different object whose payload is
+  the AP's plaintext `loginPassword`, and is never called.
+
+  **The venue-config reads are registered individually in `build_report`'s
+  `reads` dict, not fetched behind their own thread pool.** They were, briefly,
+  and it produced exactly the failure documented under "R1 connection pool"
+  below: a second uncoordinated pool plus the main fan-out pushed concurrent
+  requests past `pool_maxsize`, and urllib3 logged "Connection pool is full"
+  while discarding connections. One executor, one bound. Nineteen extra reads
+  cost nothing measurable that way — the report is faster now than it was with
+  six.
+
+- **Credentials are scrubbed at the FETCH as well as at the boundary.**
+  `redact.redact` scrubbing every report is the guarantee, but between
+  `build_report` and that boundary a secret would sit in the report object —
+  which `checks.run_checks` walks, and which copies fields into finding
+  evidence. So `fetch.radius_server_profiles` and `fetch.venue_config` scrub on
+  the way in, and the boundary scrub goes back to being what it should be: a
+  backstop that normally finds nothing. If it ever logs a warning, something
+  upstream started leaking.
+
+- **`GET /radiusServerProfiles` returns plaintext `sharedSecret`**, nested
+  under `primary`/`secondary`, in a list. It is also TENANT-WIDE — R1 offers no
+  venue filter — so the Config tab labels it as such rather than letting a
+  reader take it for this venue's configuration.
+
+- **Get the RUCKUS ONE OpenAPI document and READ IT BEFORE PROBING.** Export
+  the consolidated API spec from RUCKUS and drop the JSON in `spec/`, which is
+  gitignored — it is a 7MB vendor artefact that RUCKUS regenerates, so it is
+  not carried in this repo. 956 paths and 483 GETs, and it is the difference
+  between an afternoon of guessing and a grep. Two rounds of name-guessing missed seven venue-level
+  settings endpoints that were there all along, because R1 is inconsistent
+  about its prefixes — `syslogSettings` but `apModelUsbPortSettings`,
+  `rogueApSettings` but `apRebootTimeoutSettings`, `ledSettings` but
+  `apModelLedSettings` (both exist and return the same thing).
+
+      python3 -c "import json;d=json.load(open('spec/…json'));
+        print([p for p in d['paths'] if 'venues' in p and 'syslog' in p.lower()])"
+
+  Only two things on the original wanted list have no venue-level endpoint,
+  and the spec says why: **IoT controller** is per-AP
+  (`/venues/{v}/aps/{serial}/iotSettings`) and **location-based services** is
+  a tenant-wide profile object (`/lbsServerProfiles/query`). Both are recorded
+  in `fetch.VENUE_CONFIG_NOT_FOUND` and surfaced in the payload so the tab can
+  say what it looked for.
+
+- **`GET /venues/{venueId}/aps/{serialNumber}/passwords` exists. Never call
+  it.** The spec calls it "Get AP Password". Nothing in PISR has any use for
+  it, and the scrubber should not be the reason it is safe.
+
+- **R1 returns live credentials in ordinary config responses.** Observed on a
+  live tenant, unmarked and with no opt-out:
+
+      GET /venues/{id}/switchSettings  -> switchLoginPassword
+      GET /venues/{id}/aps/{serial}    -> loginPassword
+
+  Those are working admin passwords for a customer's switches and APs. Any
+  report carrying one puts it in a JSON response, in a PDF that gets emailed
+  around, and in a browser cache — for a tool built to be handed to an install
+  crew. **`api/scrub.py` runs over every report inside `redact.redact`**,
+  unconditionally and regardless of role: no role here is entitled to a
+  customer's switch password, so this is not part of the visibility policy.
+
+  It is a BACKSTOP, not the control. The shapers allowlist what they emit; the
+  scrubber catches the next person who passes a config dict through without
+  reading every key, and R1 adding a field to an endpoint PISR already reads.
+  **If a config block exists only to be scrubbed, do not fetch it at all.**
+
+  **Matching is tokenised, and that was learned the hard way.** The first
+  version used a bare substring list including "psk" — which matched `dpsk`,
+  redacted the entire DPSK card and made the PDF fail to render. Compound terms
+  ("password", "sessionkey") match anywhere in the flattened key because
+  `switchLoginPassword` buries the word; short terms ("psk", "token") match
+  only as whole camelCase tokens. A false positive here is not a safe trade:
+  it deletes real content silently.
+
+- **The punch list** — `api/services/pisr/punchlist.py`, its own tab, leftmost
+  and the one a venue lands on. It ADDS NO DATA: every task is a finding
+  `checks.py` already produced or an alarm R1 already raised, re-cut by TRADE
+  instead of by subsystem. A port error and a mesh fallback are the same visit
+  with the same ladder; a firmware mismatch is a different person who is
+  probably not on site. If a task is wrong, the bug is in the check.
+
+  **`redact.py` REBUILDS it rather than filtering it.** The punch list is
+  derived from `verification` and `incidents`, so after those are filtered it
+  is regenerated from the redacted copies. Filtering it separately would be a
+  second implementation of the same rule, and the failure mode is a task
+  naming a finding the reader is no longer shown — precisely the leak the
+  whole design exists to prevent. The rebuild is skipped when the punch list
+  is itself hidden, or it would refill the path that was just emptied.
+
+  Passes are counted, not listed. Skipped checks ARE listed, separately: on an
+  install "could not be checked" usually means a prerequisite is missing, and
+  reading it as a pass is how a venue gets signed off half-done.
+
+  A check missing from `CHECK_CATEGORY` falls into "Devices not up" — over-
+  reported rather than filed where nobody looks — and
+  `test_every_check_has_a_category` stops that becoming normal.
+
+  **No history, and that is a design boundary, not an oversight.** There is no
+  "fixed since yesterday" and no ticking items off, because PISR stores
+  nothing. Making the list stateful means giving PISR somewhere to write, which
+  is a decision about the whole tool. The honest workaround is exporting the
+  PDF at the end of each visit.
+
+- **Mesh fallback, uptime and tags on APs** — `meshRole`, `uptime` and `tags`
+  were fetched and shaped from the beginning and rendered nowhere. A meshing AP
+  is the install defect that passes every other check in the report: online,
+  provisioned, broadcasting, serving clients, with a dead cable behind it.
+
+  `shape._is_meshing` is deliberately conservative — only values that clearly
+  mean meshing count, and an unrecognised `meshRole` is treated as wired. The
+  live tenant only ever returns `DISABLED`, so the rest of the vocabulary is
+  inferred, and the cost of a false positive is a crew pulling a good cable.
+
+  **`uptime` is assumed to be SECONDS.** R1 does not label the unit. Live
+  values cluster at 1.9M–6.5M, which is 22–75 days and plausible for a settled
+  fleet; read as milliseconds the same numbers are 30 minutes to 2 hours, which
+  no mixed fleet clusters into. If every AP starts reporting "32 minutes", this
+  is the assumption to revisit.
+
+  `check_ap_uptime` is RELATIVE, not absolute, and that is the point: during an
+  install every AP has just booted, so an absolute threshold would fire on
+  every AP on the day the report is most likely to be run. Comparing each AP
+  against the venue median keeps it silent through commissioning and only
+  speaks once there is a settled fleet for an outlier to stand out from.
+
+- **RUCKUS ONE alarms** — `fetch.incidents` / `shape.incident_card`, shown on
+  Overview beside Verification. `POST /alarms/query` (read-only), filtered by
+  `filters.venueId`, which genuinely scopes — a 16-alarm tenant cut to the 4
+  belonging to one venue. Verified live 2026-08-28.
+
+  **The endpoint was found by probing, not documentation.** Everything obvious
+  404s: `/incidents`, `/incidents/query`, `/venues/{id}/incidents`,
+  `/aiOps/incidents`, `/events`, `/alarms`. `/events/query` DOES exist but
+  returned `EVENT-10002` on every attempt, so it is not used. `/alarms/query`
+  is the one that works.
+
+  Field names were established the same way: the endpoint echoes back a
+  `fields` list containing only the names it recognises, so offering it a wide
+  set and reading the reply enumerates the schema. Valid: `id`, `name`,
+  `message`, `reason`, `severity`, `entityType`, `entityId`, `serialNumber`,
+  `apMac`, `model`, `venueId`, `tenantId`, `startTime`. Notably absent —
+  **no status, no clearedTime, no acknowledged flag.** This is the ACTIVE
+  alarm list and nothing more; do not build a history or "recently cleared"
+  view on it without re-probing first.
+
+  `message` is a JSON *string* wrapping a template with `@@apName` style
+  placeholders that the R1 console substitutes from its own context. Left
+  alone they render literally. `_alarm_text` unwraps and substitutes them from
+  the AP and switch names the report already holds, falling back to the
+  serial. **No placeholder may reach the UI** — there is a test for it.
+
+  `startTime` is epoch milliseconds and arrives as an int *and* as a float
+  (`1785702964230.0`), hence the `int()` in `_epoch_ms_iso`.
+
+  `entityType` includes `EDGE`. PISR has no Edge inventory, so those alarms
+  name a bare serial — honest, and the reason the fallback exists.
+
+  Kept separate from `verification` on purpose: that is PISR's opinion about
+  whether the install looks finished, this is the platform's about whether the
+  venue is healthy now. They disagree usefully and merging them would lose that.
+
+- **Wired clients** — `api/services/pisr/{fetch,collect,shape}.py`,
+  `api/reports/pisr.py`, the PDF template and `PISR.tsx`. PISR read wireless
+  clients only: `/venues/aps/clients/query` is AP-scoped despite its service
+  being named for both, so a report could see every association and nothing
+  plugged into a wall. `fetch.wired_clients` adds the switch MAC table
+  (`POST /venues/switches/clients/query` — read-only, a `*/query` path), which
+  `r1api` already implemented and nothing used.
+
+  **A ROW IS A LEARNED MAC, NOT A CLIENT.** An AP's uplink port has learned
+  every wireless client behind it, the APs and switches are in the table as
+  addresses themselves, and a port feeding another switch has learned
+  everything behind that. `len(rows)` would therefore be several times the
+  number of things plugged in, and would move when someone joined the Wi-Fi.
+  `shape.wired_client_card` classifies instead, using the LLDP AP-to-port join
+  and the AP/switch MACs the report already holds, and publishes the excluded
+  counts so the three figures reconcile in public. The third class — an
+  unmanaged switch downstream — is NOT separable and is left in; it shows up as
+  a port with an implausible address count, which is what `topPorts` is for.
+
+  `clientIpv4Addr` is the only MAC->IP binding R1 offers (no ARP endpoint) and
+  its coverage runs from about a third to most of the table, so the card
+  reports the count rather than treating a blank as "no IP".
+
+- **Wired and PoE are separate tabs** — they were one "Wired & PoE" tab.
+
+      Wired   port tiles, wired clients, link speeds, port errors, VLANs
+      PoE     capacity/allocated/drawn tiles, budget per switch,
+              PoE standard in use, APs on switch ports
+
+  The split is by question, not by cable: Wired is "what is on the wire and is
+  it healthy", PoE is "is there enough power and who is drawing it". Port
+  health briefly sat on the PoE tab and moved back — it is not a power
+  question, and `poe.summary` lost its "Ports up" tile for the same reason.
+  Section ids are
+  `<tab>.<thing>` and the test enforces it, so every PoE section had to be
+  renamed; `visibility.RENAMED` migrates a stored policy so a section an admin
+  had hidden does not silently become visible. **Add an entry there whenever
+  you rename a section id** — the failure otherwise lands at the next report,
+  not at the rename, and nobody connects the two. A section that is *deleted*
+  belongs nowhere in that map; it should drop, and it does.
+
+  "Biggest PoE draws" was removed outright. `poe.topConsumers` is still shaped
+  and still in the payload, now owned by no section — harmless, and cheaper
+  than another divergence in `shape.py` to delete it.
+
+- **Channel plan by width** — `api/services/pisr/shape.py` (`radio_card`) and
+  `src/pages/PISR.tsx`. The band tallies counted channels and widths
+  independently, which cannot answer "which channels at which width" — and on a
+  band running more than one width those are different questions, since a
+  40 MHz and a 20 MHz radio on the same channel number are not co-channel in
+  the way a flat list implies. `byWidth` adds the join; `channels` and `widths`
+  are untouched, because the spectrum chart and the checks read those. The card
+  renders buckets only when a band has more than one width, so the ordinary
+  single-width site looks exactly as it did.
+
+  A radio with a channel but no readable width gets its own bucket rather than
+  being folded into 20 MHz — do not "fix" that by reaching for `_width_mhz`,
+  which falls back to 20 by design for the spectrum chart and would file
+  unknown-width radios under a width they may not be on. The buckets are meant
+  to sum to the band's radio count.
+
+  The width label is also now built from the digits rather than interpolated
+  around R1's raw `channelBandwidth`, which rendered "20MHz MHz" whenever R1
+  already carried the unit. Where R1 sends a bare number the output is
+  identical, so the change only shows where it was already wrong.
+
+  The PDF does NOT render this list — it draws the spectrum chart from
+  `radios.plan` instead — so this divergence is screen-only.
+
 - **Section visibility markup** — `src/pages/PISR.tsx` and
-  `api/templates/reports/pisr.html`. Both now carry section ids: `Card` takes an
+  `api/templates/reports/pisr.html`. Both carry section ids: `Card` takes an
   `id` and returns null when hidden, non-card blocks are wrapped in `Section`,
   and the template guards blocks with `{% if visible('...') %}` /
-  `{% if visible_tab('...') %}`. This is a permanent, structural divergence from
-  rtools2 for the two largest files on the list, and it was taken deliberately:
-  pulling upstream changes into these two is now a merge, not a diff.
+  `{% if visible_tab('...') %}`.
 
   The guards are COSMETIC. `redact.py` has already emptied the data, so a guard
   that was forgotten leaves an empty table rather than a leak. What they buy is
   the difference between "there are none" and "you are not shown these".
 
-  `api/reports/pisr.py` deliberately did NOT diverge: `visible`/`visible_tab`
-  are injected at `template.render()` in `pisr_router`, not added to
-  `build_context`, so the context builder stays byte-identical.
+  `visible`/`visible_tab` are injected at `template.render()` in `pisr_router`
+  rather than added to `build_context`. That began as a way to leave
+  `api/reports/pisr.py` untouched; it is worth keeping anyway, because the
+  guards are a rendering concern and the context builder has no other reason
+  to know a policy exists.
+
+- **`break-words` on the `Finding` body** — a finding can carry an unbreakable
+  token in its title *and* in its summary; an R1 alarm names its device in
+  both, and a RUCKUS Edge serial is 34 characters with no break opportunity.
+  `overflow-wrap` inherits, so the class sits on the container that wraps
+  title, summary and detail — fixing only the title left the summary widening
+  the card. Found by the 320px check below, which is the only way it shows.
 
 - **`min-w-0` on flex and grid children** — `src/pages/PISR.tsx`, in `Card`,
   `MiniTable`, `BarList`, `Meter`, the venue card and the external-address row.

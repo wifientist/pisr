@@ -82,9 +82,12 @@ class Section:
 # and a tab whose every section is hidden is dropped from the bar entirely —
 # an empty tab is worse than a missing one.
 TABS: List[Tuple[str, str]] = [
+    ("punchlist", "Punch list"),
     ("overview", "Overview"),
+    ("config", "Config"),
     ("wireless", "Wireless"),
-    ("wired", "Wired & PoE"),
+    ("wired", "Wired"),
+    ("poe", "PoE"),
     ("addressing", "Addressing"),
     ("identity", "Identity & Policy"),
     ("devices", "Devices"),
@@ -93,6 +96,25 @@ TABS: List[Tuple[str, str]] = [
 
 
 SECTIONS: Tuple[Section, ...] = (
+    # ── Punch list ───────────────────────────────────────────────────
+    #
+    # A re-cut of findings and alarms by trade, for the crew finishing the
+    # site. It adds no data of its own, so hiding it hides a VIEW — the
+    # underlying findings are still on Overview unless those are hidden too.
+    Section(
+        id="punchlist.summary",
+        label="Punch list headline tiles",
+        tab="punchlist",
+        hint="Outstanding tasks by severity, and how many devices to visit.",
+    ),
+    Section(
+        id="punchlist.tasks",
+        label="Punch list",
+        tab="punchlist",
+        hint="Every outstanding finding and alarm, grouped by who fixes it.",
+        paths=("punchlist",),
+    ),
+
     # ── Overview ─────────────────────────────────────────────────────
     Section(
         id="overview.summary",
@@ -113,6 +135,14 @@ SECTIONS: Tuple[Section, ...] = (
         paths=("verification",),
     ),
     Section(
+        id="overview.incidents",
+        label="RUCKUS ONE alarms",
+        tab="overview",
+        hint="What R1 is raising about this venue right now — its opinion, "
+             "separate from PISR's own checks.",
+        paths=("incidents",),
+    ),
+    Section(
         id="overview.access-points",
         label="Access point inventory",
         tab="overview",
@@ -129,9 +159,9 @@ SECTIONS: Tuple[Section, ...] = (
         checks=("switches-online", "switch-firmware", "switch-config-sync"),
     ),
     Section(
-        id="overview.venue-config",
+        id="config.venue-summary",
         label="Venue configuration",
-        tab="overview",
+        tab="config",
         hint="Management VLAN, mesh, and the radio defaults the venue asks for.",
         paths=("venue.managementVlan", "venue.mesh", "venue.meshEnabled",
                "venue.meshZeroTouch", "venue.radio"),
@@ -143,6 +173,173 @@ SECTIONS: Tuple[Section, ...] = (
         tab="overview",
         hint="Unit counts, residents and communication settings.",
         paths=("venue.property", "venue.isProperty"),
+    ),
+
+    # ── Config ───────────────────────────────────────────────────────
+    #
+    # One section per R1 ENDPOINT, which sounds like a leaky abstraction and is
+    # the point: a settings dump has no natural taxonomy, R1's own console
+    # groups these differently again, and a third grouping invented here would
+    # leave a reader unable to map the tab onto either. Grouping by what was
+    # pulled also makes each category a unit an admin can hide.
+    Section(
+        id="config.venue", label="Venue object", tab="config",
+        hint="GET /venues/{id} — the venue record itself.",
+    ),
+    Section(
+        id="config.radio", label="Radio settings", tab="config",
+        hint="GET /venues/{id}/apRadioSettings — channel method, width, power, "
+             "permitted channels.",
+    ),
+    Section(
+        id="config.mesh", label="Mesh settings", tab="config",
+        hint="GET /venues/{id}/apMeshSettings",
+    ),
+    Section(
+        id="config.mgmt-vlan", label="AP management VLAN (raw)", tab="config",
+        hint="GET /venues/{id}/apManagementTrafficVlanSettings",
+    ),
+    Section(
+        id="config.load-balancing", label="Load balancing & steering", tab="config",
+        hint="GET /venues/{id}/apLoadBalancingSettings — band balancing, client "
+             "steering, sticky-client thresholds.",
+    ),
+    Section(
+        id="config.available-channels", label="Available channels", tab="config",
+        hint="GET /venues/{id}/wifiAvailableChannels — what the regulatory "
+             "domain and AFC permit, per band and width.",
+    ),
+    Section(
+        id="config.client-admission", label="Client admission control", tab="config",
+        hint="GET /venues/{id}/apClientAdmissionControlSettings",
+    ),
+    Section(
+        id="config.directed-multicast", label="Directed multicast", tab="config",
+        hint="GET /venues/{id}/apDirectedMulticastSettings",
+    ),
+    Section(
+        id="config.smart-monitor", label="Smart monitor", tab="config",
+        hint="GET /venues/{id}/apSmartMonitorSettings",
+    ),
+    Section(
+        id="config.band-mode", label="Model band mode", tab="config",
+        hint="GET /venues/{id}/apModelBandModeSettings",
+    ),
+    Section(
+        id="config.lan-ports", label="LAN port settings", tab="config",
+        hint="GET /venues/{id}/lanPortSettings — per AP MODEL, the venue "
+             "default each AP inherits.",
+    ),
+    Section(
+        id="config.model-capabilities",
+        label="AP model capabilities & antenna defaults", tab="config",
+        hint="GET /venues/{id}/apModelCapabilities — includes external-antenna "
+             "gain and per-band enable. There is no separate antenna endpoint.",
+    ),
+    Section(
+        id="config.models", label="AP models in use", tab="config",
+        hint="GET /venues/{id}/apModels",
+    ),
+    Section(
+        id="config.aaa", label="AAA / CLI authentication", tab="config",
+        hint="GET /venues/{id}/aaaSettings",
+    ),
+    Section(
+        id="config.dos-protection", label="DoS protection", tab="config",
+        hint="GET /venues/{id}/apDosProtectionSettings",
+    ),
+    Section(
+        id="config.rogue-ap", label="Rogue AP detection", tab="config",
+        hint="GET /venues/{id}/rogueApSettings",
+    ),
+    Section(
+        id="config.syslog", label="Syslog", tab="config",
+        hint="GET /venues/{id}/syslogSettings",
+    ),
+    Section(
+        id="config.snmp", label="AP SNMP agent", tab="config",
+        hint="GET /venues/{id}/snmpAgentSettings",
+    ),
+    Section(
+        id="config.led", label="AP LEDs", tab="config",
+        hint="GET /venues/{id}/ledSettings — per AP model.",
+    ),
+    Section(
+        id="config.bss-coloring", label="BSS coloring", tab="config",
+        hint="GET /venues/{id}/apBssColoringSettings",
+    ),
+    Section(
+        id="config.cellular", label="Cellular", tab="config",
+        hint="GET /venues/{id}/apCellularSettings",
+    ),
+    Section(
+        id="config.antenna-type", label="Antenna type", tab="config",
+        hint="GET /venues/{id}/apModelAntennaTypeSettings — per AP model.",
+    ),
+    Section(
+        id="config.external-antenna", label="External antenna", tab="config",
+        hint="GET /venues/{id}/apModelExternalAntennaSettings — per-band enable "
+             "and gain, per model. Mostly an outdoor concern.",
+    ),
+    Section(
+        id="config.mdns-fencing", label="mDNS fencing", tab="config",
+        hint="GET /venues/{id}/apMulticastDnsFencingSettings",
+    ),
+    Section(
+        id="config.radius-options", label="RADIUS options", tab="config",
+        hint="GET /venues/{id}/apRadiusOptions — called-station and NAS id "
+             "formats.",
+    ),
+    Section(
+        id="config.reboot-timeout", label="Auto-reboot timers", tab="config",
+        hint="GET /venues/{id}/apRebootTimeoutSettings",
+    ),
+    Section(
+        id="config.tls-key", label="TLS enhanced key", tab="config",
+        hint="GET /venues/{id}/apTlsKeyEnhancedSettings",
+    ),
+    Section(
+        id="config.usb-ports", label="USB ports", tab="config",
+        hint="GET /venues/{id}/apModelUsbPortSettings — per AP model.",
+    ),
+    Section(
+        id="config.rogue-policy", label="Rogue policy", tab="config",
+        hint="GET /venues/{id}/roguePolicySettings",
+    ),
+    Section(
+        id="config.wifi-settings", label="Venue Wi-Fi settings", tab="config",
+        hint="GET /venues/{id}/wifiSettings",
+    ),
+    Section(
+        id="config.regulatory-channels", label="Default regulatory channels",
+        tab="config", hint="GET /venues/{id}/channels",
+    ),
+    Section(
+        id="config.syslog-profile", label="Syslog server profile", tab="config",
+        hint="GET /venues/{id}/syslogServerProfileSettings",
+    ),
+    Section(
+        id="config.dhcp-service-profile", label="DHCP service profile",
+        tab="config", hint="GET /venues/{id}/dhcpConfigServiceProfileSettings",
+    ),
+    Section(
+        id="config.trusted-ports", label="Trusted ports", tab="config",
+        hint="GET /venues/{id}/trustedPorts",
+    ),
+    Section(
+        id="config.radius-profiles", label="RADIUS server profiles", tab="config",
+        hint="GET /radiusServerProfiles — TENANT-WIDE, not scoped to this "
+             "venue. Shared secrets are redacted by api/scrub.py.",
+    ),
+    Section(
+        id="config.ap-groups", label="AP group settings", tab="config",
+        hint="Per group, with the useVenueSettings flags that say whether it "
+             "inherits from the venue or overrides it.",
+    ),
+    Section(
+        id="config.ap-overrides", label="Per-AP overrides", tab="config",
+        hint="Every AP's own configuration, and which parts of it differ from "
+             "what the venue specifies.",
     ),
 
     # ── Wireless ─────────────────────────────────────────────────────
@@ -210,45 +407,34 @@ SECTIONS: Tuple[Section, ...] = (
         checks=("ap-group-ssid-limit",),
     ),
 
-    # ── Wired & PoE ──────────────────────────────────────────────────
+    # ── Wired ────────────────────────────────────────────────────────
+    #
+    # The wire itself: what is plugged in, what the ports are doing, and which
+    # VLANs it all lands on. Power lives on its own tab — see below.
     Section(
-        id="wired.summary",
-        label="PoE headline tiles",
+        id="wired.ports",
+        label="Port headline tiles",
         tab="wired",
-        hint="Capacity, allocated, drawn, ports up.",
+        hint="Ports up, ports counting errors, addresses learned.",
     ),
     Section(
-        id="wired.poe-budget",
-        label="PoE budget per switch",
+        id="wired.clients",
+        label="Wired clients",
         tab="wired",
-        paths=("poe.switches",),
-        checks=("poe-budget",),
-    ),
-    Section(
-        id="wired.poe-standard",
-        label="PoE standard in use",
-        tab="wired",
-        paths=("poe.byType",),
+        hint="What is plugged in, from the switch MAC table — by switch, VLAN, "
+             "device type and port.",
+        # The whole card, one section. The wireless charts are hideable
+        # individually because they were already separate cards; splitting a
+        # new summary five ways would add admin noise for a distinction nobody
+        # has asked to make.
+        paths=("wiredClients",),
     ),
     Section(
         id="wired.link-speeds",
         label="Link speeds",
         tab="wired",
+        hint="What the up ports actually negotiated.",
         paths=("ports.bySpeed",),
-    ),
-    Section(
-        id="wired.aps-on-ports",
-        label="APs on switch ports",
-        tab="wired",
-        hint="The LLDP join between an AP and the port powering it.",
-        paths=("poe.apsOnPoe",),
-        checks=("ap-uplink-speed",),
-    ),
-    Section(
-        id="wired.top-poe-draws",
-        label="Biggest PoE draws",
-        tab="wired",
-        paths=("poe.topConsumers",),
     ),
     Section(
         id="wired.port-errors",
@@ -265,6 +451,36 @@ SECTIONS: Tuple[Section, ...] = (
         hint="Where each VLAN is declared against where it appears in traffic.",
         paths=("vlans",),
         checks=("undeclared-vlans",),
+    ),
+
+    # ── PoE ──────────────────────────────────────────────────────────
+    Section(
+        id="poe.summary",
+        label="PoE headline tiles",
+        tab="poe",
+        hint="Capacity, allocated, drawn. Port counts moved to Wired — they "
+             "are not a power question.",
+    ),
+    Section(
+        id="poe.budget",
+        label="PoE budget per switch",
+        tab="poe",
+        paths=("poe.switches",),
+        checks=("poe-budget",),
+    ),
+    Section(
+        id="poe.standard",
+        label="PoE standard in use",
+        tab="poe",
+        paths=("poe.byType",),
+    ),
+    Section(
+        id="poe.aps-on-ports",
+        label="APs on switch ports",
+        tab="poe",
+        hint="The LLDP join between an AP and the port powering it.",
+        paths=("poe.apsOnPoe",),
+        checks=("ap-uplink-speed",),
     ),
 
     # ── Addressing ───────────────────────────────────────────────────
@@ -357,7 +573,7 @@ SECTIONS: Tuple[Section, ...] = (
         tab="devices",
         hint="Full per-AP detail, including addressing and serials.",
         paths=("inventory.rows.aps",),
-        checks=("ap-naming", "ap-placement"),
+        checks=("ap-naming", "ap-placement", "ap-mesh-fallback", "ap-uptime"),
     ),
     Section(
         id="devices.switches",

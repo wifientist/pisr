@@ -18,6 +18,8 @@ empty network.
 """
 
 import logging
+
+import scrub
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -286,6 +288,255 @@ def switch_ports(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, 
 
 def clients(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, Any]]:
     return r1.clients.query_all_clients_for_venue(tenant_id, venue_id, CLIENT_FIELDS) or []
+
+
+# Venue-level configuration, one entry per R1 endpoint. The key is the
+# category the Config tab groups by, so "how it was pulled" is what the reader
+# sees — which is the honest organisation for a settings dump nobody can
+# usefully flatten.
+#
+# `switchSettings` IS NOT HERE, deliberately. It returns six keys, one of which
+# is the customer's switch admin password in plaintext, and the other useful
+# ones are two booleans. Reading a live credential into this process to display
+# `syslogEnabled` is not a trade worth making — api/scrub.py would catch it on
+# the way out, but the right answer is not to fetch it. See CLAUDE.md.
+VENUE_CONFIG_SOURCES = {
+    "loadBalancing": "apLoadBalancingSettings",
+    "availableChannels": "wifiAvailableChannels",
+    "clientAdmission": "apClientAdmissionControlSettings",
+    "directedMulticast": "apDirectedMulticastSettings",
+    "smartMonitor": "apSmartMonitorSettings",
+    "bandMode": "apModelBandModeSettings",
+    # Per AP MODEL, not per AP: a list with one entry per model present, each
+    # carrying its own lanPorts array. The venue-level default that a per-AP
+    # `lanPorts` override (visible in the on-demand detail) departs from.
+    # `apModelLanPortSettings` returns the identical payload; one is enough.
+    "lanPorts": "lanPortSettings",
+    # Includes externalAntenna gain and per-band enable, which is where the
+    # antenna defaults live — there is no separate antenna endpoint.
+    "modelCapabilities": "apModelCapabilities",
+    "models": "apModels",
+    "aaa": "aaaSettings",
+    "dosProtection": "apDosProtectionSettings",
+    "rogueAp": "rogueApSettings",
+    "syslog": "syslogSettings",
+    "snmp": "snmpAgentSettings",
+    "led": "ledSettings",
+    "bssColoring": "apBssColoringSettings",
+    "cellular": "apCellularSettings",
+    # Found in the OpenAPI spec under spec/ rather than by guessing. The first
+    # two sweeps missed every one of these because R1's naming is inconsistent
+    # about the `ap` prefix and about `Model` — it is `syslogSettings` but
+    # `apModelUsbPortSettings`, `rogueApSettings` but `apRebootTimeoutSettings`.
+    # Read the spec before probing for anything else.
+    "antennaType": "apModelAntennaTypeSettings",
+    "externalAntenna": "apModelExternalAntennaSettings",
+    "mdnsFencing": "apMulticastDnsFencingSettings",
+    "radiusOptions": "apRadiusOptions",
+    "rebootTimeout": "apRebootTimeoutSettings",
+    "tlsKey": "apTlsKeyEnhancedSettings",
+    "usbPorts": "apModelUsbPortSettings",
+    "roguePolicy": "roguePolicySettings",
+    "wifiSettings": "wifiSettings",
+    "regulatoryChannels": "channels",
+    "syslogProfile": "syslogServerProfileSettings",
+    "dhcpServiceProfile": "dhcpConfigServiceProfileSettings",
+    "trustedPorts": "trustedPorts",
+}
+
+# Settings that genuinely have no VENUE-level endpoint, confirmed against the
+# OpenAPI spec in spec/ rather than by guessing at names. Both exist, but not
+# at this level:
+#
+#   IoT controller  -> per AP only, /venues/{v}/aps/{serial}/iotSettings
+#   Location-based  -> tenant-wide profile objects, /lbsServerProfiles/query
+#
+# Everything else on the original wanted list turned out to exist and is in
+# VENUE_CONFIG_SOURCES above. The lesson is in the naming: two rounds of
+# probing missed seven endpoints that were there all along, because R1 is
+# inconsistent about the `ap` and `Model` prefixes. Search the spec first.
+VENUE_CONFIG_NOT_FOUND = (
+    "IoT controller (per-AP only)",
+    "Location-based services (tenant-wide profiles, not a venue setting)",
+)
+
+# Per AP-group. Each carries a `useVenueSettings` boolean, which is the whole
+# point: it says whether the group inherits or overrides.
+AP_GROUP_CONFIG_SOURCES = {
+    "clientAdmission": "apClientAdmissionControlSettings",
+    "bandMode": "apModelBandModeSettings",
+    "antennaType": "apModelAntennaTypeSettings",
+    "externalAntenna": "apModelExternalAntennaSettings",
+    "capabilities": "apModelCapabilities",
+    "radio": "radioSettings",
+    "availableChannels": "wifiAvailableChannels",
+}
+
+# Per-AP config is one call per AP — the bulk `/venues/aps/query` accepts the
+# nested field names and returns nothing for them, verified 2026-08-28. So a
+# large venue would be hundreds of requests, and this caps it rather than
+# letting a report quietly take a minute. The cap is reported in the payload so
+# the UI can say the list is partial instead of implying it is complete.
+AP_CONFIG_LIMIT = 100
+
+
+def venue_config_one(r1, tenant_id: Optional[str], venue_id: str,
+                     key: str) -> Any:
+    """
+    ONE venue-level settings block, by category key.
+
+    Deliberately one call per invocation rather than a loop over all nineteen.
+    An earlier version fetched them together behind its own ThreadPoolExecutor,
+    which was faster than sequential and wrong: `collect.build_report` already
+    fans the whole report out through asyncio's default executor, and a second
+    uncoordinated pool pushed concurrent requests past the R1 client's
+    `pool_maxsize` — urllib3 then logs "Connection pool is full, discarding
+    connection" and every request past the tenth pays a fresh TLS handshake
+    and is thrown away rather than pooled. See the note in r1api/client.py.
+
+    Registering each of these as its own read in `build_report` keeps ONE
+    executor and one bound on how many sockets PISR asks R1 for.
+    """
+    path = VENUE_CONFIG_SOURCES[key]
+    return _json(_get(r1, f"/venues/{venue_id}/{path}", tenant_id),
+                 f"venue {path}", None)
+
+
+def scrub_venue_config(blocks: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Scrub the assembled venue config, for the same reason the RADIUS profiles
+    are scrubbed at the fetch: a credential should never reach the report
+    object, only be caught leaving it. None of these blocks is known to carry
+    one today — R1 adding a field to one is the case this is here for.
+    """
+    cleaned, removed = scrub.scrub(blocks)
+    if removed:
+        logger.warning("pisr: venue config carried credential-shaped field(s): "
+                       "%s. Check whether that block should be fetched at all.",
+                       ", ".join(sorted(set(removed))[:8]))
+    return cleaned
+
+
+def radius_server_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    RADIUS server profiles. TENANT-WIDE, not venue-scoped — R1 offers no venue
+    filter, so this is every profile on the EC and the UI says so.
+
+    CARRIES SHARED SECRETS. `primary.sharedSecret` and `secondary.sharedSecret`
+    come back in plaintext, so they are removed HERE rather than only at the
+    report boundary.
+
+    Why both: `redact.redact` scrubs every report on the way out and is the
+    guarantee, but between `build_report` and that boundary the secret would
+    sit in the report object — which `checks.run_checks` walks, and which
+    copies fields into finding evidence. Scrubbing at the fetch means the
+    credential never enters the report at all, and the boundary scrub goes back
+    to being what it is meant to be: a backstop that normally finds nothing.
+    """
+    rows = _rows(_json(_get(r1, "/radiusServerProfiles", tenant_id),
+                       "radiusServerProfiles", []))
+    cleaned, removed = scrub.scrub(rows)
+    if removed:
+        logger.debug("pisr: removed %d shared secret(s) from RADIUS profiles at "
+                     "the fetch, as expected", len(removed))
+    return cleaned
+
+
+def ap_group_config(r1, tenant_id: Optional[str], venue_id: str,
+                    group_ids: List[str]) -> Dict[str, Any]:
+    """Group detail plus the sub-resources that carry a useVenueSettings flag."""
+    out: Dict[str, Any] = {}
+    for group_id in group_ids:
+        base = f"/venues/{venue_id}/apGroups/{group_id}"
+        entry: Dict[str, Any] = {
+            "detail": _json(_get(r1, base, tenant_id), f"apGroup {group_id}", None)}
+        for key, path in AP_GROUP_CONFIG_SOURCES.items():
+            entry[key] = _json(_get(r1, f"{base}/{path}", tenant_id),
+                               f"apGroup {group_id} {path}", None)
+        out[group_id] = entry
+    return out
+
+
+def ap_config(r1, tenant_id: Optional[str], serial: str) -> Optional[Dict[str, Any]]:
+    """
+    One AP's full configuration, including its per-radio parameters and the
+    `useVenueSettings` flags that say what it overrides.
+
+    NOTE the path: `/venues/aps/{serial}`, with no venue id. The sibling
+    `/venues/{venueId}/aps/{serial}` also exists and returns something quite
+    different — a three-key object whose payload is the AP's plaintext
+    `loginPassword`. That one is never called from here.
+    """
+    return _json(_get(r1, f"/venues/aps/{serial}", tenant_id),
+                 f"ap config {serial}", None)
+
+
+# What `/alarms/query` will actually return. Sent explicitly because the
+# endpoint echoes back only the names it recognises and silently drops the rest
+# — which is how this list was established in the first place, by offering it a
+# wide set and reading what came back.
+#
+# Notably absent, and worth knowing before someone goes looking: there is no
+# status, no clearedTime and no acknowledged flag. What this returns is the
+# ACTIVE alarm list, not a history, so PISR cannot say when something cleared
+# or whether anyone has looked at it.
+ALARM_FIELDS = [
+    "id", "name", "message", "reason", "severity",
+    "entityType", "entityId", "serialNumber", "apMac", "model",
+    "venueId", "startTime",
+]
+
+
+def incidents(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, Any]]:
+    """
+    The alarms RUCKUS ONE is currently raising for this venue.
+
+    This is the list behind the bell in the R1 console — what the platform has
+    already decided is worth someone's attention, as opposed to what PISR works
+    out for itself in `checks.py`. The two are worth showing side by side: a
+    venue can pass every check PISR runs and still have R1 shouting about it.
+
+    NOT the AI "Incidents" feature from RUCKUS Analytics, which is a separate
+    licensed product. `/events/query` exists as an endpoint but returned
+    EVENT-10002 ("something went wrong retrieving events") on every attempt
+    against a live tenant, so it is not used here.
+
+    Venue filtering is real, not decorative: `filters.venueId` cut a 16-alarm
+    tenant to the 4 that belong to one venue. Verified live 2026-08-28.
+
+    Read-only: a `*/query` POST.
+    """
+    body = _json(_post(r1, "/alarms/query",
+                       {"fields": ALARM_FIELDS, "page": 1, "pageSize": 200,
+                        "filters": {"venueId": [venue_id]}},
+                       tenant_id),
+                 "venue alarms", [])
+    return _rows(body)
+
+
+def wired_clients(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, Any]]:
+    """
+    The switch MAC address table — one row per address a switch has learned.
+
+    This is the only wired-client view R1 offers. `/venues/aps/clients/query`
+    above is AP-scoped despite its service being named for both, so without
+    this the report can see every wireless association and nothing at all
+    plugged into a wall.
+
+    A ROW IS A LEARNED MAC, NOT A CLIENT, and the difference is the whole
+    reason `shape.wired_client_card` exists rather than a bare tally. An AP's
+    uplink port has learned every wireless client behind it; a port feeding
+    another switch has learned everything behind that; the APs and switches
+    are in here as addresses themselves. Counting rows would report a number
+    several times larger than the number of things actually plugged in.
+
+    `clientIpv4Addr` is the only MAC->IP binding R1 exposes — there is no ARP
+    endpoint — and its coverage varies a lot by tenant, so treat a missing
+    address as unknown rather than as "no IP".
+
+    Read-only: a `*/query` POST, like every other call in this file.
+    """
+    return r1.switches.crawl_mac_table(tenant_id, [venue_id]) or []
 
 
 # ── wireless ─────────────────────────────────────────────────

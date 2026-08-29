@@ -24,6 +24,7 @@ controllers. Here there is only ever one, from .env, and the segment is kept so
 this file and the frontend that calls it stay diffable against their origin.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -41,6 +42,10 @@ import visibility
 from auth import role_of
 from r1_client import build_r1_client, get_controller, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
+import scrub as secret_scrub
+from services.pisr import fetch as fetch_module
+from services.pisr import shape as shape_module
+from services.pisr.fetch import ap_groups as fetch_ap_groups
 from reports.pisr import build_context as build_pdf_context
 from services.pisr import checks as check_registry
 from services.pisr.collect import build_report, list_venues
@@ -202,8 +207,9 @@ async def get_report_pdf(request: Request,
     context = build_pdf_context(report, cfg.name, label or tenant_id)
 
     template = _jinja().get_template("reports/pisr.html")
-    # The section guards, injected here rather than added to build_context so
-    # that api/reports/pisr.py stays byte-identical to its rtools2 original.
+    # The section guards, injected here rather than added to build_context:
+    # which sections a reader may see is a per-request question, and the
+    # context builder shapes one report the same way every time.
     # They only remove headings — the data behind a hidden section was already
     # emptied by `redact` above, which is the part that actually enforces.
     pdf = WeasyHTML(string=template.render(
@@ -220,6 +226,80 @@ async def get_report_pdf(request: Request,
                 context["findings_total"], len(hidden), len(pdf))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/{controller_id}/config/detail")
+async def get_config_detail(request: Request,
+                            controller_id: int,
+                            venue_id: str = Query(..., description="Venue to read"),
+                            tenant_id: Optional[str] = Query(None)):
+    """
+    AP-group and per-AP configuration, on demand.
+
+    SEPARATE FROM THE REPORT ON PURPOSE. This is one R1 request per AP group,
+    per group sub-resource, and per AP — a 200-unit MDU with a per-unit AP
+    group is several hundred calls. Putting that behind every report would slow
+    the common case to serve a tab most readers never open, so the Config tab
+    shows the venue level immediately and fetches this when someone asks.
+
+    Everything the report route does, this does too. It is a second path to
+    R1 data, so it repeats the scope check and the scrub rather than assuming
+    the report route already handled them — the download endpoint taught that
+    lesson once already.
+    """
+    cfg = get_controller(controller_id)
+    override = resolve_tenant(cfg, tenant_id)
+    _require_scope(request, override, venue_id)
+
+    role = role_of(request)
+    hidden = visibility.hidden_for(role)
+    if "config.ap-overrides" in hidden and "config.ap-groups" in hidden:
+        # Both halves hidden means the button is not rendered for this reader,
+        # so a request here is either a stale tab or somebody trying the URL.
+        # 403 rather than an empty list: an empty result would read as "this
+        # venue has no AP groups", which is a different and untrue statement.
+        raise HTTPException(403, "Configuration detail is not shown at this "
+                                 "access level.")
+
+    r1 = build_r1_client(cfg)
+    # to_thread like every other fetch here: the fetch layer is synchronous
+    # requests, and PISR fans out through threads rather than an async client.
+    groups = await asyncio.to_thread(fetch_ap_groups, r1, override, venue_id)
+    group_ids = [g.get("id") for g in groups if g.get("id")]
+
+    group_config = {}
+    if group_ids:
+        group_config = await asyncio.to_thread(
+            fetch_module.ap_group_config, r1, override, venue_id, group_ids)
+
+    aps = await asyncio.to_thread(fetch_module.access_points, r1, override, venue_id)
+    serials = [ap.get("serialNumber") for ap in aps
+               if ap.get("serialNumber")][:fetch_module.AP_CONFIG_LIMIT]
+
+    ap_config = {}
+    if serials:
+        results = await asyncio.gather(
+            *(asyncio.to_thread(fetch_module.ap_config, r1, override, serial)
+              for serial in serials),
+            return_exceptions=True)
+        for serial, result in zip(serials, results):
+            if not isinstance(result, Exception):
+                ap_config[serial] = result
+            else:
+                logger.warning("pisr: AP config failed for %s: %s", serial, result)
+
+    detail = shape_module.config_detail(groups, group_config, ap_config, len(aps))
+    logger.info("pisr: config detail for venue=%s user=%s role=%s "
+                "(%d group(s), %d AP(s), %d override(s))",
+                venue_id, getattr(request.state, "pisr_user", "-"), role,
+                len(detail["groups"]), detail["apShown"],
+                detail["groupOverrideCount"] + detail["apOverrideCount"])
+
+    # Scrubbed like everything else. `/venues/aps/{serial}` is the safe path —
+    # its sibling `/venues/{venueId}/aps/{serial}` returns a plaintext
+    # loginPassword and is never called — but this is a raw config dump and the
+    # guarantee should not rest on that staying true.
+    return secret_scrub.scrub_report(detail)
 
 
 @router.get("/{controller_id}/checks")

@@ -24,10 +24,12 @@ milliwatts, and `poeUtilization` is allocated power, NOT a percentage. Port
 """
 
 import ipaddress
+import json
 import logging
 import re
 from collections import Counter, defaultdict
-from typing import Any, Dict, Iterable, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,69 @@ def _is_transitional(value: Optional[str]) -> bool:
 
 
 SPEED_RE = re.compile(r"(\d+)\s*mbps", re.I)
+
+# meshRole values that mean "this AP is NOT meshing". Observed live: "DISABLED"
+# on a venue with mesh off, and null. The rest are inferred from the vocabulary
+# R1 uses elsewhere, which is why `_is_meshing` treats an UNRECOGNISED value as
+# not-meshing rather than guessing: a check that accuses an AP of falling back
+# to mesh had better be right, and the column shows the raw value regardless.
+MESH_WIRED_ROLES = {"", "disabled", "none", "off", "root", "rap", "rootap",
+                    "wired", "ethernet"}
+MESH_ROLES = {"map", "emap", "mesh", "meshap"}
+
+
+def _duration_text(seconds: Any) -> Optional[str]:
+    """
+    Seconds as something a person reads. Shaped here so both renderers and the
+    checks' evidence rows print the same string without either of them
+    formatting a duration.
+    """
+    total = int(_num(seconds, 0))
+    if total <= 0:
+        return None
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if total >= size:
+            value = total // size
+            return f"{value} {unit}{'s' if value != 1 else ''}"
+    return f"{total} seconds"
+
+
+def _is_meshing(role: Optional[str]) -> bool:
+    """
+    Is this AP carrying its traffic over the air instead of its cable?
+
+    The install-validation signal nobody looks for. A mesh fallback AP is
+    online, provisioned, broadcasting and serving clients — green on every
+    other view in this report — while its Ethernet drop is dead, its PoE port
+    is dead, or it was never patched. The crew leaves site and the site works,
+    badly, until someone measures throughput.
+
+    Deliberately conservative. Only values that clearly mean "meshing" count;
+    anything unfamiliar is left alone rather than reported, because the cost of
+    a false accusation here is a crew pulling a good cable.
+    """
+    value = _norm(role)
+    if not value or value in MESH_WIRED_ROLES:
+        return False
+    return value in MESH_ROLES or "mesh" in value
+
+
+def _epoch_ms_iso(value: Any) -> Optional[str]:
+    """
+    Epoch milliseconds to an ISO string, or None.
+
+    R1 sends these as ints and sometimes as floats (1785702964230.0), so the
+    int() is not decoration — datetime.fromtimestamp is fine with a float but
+    the surrounding code compares and sorts these, and a float id sorts oddly
+    against an int one.
+    """
+    ms = _num(value, 0)
+    if ms <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 # ── small helpers ────────────────────────────────────────────
@@ -448,8 +513,19 @@ def ap_views(aps: List[Dict[str, Any]],
             "apGroup": group_names.get(ap.get("apGroupId")) or ap.get("apGroupName"),
             "clients": int(_num(ap.get("clientCount"))),
             "meshRole": ap.get("meshRole"),
+            # Precomputed so `checks.py` stays a pure reader and the mesh
+            # vocabulary lives in exactly one place.
+            "meshing": _is_meshing(ap.get("meshRole")),
             "lastSeen": ap.get("lastSeenTime"),
+            # SECONDS. R1 does not label the unit and this is inferred from the
+            # magnitudes a live tenant returns — values clustered at 1.9M-6.5M,
+            # which is 22 to 75 days and plausible for a settled fleet. Read as
+            # milliseconds the same numbers would be 30 minutes to 2 hours,
+            # which no mixed fleet clusters into. If every AP ever starts
+            # reporting "32 minutes", this assumption is what to revisit.
             "uptime": ap.get("uptime"),
+            "uptimeSeconds": int(_num(ap.get("uptime"), 0)) or None,
+            "uptimeText": _duration_text(ap.get("uptime")),
             "placed": bool(ap.get("floorplanId")),
             "tags": [t for t in (ap.get("tags") or []) if t] if isinstance(ap.get("tags"), list)
                     else ap.get("tags"),
@@ -1049,6 +1125,526 @@ def port_card(ports: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# R1 alarm severities, most serious first. Anything it sends that is not on
+# this list sorts last rather than being dropped — a severity nobody has seen
+# before is exactly the one worth showing.
+ALARM_SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2, "warning": 3, "info": 4}
+
+
+def _alarm_text(raw: Any, names: Dict[str, str], fallback: str) -> str:
+    """
+    R1's alarm message, made readable.
+
+    `message` arrives as a JSON STRING wrapping a template, not as prose:
+
+        '{"message_template":"AP @@apName disconnected from the cloud controller."}'
+
+    The `@@token` placeholders are substituted by the R1 console from its own
+    context, which PISR does not have — so left alone they render literally and
+    the reader sees "@@apName" where a name should be. Every token is therefore
+    replaced with the device's real name where the report knows it, and with
+    the serial where it does not, which is still more use than the raw token.
+
+    Anything unparseable falls back to `fallback` (the alarm's `name`), because
+    an alarm with an ugly title is worth showing and an alarm swallowed by a
+    JSON error is not.
+    """
+    text = ""
+    if isinstance(raw, dict):
+        text = raw.get("message_template") or raw.get("message") or ""
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            text = (parsed.get("message_template") or parsed.get("message") or ""
+                    if isinstance(parsed, dict) else raw)
+        except ValueError:
+            text = raw
+    text = (text or "").strip()
+    if not text:
+        return fallback
+
+    def swap(match: "re.Match") -> str:
+        return names.get(match.group(1), fallback)
+
+    return re.sub(r"@@(\w+)", swap, text).strip()
+
+
+def incident_card(alarms: List[Dict[str, Any]], aps: List[Dict[str, Any]],
+                  switches: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    What RUCKUS ONE is already raising about this venue.
+
+    Deliberately kept apart from `verification`. The checks in `checks.py` are
+    PISR's own opinion about whether an install looks finished; this is the
+    platform's opinion about whether the venue is healthy right now, and the
+    two disagree usefully. A venue can pass every check here and still have R1
+    shouting about an AP that dropped off an hour ago — or the reverse, where
+    R1 is quiet because everything it monitors is nominal while three SSIDs
+    were never activated.
+
+    ACTIVE ALARMS ONLY. The endpoint exposes no status, no cleared time and no
+    acknowledgement, so there is nothing to filter and nothing to say about
+    history. Do not add a "recently cleared" view without checking that R1 has
+    started returning the field for it — see `fetch.ALARM_FIELDS`.
+    """
+    # Serial and MAC both, because the alarm rows key on serialNumber while
+    # some entity types only carry a MAC.
+    names: Dict[str, str] = {}
+    for ap in aps:
+        for key in (ap.get("serial"), _mac(ap.get("mac"))):
+            if key and ap.get("name"):
+                names[key] = ap["name"]
+    for sw in switches:
+        for key in (sw.get("serialNumber"), _mac(sw.get("switchMac") or sw.get("id"))):
+            if key and sw.get("name"):
+                names[key] = sw["name"]
+
+    rows = []
+    for alarm in alarms:
+        serial = alarm.get("serialNumber") or alarm.get("entityId")
+        mac = _mac(alarm.get("apMac"))
+        device = names.get(serial) or names.get(mac) or serial or "unknown device"
+        # One name for every placeholder in the template. The tokens differ by
+        # entity type (@@apName, @@edgeName, @@switchName) and resolving each
+        # to the same device is correct — an alarm names one thing.
+        token_names = {token: device for token in
+                       ("apName", "edgeName", "switchName", "deviceName", "name")}
+        severity = str(alarm.get("severity") or "").strip()
+        rows.append({
+            "id": alarm.get("id"),
+            # R1's own type, e.g. ApDisConnected. Kept raw: it is the thing to
+            # search their documentation for.
+            "type": alarm.get("name"),
+            "severity": severity or "Unknown",
+            "entityType": alarm.get("entityType"),
+            "device": device,
+            "serial": serial,
+            "model": alarm.get("model"),
+            "reason": alarm.get("reason") or None,
+            "text": _alarm_text(alarm.get("message"), token_names,
+                                alarm.get("name") or "Alarm"),
+            # Epoch milliseconds, and occasionally as a float. int() first or
+            # the ISO conversion raises on the ones that arrive as 1.78e12.
+            "raisedAt": _epoch_ms_iso(alarm.get("startTime")),
+            "raisedAtMs": int(_num(alarm.get("startTime"))) or None,
+        })
+
+    rows.sort(key=lambda r: (ALARM_SEVERITY_ORDER.get(r["severity"].lower(), 9),
+                             -(r["raisedAtMs"] or 0)))
+
+    return {
+        "total": len(rows),
+        "rows": rows,
+        "bySeverity": [{"label": label, "count": n} for label, n in
+                       sorted(Counter(r["severity"] for r in rows).items(),
+                              key=lambda kv: ALARM_SEVERITY_ORDER.get(kv[0].lower(), 9))],
+        "byType": _tally(rows, "type", unknown="Unknown"),
+        # So the card can say "3 APs and an Edge" rather than just a number.
+        "byEntity": _tally(rows, "entityType", unknown="Unknown"),
+        # The oldest one still raised. An alarm from three weeks ago on a fresh
+        # install is a different conversation from one raised this morning.
+        "oldest": min((r["raisedAt"] for r in rows if r["raisedAt"]), default=None),
+    }
+
+
+# Keys that carry no meaning for a reader and only lengthen the tree. Dropped
+# from the config view, never from anything the checks read.
+CONFIG_NOISE_KEYS = frozenset({"id", "tenantId", "venueId", "softDeleted",
+                               "lastUpdated", "requestId"})
+
+
+def _config_clean(node: Any, depth: int = 0) -> Any:
+    """
+    A settings blob, tidied for display and nothing else.
+
+    Drops the identifiers R1 echoes back into every response — they are the
+    same value on every branch and they push the interesting fields off the
+    screen. Everything else is kept verbatim, including fields nobody
+    recognises: this view exists to show what is actually set, and a shaper
+    that decides what matters is a shaper that hides the surprise.
+    """
+    if depth > 12 or node is None:
+        return node
+    if isinstance(node, dict):
+        return {k: _config_clean(v, depth + 1) for k, v in sorted(node.items())
+                if k not in CONFIG_NOISE_KEYS}
+    if isinstance(node, list):
+        return [_config_clean(v, depth + 1) for v in node]
+    return node
+
+
+def _override_flags(node: Any) -> List[str]:
+    """
+    Every `useVenueSettings: false` in a blob, by path.
+
+    That flag is the one thing in this data that answers the question an
+    install review actually asks: is this AP or group running what the venue
+    says, or something of its own? Collected here so the UI can lead with it
+    instead of making someone open a tree to find out.
+    """
+    found: List[str] = []
+
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                here = f"{path}.{key}" if path else key
+                if key == "useVenueSettings" and child is False:
+                    found.append(path or "root")
+                else:
+                    walk(child, here)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, path)
+
+    walk(node, "")
+    return sorted(set(found))
+
+
+def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
+                radio: Any, mesh: Any, mgmt_vlan: Any,
+                groups: List[Dict[str, Any]], ap_total: int,
+                radius_profiles: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Everything R1 will say about how this venue is configured, in three levels.
+
+    ORGANISED BY WHERE IT CAME FROM, not by what it means. Each category is one
+    R1 endpoint, which sounds like a leaky abstraction and is deliberate: a
+    settings dump has no natural taxonomy, R1's own console groups these
+    differently again, and inventing a third grouping would mean a reader
+    cannot map what they see here onto either. It also makes the categories a
+    unit an admin can hide, because each one is a thing that was pulled.
+
+    Nothing is interpreted. The tree is what R1 returned, minus the identifiers
+    it echoes into every response — including fields nobody recognises, because
+    the point of a config view is to show what is set rather than what someone
+    thought worth keeping.
+
+    VENUE LEVEL ONLY. Group and per-AP config are fetched on demand by
+    `/pisr/{cid}/config/detail`, not here, because both are one call per object:
+    a 200-unit MDU has a per-unit AP group each, so eagerly loading them would
+    put ~600 requests behind every report — most of them for a tab nobody
+    opened. This returns the counts so the tab can offer the button and say
+    what it would cost.
+    """
+    categories = []
+
+    # camelCase key -> the kebab slug the visibility catalogue uses. Emitted
+    # so the frontend reads `config.<slug>` straight off the payload instead of
+    # carrying its own copy of this mapping — one more list to drift.
+    SLUGS = {"venue": "venue", "radio": "radio", "mesh": "mesh",
+             "mgmtVlan": "mgmt-vlan", "loadBalancing": "load-balancing",
+             "availableChannels": "available-channels",
+             "clientAdmission": "client-admission",
+             "directedMulticast": "directed-multicast",
+             "smartMonitor": "smart-monitor", "bandMode": "band-mode",
+             "lanPorts": "lan-ports", "modelCapabilities": "model-capabilities",
+             "models": "models", "aaa": "aaa",
+             "dosProtection": "dos-protection", "rogueAp": "rogue-ap",
+             "syslog": "syslog", "snmp": "snmp", "led": "led",
+             "bssColoring": "bss-coloring", "cellular": "cellular",
+             "radiusProfiles": "radius-profiles",
+             "antennaType": "antenna-type", "externalAntenna": "external-antenna",
+             "mdnsFencing": "mdns-fencing", "radiusOptions": "radius-options",
+             "rebootTimeout": "reboot-timeout", "tlsKey": "tls-key",
+             "usbPorts": "usb-ports", "roguePolicy": "rogue-policy",
+             "wifiSettings": "wifi-settings",
+             "regulatoryChannels": "regulatory-channels",
+             "syslogProfile": "syslog-profile",
+             "dhcpServiceProfile": "dhcp-service-profile",
+             "trustedPorts": "trusted-ports"}
+
+    def add(key: str, label: str, source: str, payload: Any, hint: str = "") -> None:
+        categories.append({
+            "key": key, "slug": SLUGS.get(key, key),
+            "label": label, "source": source, "hint": hint,
+            # None means R1 did not answer, which is different from {} meaning
+            # it answered with nothing configured. The UI says so.
+            "unavailable": payload is None,
+            "data": _config_clean(payload) if payload is not None else None,
+        })
+
+    add("venue", "Venue", "GET /venues/{id}", _config_clean(venue_raw),
+        "The venue object itself.")
+    add("radio", "Radio", "GET /venues/{id}/apRadioSettings", radio,
+        "Per-band channel method, width, power and the permitted channel list.")
+    add("mesh", "Mesh", "GET /venues/{id}/apMeshSettings", mesh)
+    add("mgmtVlan", "AP management VLAN",
+        "GET /venues/{id}/apManagementTrafficVlanSettings",
+        {"managementVlan": mgmt_vlan} if mgmt_vlan is not None else None)
+    for key, label, hint in (
+        ("loadBalancing", "Load balancing & steering",
+         "Band balancing, client steering, sticky-client thresholds."),
+        ("availableChannels", "Available channels",
+         "What the regulatory domain and AFC permit, per band and width."),
+        ("clientAdmission", "Client admission control",
+         "Minimum client counts and radio load before admission is refused."),
+        ("directedMulticast", "Directed multicast", ""),
+        ("smartMonitor", "Smart monitor", ""),
+        ("bandMode", "Model band mode", "Per AP model, where set."),
+        ("lanPorts", "LAN port settings",
+         "Per AP MODEL — the venue default each AP inherits. A per-AP "
+         "`lanPorts` override shows up in the on-demand detail below."),
+        ("modelCapabilities", "AP model capabilities & antenna defaults",
+         "What each model supports, including external-antenna gain and "
+         "per-band enable. There is no separate antenna endpoint."),
+        ("models", "AP models in use", ""),
+        ("aaa", "AAA / CLI authentication",
+         "Console and SSH authentication order, and command accounting."),
+        ("dosProtection", "DoS protection", ""),
+        ("rogueAp", "Rogue AP detection", ""),
+        ("syslog", "Syslog", ""),
+        ("snmp", "AP SNMP agent", ""),
+        ("led", "AP LEDs", "Per AP model."),
+        ("bssColoring", "BSS coloring", ""),
+        ("cellular", "Cellular", "Only meaningful on a cellular-capable model."),
+        ("antennaType", "Antenna type", "Per AP model — sector or omni, where "
+         "the model offers a choice."),
+        ("externalAntenna", "External antenna", "Per AP model — per-band enable "
+         "and gain. Mostly an outdoor concern."),
+        ("mdnsFencing", "mDNS fencing", ""),
+        ("radiusOptions", "RADIUS options",
+         "Called-station and NAS id formats sent with RADIUS requests."),
+        ("rebootTimeout", "Auto-reboot timers",
+         "How long an AP tolerates losing its gateway or the cloud before "
+         "restarting itself."),
+        ("tlsKey", "TLS enhanced key", ""),
+        ("usbPorts", "USB ports", "Per AP model."),
+        ("roguePolicy", "Rogue policy",
+         "What to do about a rogue, as opposed to whether to look for one."),
+        ("wifiSettings", "Venue Wi-Fi settings", ""),
+        ("regulatoryChannels", "Default regulatory channels",
+         "What the regulatory domain permits, before the venue narrows it."),
+        ("syslogProfile", "Syslog server profile", ""),
+        ("dhcpServiceProfile", "DHCP service profile", ""),
+        ("trustedPorts", "Trusted ports", ""),
+    ):
+        add(key, label,
+            f"GET /venues/{{id}}/{fetch_source(key)}", venue_config.get(key), hint)
+
+    # Tenant-wide, not venue-scoped: R1 offers no venue filter on this one, so
+    # it is every profile on the EC. Said in the hint rather than implied, or a
+    # reader takes it for this venue's RADIUS configuration.
+    #
+    # Shared secrets come back in plaintext and api/scrub.py removes them from
+    # every report — see the test written against this exact shape.
+    add("radiusProfiles", "RADIUS server profiles", "GET /radiusServerProfiles",
+        radius_profiles,
+        "Tenant-wide, not scoped to this venue. Shared secrets are redacted.")
+
+    # R1 returns the per-model blocks for EVERY model it knows — fifty of them
+    # on this tenant, of which three are installed. Left raw, the LAN port
+    # settings a crew actually needs are three rows lost in fifty. So models
+    # present at the venue are marked and sorted to the front; nothing is
+    # dropped, because a venue-level default for a model not yet installed is
+    # still the setting the next AP will inherit.
+    present = {str(m).lower() for m in
+               ((venue_config.get("models") or {}).get("models") or [])}
+    if present:
+        for category in categories:
+            if category["key"] not in ("lanPorts", "led", "usbPorts",
+                                       "antennaType", "externalAntenna"):
+                continue
+            rows = category.get("data")
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    row["_atThisVenue"] = str(row.get("model", "")).lower() in present
+            category["data"] = sorted(
+                rows, key=lambda r: (not (isinstance(r, dict) and r.get("_atThisVenue")),
+                                     str(isinstance(r, dict) and r.get("model") or "")))
+            category["presentCount"] = sum(
+                1 for r in rows if isinstance(r, dict) and r.get("_atThisVenue"))
+            category["totalCount"] = len(rows)
+
+    return {
+        "categories": categories,
+        # Recorded so the tab can say what it looked for and did not find,
+        # rather than leaving a reader to wonder whether the setting is absent
+        # or the report simply never asked. See fetch.VENUE_CONFIG_NOT_FOUND.
+        "notAvailable": list(FETCH_NOT_FOUND),
+        # What the on-demand call would cost, so the button can say it rather
+        # than the user discovering it.
+        "groupTotal": len(groups),
+        "apTotal": ap_total,
+        "detailCalls": len(groups) * (1 + len(AP_GROUP_SOURCE_COUNT)) + ap_total,
+    }
+
+
+# Kept as a name rather than a literal so the arithmetic above follows
+# fetch.AP_GROUP_CONFIG_SOURCES if a source is added.
+AP_GROUP_SOURCE_COUNT: Tuple[str, ...] = ("clientAdmission", "bandMode")
+
+
+def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
+                  ap_config: Dict[str, Any], ap_total: int) -> Dict[str, Any]:
+    """
+    Group and per-AP configuration, shaped for the on-demand call.
+
+    Split from `config_card` because it costs one R1 request per group and per
+    AP. The thing worth reading here is `overrides`: every `useVenueSettings:
+    false` in the blob, which is the only field in this data that answers
+    "is this running what the venue says, or something of its own".
+    """
+    group_rows = []
+    for group in groups:
+        gid = group.get("id")
+        entry = group_config.get(gid) or {}
+        blob = {k: v for k, v in entry.items() if v is not None}
+        detail = entry.get("detail") or {}
+        group_rows.append({
+            "id": gid,
+            "name": group.get("name") or ("Default" if detail.get("isDefault") else gid),
+            "apCount": len(detail.get("apSerialNumbers") or []),
+            "isDefault": bool(detail.get("isDefault")),
+            "isEnforced": bool(detail.get("isEnforced")),
+            "overrides": _override_flags(blob),
+            "data": _config_clean(blob),
+        })
+
+    ap_rows = []
+    for serial, blob in sorted(ap_config.items()):
+        if not blob:
+            continue
+        overrides = _override_flags(blob)
+        ap_rows.append({
+            "serial": serial,
+            "name": blob.get("name") or serial,
+            "model": blob.get("model"),
+            "apGroupId": blob.get("apGroupId"),
+            # An AP with nothing here runs exactly what the venue says, which
+            # is what most of them should say.
+            "overrides": overrides,
+            "overridden": bool(overrides),
+            "data": _config_clean(blob),
+        })
+
+    return {
+        "groups": group_rows,
+        "aps": ap_rows,
+        "apOverrideCount": sum(1 for row in ap_rows if row["overridden"]),
+        "groupOverrideCount": sum(1 for row in group_rows if row["overrides"]),
+        # Said out loud rather than implied: "no overrides" on a partial list
+        # is a different statement from "no overrides".
+        "apTotal": ap_total,
+        "apShown": len(ap_rows),
+        "apTruncated": ap_total > len(ap_rows),
+    }
+
+
+from services.pisr.fetch import VENUE_CONFIG_NOT_FOUND as FETCH_NOT_FOUND  # noqa: E402
+
+
+def fetch_source(key: str) -> str:
+    """The R1 path fragment a venue-config category came from, for display."""
+    from services.pisr.fetch import VENUE_CONFIG_SOURCES
+    return VENUE_CONFIG_SOURCES.get(key, key)
+
+
+def wired_client_card(mac_rows: List[Dict[str, Any]], ports: List[Dict[str, Any]],
+                      aps: List[Dict[str, Any]],
+                      switches: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    What is plugged into the switches, from the MAC address table.
+
+    THE COUNTING IS THE WHOLE PROBLEM. R1 hands back one row per address a
+    switch has learned, and most of them are not a wired client:
+
+      * an AP's uplink port has learned every wireless client behind it, so a
+        busy AP contributes dozens of rows that are already counted on the
+        Wireless tab;
+      * the APs and switches are in the table as addresses in their own right;
+      * a port feeding another switch or a router has learned everything
+        behind it, which is a real fact about the port and not a client on it.
+
+    Reporting `len(mac_rows)` as "wired clients" would therefore be several
+    times the number of things actually plugged into a wall, and would move
+    when someone joined the Wi-Fi. So rows are classified, and the ones set
+    aside are counted out loud rather than silently dropped — a number that
+    quietly excludes things is worse than one that explains itself.
+
+    The first two classes are separable with data the report already holds: the
+    AP-to-port join comes from LLDP the same way `poe_card` builds it, and the
+    infrastructure addresses are the APs' and switches' own MACs. The third —
+    a downstream switch nobody manages — is NOT separable, and is left in. It
+    shows up as a port with an implausible number of addresses on it, which is
+    what `topPorts` is for: on a clean install every port has one or two, and a
+    port with fifteen is either a hub, an unmanaged switch, or a mislabelled
+    uplink.
+    """
+    ap_macs = {_mac(ap.get("mac")) for ap in aps if ap.get("mac")}
+    switch_macs = {_mac(sw.get("switchMac") or sw.get("id"))
+                   for sw in switches if sw.get("switchMac") or sw.get("id")}
+    infra_macs = {m for m in (ap_macs | switch_macs) if m}
+
+    # Ports with an AP on the far end, keyed the way the MAC rows identify a
+    # port. `switchPortId` is R1's own composite ("<switch mac>_<port>") and is
+    # the only field the two DTOs share exactly, so the key is rebuilt from the
+    # parts rather than parsed out of it.
+    ap_names = {_norm(ap.get("name")) for ap in aps if ap.get("name")}
+    ap_port_keys = set()
+    for port in ports:
+        neighbour_mac = _mac(port.get("neighborMacAddress")
+                             or port.get("neighborPortMacAddress"))
+        neighbour_name = _norm(port.get("neighborName"))
+        # LLDP often appends a radio suffix to the AP's name, the same quirk
+        # poe_card works around.
+        is_ap = (neighbour_mac in ap_macs if neighbour_mac else False) or (
+            neighbour_name in ap_names
+            or neighbour_name.rsplit(".", 1)[0] in ap_names if neighbour_name else False)
+        if is_ap:
+            ap_port_keys.add((_mac(port.get("switchMac")),
+                              _norm(port.get("portIdentifier"))))
+
+    wired, behind_aps, infrastructure = [], 0, 0
+    for row in mac_rows:
+        if _mac(row.get("clientMac")) in infra_macs:
+            infrastructure += 1
+            continue
+        if (_mac(row.get("switchMac")), _norm(row.get("switchPort"))) in ap_port_keys:
+            behind_aps += 1
+            continue
+        wired.append(row)
+
+    # VLAN label carries the name where R1 has one — "12 (VOICE)" reads far
+    # better than "12" on a site where the numbers mean nothing to the reader.
+    def vlan_label(row: Dict[str, Any]) -> str:
+        vlan = row.get("clientVlan")
+        if vlan in (None, ""):
+            return "Unknown"
+        name = (row.get("vlanName") or "").strip()
+        return f"{vlan} ({name})" if name else str(vlan)
+
+    port_counts = Counter(
+        f'{row.get("switchName") or "?"} · {row.get("switchPort") or "?"}'
+        for row in wired)
+
+    return {
+        "total": len(wired),
+        # Every row R1 returned, so the three numbers below add up in public.
+        "learned": len(mac_rows),
+        "behindAps": behind_aps,
+        "infrastructure": infrastructure,
+        "switchCount": len({_mac(row.get("switchMac")) for row in wired}),
+        "portsInUse": len(port_counts),
+        # R1 populates clientIpv4Addr from its own DHCP/ARP snooping and its
+        # coverage runs anywhere from a third to most of the table, so the
+        # count is reported rather than the absence being read as "no IP".
+        "withIp": sum(1 for row in wired if (row.get("clientIpv4Addr") or "").strip()),
+        "withName": sum(1 for row in wired
+                        if (row.get("clientName") or row.get("dhcpClientHostName") or "").strip()),
+        "bySwitch": _tally(wired, "switchName", unknown="Unknown switch"),
+        "byVlan": [{"label": label, "count": count}
+                   for label, count in sorted(Counter(vlan_label(r) for r in wired).items(),
+                                              key=lambda kv: (-kv[1], kv[0]))],
+        "byType": _tally(wired, "clientType", unknown="Unclassified"),
+        # Capped: this is a summary, and a site with three hundred ports should
+        # not push everything else off the card.
+        "topPorts": [{"label": label, "count": count}
+                     for label, count in port_counts.most_common(10)],
+    }
+
+
 # ── wireless ─────────────────────────────────────────────────
 
 def wireless_card(networks: List[Dict[str, Any]], activations: List[Dict[str, Any]],
@@ -1267,9 +1863,23 @@ def radio_card(aps: List[Dict[str, Any]]) -> Dict[str, Any]:
     The channel plan as the APs report it — one entry per band, with the channels
     in use and how wide they are. Co-channel APs on a small site are an install
     fault you can only see laid out like this.
+
+    `channels` and `widths` are tallied independently, which answers "which
+    channels are in use" and "which widths are in use" but not "which channels
+    at which width" — and on a band running more than one width those are
+    different questions. A 40 MHz radio and a 20 MHz radio on the same channel
+    number are not the same finding. `byWidth` carries the join so the UI can
+    bucket them; the two flat tallies above it are untouched, because the
+    spectrum chart and the checks read those and neither should change.
+
+    A radio reporting a channel but no width gets its own bucket rather than
+    being folded into 20 MHz. Guessing there would put radios on a row they may
+    not be on, and the buckets are meant to sum to the band's radio count.
     """
-    bands: Dict[str, Dict[str, Counter]] = defaultdict(
-        lambda: {"channels": Counter(), "widths": Counter(), "power": Counter()})
+    bands: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {"channels": Counter(), "widths": Counter(), "power": Counter(),
+                 # (width MHz, or 0 for not reported) -> Counter of channels
+                 "byWidth": defaultdict(Counter)})
     radios_seen = 0
     for ap in aps:
         if ap["state"] != "online":
@@ -1277,12 +1887,36 @@ def radio_card(aps: List[Dict[str, Any]]) -> Dict[str, Any]:
         for radio in ap["radios"]:
             band = radio.get("band") or "unknown"
             radios_seen += 1
+            # Digits only, and NOT _width_mhz — that helper falls back to 20
+            # for anything unparseable, which is right for placing a block on
+            # the spectrum chart and wrong here, where it would quietly file
+            # unknown-width radios under 20 MHz. 0 means the radio reported no
+            # width we can read.
+            digits = "".join(c for c in str(radio.get("width") or "") if c.isdigit())
+            width_mhz = int(digits) if digits else 0
+
             if radio.get("channel") is not None:
                 bands[band]["channels"][str(radio["channel"])] += 1
+                bands[band]["byWidth"][width_mhz][str(radio["channel"])] += 1
             if radio.get("width"):
-                bands[band]["widths"][f"{radio['width']} MHz"] += 1
+                # Built from the digits rather than interpolated around the raw
+                # value. R1's channelBandwidth has appeared as a bare 20 and as
+                # "20MHz", and the old `f"{width} MHz"` turned the second into
+                # "20MHz MHz" in the widths line under this card. Where R1 does
+                # send a bare number this produces the identical string, so the
+                # change is only ever visible where it was already wrong.
+                # Anything with no digits at all — "AUTO" — is passed through
+                # as itself rather than relabelled 0 MHz.
+                bands[band]["widths"][
+                    f"{width_mhz} MHz" if width_mhz else str(radio["width"])] += 1
             if radio.get("power"):
                 bands[band]["power"][str(radio["power"])] += 1
+
+    def _channel_rows(counter: Counter) -> List[Dict[str, Any]]:
+        """Busiest first, then by channel NUMBER — the same order as `channels`."""
+        return [{"label": channel, "count": n}
+                for channel, n in sorted(counter.items(),
+                                         key=lambda kv: (-kv[1], _as_int(kv[0])))]
 
     return {
         "radiosSeen": radios_seen,
@@ -1292,9 +1926,18 @@ def radio_card(aps: List[Dict[str, Any]]) -> Dict[str, Any]:
             # Busiest first, then by channel NUMBER — a string tiebreak put
             # channel 11 ahead of 6, which is visible now the list is printed
             # in full rather than cut off at the top eight.
-            "channels": [{"label": channel, "count": n}
-                         for channel, n in sorted(data["channels"].items(),
-                                                  key=lambda kv: (-kv[1], _as_int(kv[0])))],
+            "channels": _channel_rows(data["channels"]),
+            # Narrowest first, so the buckets read like a channel chart. The
+            # unknown-width bucket sorts to the end rather than to the front,
+            # where a 0 would put it: it is the least interesting row and it
+            # should not be the first thing read.
+            "byWidth": [{
+                "width": width or None,
+                "label": f"{width} MHz" if width else "width not reported",
+                "radios": sum(channels.values()),
+                "channels": _channel_rows(channels),
+            } for width, channels in sorted(data["byWidth"].items(),
+                                            key=lambda kv: (kv[0] == 0, kv[0]))],
             "widths": [{"label": width, "count": n} for width, n in data["widths"].most_common()],
             "power": [{"label": power, "count": n} for power, n in data["power"].most_common()],
         } for band, data in sorted(bands.items())],

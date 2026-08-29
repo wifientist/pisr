@@ -542,6 +542,19 @@ def build_context(report: Dict[str, Any], controller_name: str,
                      for b in (report.get("radios") or {}).get("plan") or []],
         "poe": report.get("poe") or {},
         "vlans": report.get("vlans") or {},
+        # Wired clients, from the switch MAC table. Already classified by
+        # shape.wired_client_card — the counts here are things plugged in, not
+        # learned addresses, and the difference is spelled out in the template.
+        # R1's own alarms, already shaped and sorted by shape.incident_card.
+        # Already grouped and ordered by services/pisr/punchlist.py; the
+        # template only lays it out.
+        "punchlist": report.get("punchlist") or {},
+        "incidents": report.get("incidents") or {},
+        "wired_clients": report.get("wiredClients") or {},
+        "wired_by_switch": _bars((report.get("wiredClients") or {}).get("bySwitch"), 6),
+        "wired_by_vlan": _bars((report.get("wiredClients") or {}).get("byVlan"), 6),
+        "wired_by_type": _bars((report.get("wiredClients") or {}).get("byType"), 6),
+        "wired_top_ports": _bars((report.get("wiredClients") or {}).get("topPorts"), 8),
         "addressing": report.get("addressing") or {},
         "dpsk": report.get("dpsk") or {},
         "policy": report.get("policy") or {},

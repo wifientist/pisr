@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2, RefreshCw, ChevronRight, AlertTriangle, AlertOctagon, Info,
   CheckCircle2, MinusCircle, Wifi, Cable, Network, Zap, Server, Users,
-  Search, ArrowLeft, Radio, Key, ShieldCheck, FileDown,
+  Search, ArrowLeft, Radio, Key, ShieldCheck, FileDown, Siren, ClipboardList,
+  SlidersHorizontal, ChevronDown, Loader2,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -24,14 +25,16 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * auto-refresh and no polling timer — a report is a moment, deliberately.
  */
 
-type Tab = "overview" | "wireless" | "wired" | "addressing" | "identity" | "devices";
+type Tab = "punchlist" | "overview" | "config" | "wireless" | "wired" | "poe"
+         | "addressing" | "identity" | "devices";
 
 // The tab ids in bar order, separate from the labelled `allTabs` array further
 // down because the effect that falls back off a hidden tab has to run ABOVE
 // this component's early returns — React counts hooks, and a hook that only
 // runs once a venue is chosen is a hook that changes count mid-session.
 const TAB_ORDER: Tab[] = [
-  "overview", "wireless", "wired", "addressing", "identity", "devices",
+  "punchlist", "overview", "config", "wireless", "wired", "poe", "addressing",
+  "identity", "devices",
 ];
 
 interface VenueRow {
@@ -95,6 +98,44 @@ export const SECTION_IDS = [
   "addressing.external",
   "addressing.gateways",
   "addressing.switch-subnets",
+  "config.aaa",
+  "config.antenna-type",
+  "config.ap-groups",
+  "config.ap-overrides",
+  "config.available-channels",
+  "config.band-mode",
+  "config.bss-coloring",
+  "config.cellular",
+  "config.client-admission",
+  "config.dhcp-service-profile",
+  "config.directed-multicast",
+  "config.dos-protection",
+  "config.external-antenna",
+  "config.lan-ports",
+  "config.led",
+  "config.load-balancing",
+  "config.mdns-fencing",
+  "config.mesh",
+  "config.mgmt-vlan",
+  "config.model-capabilities",
+  "config.models",
+  "config.radio",
+  "config.radius-options",
+  "config.radius-profiles",
+  "config.reboot-timeout",
+  "config.regulatory-channels",
+  "config.rogue-ap",
+  "config.rogue-policy",
+  "config.smart-monitor",
+  "config.snmp",
+  "config.syslog",
+  "config.syslog-profile",
+  "config.tls-key",
+  "config.trusted-ports",
+  "config.usb-ports",
+  "config.venue",
+  "config.venue-summary",
+  "config.wifi-settings",
   "devices.aps",
   "devices.switches",
   "identity.dpsk-pools",
@@ -103,19 +144,22 @@ export const SECTION_IDS = [
   "identity.policy-sets",
   "identity.radius",
   "overview.access-points",
+  "overview.incidents",
   "overview.property",
   "overview.summary",
   "overview.switches",
-  "overview.venue-config",
   "overview.verification",
+  "poe.aps-on-ports",
+  "poe.budget",
+  "poe.standard",
+  "poe.summary",
+  "punchlist.summary",
+  "punchlist.tasks",
   "report.sources",
-  "wired.aps-on-ports",
+  "wired.clients",
   "wired.link-speeds",
-  "wired.poe-budget",
-  "wired.poe-standard",
   "wired.port-errors",
-  "wired.summary",
-  "wired.top-poe-draws",
+  "wired.ports",
   "wired.vlans",
   "wireless.ap-groups",
   "wireless.busiest-aps",
@@ -407,7 +451,17 @@ function Finding({ finding }: { finding: any }) {
         onClick={() => evidence.length && setOpen(!open)}
       >
         <span className="mt-0.5">{style.icon}</span>
-        <span className="min-w-0 flex-1">
+        {/* break-words on the CONTAINER, not on the title alone. A finding can
+            carry an unbreakable token in its title AND in its summary — an R1
+            alarm names its device in both, and a RUCKUS Edge serial is 34
+            characters with no break opportunity. overflow-wrap inherits, so
+            one class here covers the title, the summary and the detail line;
+            fixing only the title left the summary widening the card.
+
+            Without it the page scrolls sideways on a phone — the failure in
+            CLAUDE.md's min-w-0 note, found here by the 320px check and not by
+            looking at it on a desktop, where it is invisible. */}
+        <span className="min-w-0 flex-1 break-words">
           <span className="font-medium text-gray-900">{finding.title}</span>
           {/* The headline is the verdict; the check name says what was tested.
               Only shown when they differ, which is exactly when the finding is
@@ -456,7 +510,7 @@ export default function PISR() {
   const [report, setReport] = useState<any>(null);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("punchlist");
   const [deviceFilter, setDeviceFilter] = useState("");
   const [showPasses, setShowPasses] = useState(false);
 
@@ -537,10 +591,34 @@ export default function PISR() {
     }
   }, [base, qs]);
 
+  /**
+   * Back to the MSP-EC picker, from wherever you are.
+   *
+   * Clears the venue and the report as well as the EC, because leaving them
+   * set means a stale report for the previous customer is still mounted while
+   * the picker renders over it — and if the next EC is chosen and then
+   * abandoned, that old report reappears. Everything downstream of the EC goes
+   * with it.
+   *
+   * Defined here rather than inline at each call site so the two headers
+   * cannot drift into doing different amounts of clearing, which is exactly
+   * what happened before: the picker's version reset the EC and the venue
+   * list, and the report view had no version at all.
+   */
+  const changeEc = useCallback(() => {
+    setEcId(null);
+    setEcName(null);
+    setVenues([]);
+    setVenueFilter("");
+    setVenue(null);
+    setReport(null);
+    setError("");
+  }, []);
+
   const chooseVenue = (row: VenueRow) => {
     setVenue(row);
     setReport(null);
-    setTab("overview");
+    setTab("punchlist");
     poll(row);
   };
 
@@ -603,7 +681,7 @@ export default function PISR() {
   if (!venue) {
     return (
       <div className="p-6 max-w-6xl">
-        <Header ec={ecName} onChangeEc={needsEcSelection ? () => { setEcId(null); setVenues([]); } : undefined} />
+        <Header ec={ecName} onChangeEc={needsEcSelection ? changeEc : undefined} />
         <Card
           title="Choose a venue"
           hint="One venue per report. Counts come from RUCKUS ONE's own aggregates and are a hint, not the report."
@@ -679,9 +757,12 @@ export default function PISR() {
     : findings.filter((f) => f.severity !== "ok" && f.severity !== "skipped");
 
   const allTabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: "punchlist", label: "Punch list", icon: <ClipboardList size={15} /> },
     { id: "overview", label: "Overview", icon: <Building2 size={15} /> },
+    { id: "config", label: "Config", icon: <SlidersHorizontal size={15} /> },
     { id: "wireless", label: "Wireless", icon: <Wifi size={15} /> },
-    { id: "wired", label: "Wired & PoE", icon: <Cable size={15} /> },
+    { id: "wired", label: "Wired", icon: <Cable size={15} /> },
+    { id: "poe", label: "PoE", icon: <Zap size={15} /> },
     { id: "addressing", label: "Addressing", icon: <Network size={15} /> },
     { id: "identity", label: "Identity & Policy", icon: <Key size={15} /> },
     { id: "devices", label: "Devices", icon: <Server size={15} /> },
@@ -694,7 +775,7 @@ export default function PISR() {
 
   return (
     <div className="p-6 max-w-7xl">
-      <Header ec={ecName} />
+      <Header ec={ecName} onChangeEc={needsEcSelection ? changeEc : undefined} />
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -757,12 +838,15 @@ export default function PISR() {
             ))}
           </div>
 
+          {tab === "punchlist" && <PunchList report={report} />}
           {tab === "overview" && (
             <Overview report={report} findings={visibleFindings} allFindings={findings}
                       showPasses={showPasses} onTogglePasses={() => setShowPasses(!showPasses)} />
           )}
+          {tab === "config" && <Config report={report} base={base} qs={qs} />}
           {tab === "wireless" && <Wireless report={report} />}
           {tab === "wired" && <Wired report={report} />}
+          {tab === "poe" && <Poe report={report} />}
           {tab === "addressing" && <Addressing report={report} />}
           {tab === "identity" && <Dpsk report={report} />}
           {tab === "devices" && (
@@ -1092,7 +1176,7 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
   return (
     <div className="space-y-4">
       <Section id="overview.summary">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="APs online" value={`${aps.online}/${aps.total}`}
               tone={reachTone(aps)} sub={reachSub(aps)} />
         <Stat label="Switches online" value={`${switches.online}/${switches.total}`}
@@ -1106,16 +1190,9 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
                 : "on this venue"} />
         <Stat label="Clients now" value={fmtNum(report.clients.total)} tone="blue"
               sub={report.clients.capped ? "capped at 10,000" : "live associations"} />
-        {report.poe.hasPoeBudget ? (
-          <Stat label="PoE allocated" value={pctText(report.poe.allocatedPct)}
-                tone={(report.poe.allocatedPct || 0) >= 85 ? "amber" : "gray"}
-                sub={`${fmtNum(report.poe.allocatedWatts, 1)} W of ${fmtNum(report.poe.capacityWatts, 1)} W`} />
-        ) : (
-          <Stat label="PoE allocated" value="—" tone="gray"
-                sub={report.poe.switchCount
-                  ? "no switch reports a PoE budget"
-                  : "no switches at this venue"} />
-        )}
+        {/* No PoE tile here. Allocated power is a committed-not-drawn figure
+            that says little on its own, and the Wired & PoE tab carries it
+            alongside the drawn figure that gives it meaning. */}
       </div>
       </Section>
 
@@ -1147,6 +1224,8 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
           <p className="text-sm text-green-700">Nothing to flag — every check that could run passed.</p>
         )}
       </Card>
+
+      <Incidents report={report} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="overview.access-points" title="Access points" icon={<Wifi size={17} className="text-gray-400" />}
@@ -1201,90 +1280,6 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
       </div>
 
       <div className="space-y-4">
-        <Card id="overview.venue-config" title="Venue configuration" icon={<Building2 size={17} className="text-gray-400" />}
-              hint="What the venue is set to, as opposed to what the hardware landed on.">
-          <dl className="grid grid-cols-2 gap-y-2 text-sm">
-            <dt className="text-gray-500">AP management VLAN</dt>
-            <dd className="text-gray-900">{report.venue.managementVlan ?? "untagged"}</dd>
-
-            <dt className="text-gray-500">Mesh</dt>
-            <dd className="text-gray-900">
-              {report.venue.meshEnabled === null || report.venue.meshEnabled === undefined
-                ? "—" : report.venue.meshEnabled
-                  ? `enabled (${report.venue.mesh?.radioType || "?"})` : "disabled"}
-            </dd>
-
-            <dt className="text-gray-500">Mesh zero-touch</dt>
-            <dd className="text-gray-900">
-              {report.venue.meshZeroTouch === null || report.venue.meshZeroTouch === undefined
-                ? "—" : report.venue.meshZeroTouch ? "enabled" : "disabled"}
-            </dd>
-
-            <dt className="text-gray-500">AP groups</dt>
-            <dd className="text-gray-900">{report.wireless.groups.length}</dd>
-
-            <dt className="text-gray-500">SSIDs activated</dt>
-            <dd className="text-gray-900">{report.wireless.activated}</dd>
-
-            <dt className="text-gray-500">Config template</dt>
-            <dd className="text-gray-900">
-              {report.venue.enforced
-                ? "enforced — venue is driven by a template"
-                : "not enforced"}
-            </dd>
-
-            <dt className="text-gray-500">5 GHz radios</dt>
-            <dd className="text-gray-900">
-              {report.venue.dual5g ? "dual 5 GHz configured" : "single 5 GHz"}
-            </dd>
-
-            <dt className="text-gray-500">Country</dt>
-            <dd className="text-gray-900">
-              {report.venue.address.country || "—"}
-              {report.venue.address.timezone ? ` · ${report.venue.address.timezone}` : ""}
-            </dd>
-
-            <dt className="text-gray-500">Coordinates</dt>
-            <dd className="text-gray-900">
-              {report.venue.address.latitude && report.venue.address.longitude
-                ? `${report.venue.address.latitude}, ${report.venue.address.longitude}` : "—"}
-            </dd>
-          </dl>
-
-          <ChannelPlan plan={report.radios?.plan || []} />
-
-          {(report.venue.radio || []).length > 0 && (
-            <div className="mt-4 pt-3 border-t border-gray-100">
-              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Radio defaults</p>
-              <MiniTable
-                maxHeight="14rem"
-                columns={[
-                  { key: "band", header: "Band" },
-                  { key: "method", header: "Channel method" },
-                  { key: "width", header: "Width" },
-                  { key: "power", header: "Tx power" },
-                  // The whole list, wrapping. At 20 MHz a 6 GHz plan has 56
-                  // channels and the point of the row is which ones — a
-                  // truncated list answers nothing. `whitespace-normal`
-                  // overrides MiniTable's nowrap so it can run to several lines.
-                  { key: "allowedText", header: "Allowed channels",
-                    className: "whitespace-normal max-w-[46rem]" },
-                ]}
-                rows={(report.venue.radio || []).map((entry: any) => ({
-                  ...entry,
-                  allowedText: entry.allowed?.length ? (
-                    <span>
-                      <span className="font-semibold">{entry.allowed.length}</span>
-                      {" — "}{entry.allowed.join(", ")}
-                    </span>
-                  ) : null,
-                }))}
-                empty="No venue radio settings returned."
-              />
-            </div>
-          )}
-        </Card>
-
         <Card id="overview.property" title="MDU Property Features" icon={<Building2 size={17} className="text-gray-400" />}
               hint={property
                 ? "Property Management is enabled on this venue."
@@ -1565,14 +1560,46 @@ function Wireless({ report }: { report: any }) {
                     {String(configured.method || "").toLowerCase().replace(/_/g, " ") || "—"}
                   </p>
                 )}
-                <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
-                  Channels in use
-                  <span className="normal-case tracking-normal text-gray-400">
-                    {" "}({band.channels.length})</span>
-                </p>
-                {/* No cap: a 6 GHz plan can spread radios over 30-odd channels
-                    and the thin tail is exactly where a stray one shows up. */}
-                <BarList rows={band.channels} limit={Infinity} />
+                {/*
+                  One bucket per width when the band is running more than one,
+                  because a channel number means a different thing at each: a
+                  40 MHz radio on channel 36 and a 20 MHz radio on channel 36
+                  are not co-channel in the way the flat list implies. Rare on a
+                  healthy site, which is exactly why it is worth seeing when it
+                  happens rather than averaging away.
+
+                  A single width — the normal case — renders as one plain list
+                  with no bucket heading, so nothing changes on the sites where
+                  there is nothing to tell apart.
+                */}
+                {(band.byWidth || []).length > 1 ? (
+                  <div className="space-y-3">
+                    {band.byWidth.map((bucket: any) => (
+                      <div key={bucket.label}>
+                        <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+                          {band.band} · {bucket.label}
+                          <span className="normal-case tracking-normal text-gray-400">
+                            {" "}({bucket.channels.length} channel
+                            {bucket.channels.length === 1 ? "" : "s"},{" "}
+                            {bucket.radios} radio{bucket.radios === 1 ? "" : "s"})
+                          </span>
+                        </p>
+                        <BarList rows={bucket.channels} limit={Infinity} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+                      Channels in use
+                      <span className="normal-case tracking-normal text-gray-400">
+                        {" "}({band.channels.length})</span>
+                    </p>
+                    {/* No cap: a 6 GHz plan can spread radios over 30-odd channels
+                        and the thin tail is exactly where a stray one shows up. */}
+                    <BarList rows={band.channels} limit={Infinity} />
+                  </>
+                )}
                 {!!band.widths.length && (
                   <p className="text-xs text-gray-500 mt-2">
                     widths: {band.widths.map((w: any) => `${w.label} ×${w.count}`).join(", ")}
@@ -1605,25 +1632,679 @@ function Wireless({ report }: { report: any }) {
   );
 }
 
+/**
+ * Wired: what is plugged in, and the VLANs it lands on.
+ *
+ * Split from PoE because they answer different questions — this one is "who is
+ * on the wire", PoE is "is there enough power and is the cabling sound". They
+ * shared a tab while there was little enough of either to fit.
+ */
+/**
+ * The punch list: everything outstanding, grouped by who fixes it.
+ *
+ * The rest of the report is organised by subsystem, which is right for
+ * understanding a venue and wrong for finishing one. A crew in a riser wants
+ * one ordered list, not six tabs — so this re-cuts the same findings by trade.
+ * A port error and a mesh fallback are the same visit with the same ladder;
+ * a firmware mismatch is a different person who is probably not on site.
+ *
+ * It adds no data. Every task is a finding `checks.py` produced or an alarm R1
+ * raised, regrouped by `services/pisr/punchlist.py`. If a task is wrong, the
+ * bug is in the check.
+ */
+/**
+ * A settings blob as a collapsing tree.
+ *
+ * Generic on purpose. The Config tab shows what R1 returns rather than a
+ * curated selection, so this renders whatever shape arrives — including keys
+ * nobody has seen before, which is exactly the case the tab exists for. A
+ * renderer that only knew the fields someone thought were important would hide
+ * the surprise, and the surprise is the reason to look.
+ *
+ * Branches start collapsed below the first level: a venue blob is a few
+ * hundred leaves and an open tree is a wall.
+ */
+function ConfigTree({ node, depth = 0, path = "" }: {
+  node: any; depth?: number; path?: string;
+}) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+
+  if (node === null || node === undefined) {
+    return <span className="text-gray-400">—</span>;
+  }
+  if (typeof node !== "object") {
+    const text = String(node);
+    return (
+      <span className={
+        typeof node === "boolean"
+          ? (node ? "text-green-700" : "text-gray-500")
+          : "text-gray-900"
+      }>{text === "" ? "—" : text}</span>
+    );
+  }
+
+  const entries: [string, any][] = Array.isArray(node)
+    ? node.map((v, i) => [String(i), v])
+    : Object.entries(node);
+
+  if (!entries.length) {
+    return <span className="text-gray-400">{Array.isArray(node) ? "none" : "—"}</span>;
+  }
+
+  return (
+    <div className={depth ? "border-l border-gray-200 pl-3" : ""}>
+      {entries.map(([key, value]) => {
+        const branch = value !== null && typeof value === "object";
+        const size = branch ? (Array.isArray(value) ? value.length
+                                                    : Object.keys(value).length) : 0;
+        const here = `${path}.${key}`;
+        // Depth 0 is open so the shape of a category is visible without a
+        // click; everything below is a decision the reader makes.
+        const isOpen = open[here] ?? depth === 0;
+        return (
+          <div key={here} className="py-0.5 min-w-0">
+            {branch ? (
+              <>
+                <button onClick={() => setOpen((o) => ({ ...o, [here]: !isOpen }))}
+                        className="flex items-center gap-1 text-left min-w-0">
+                  {isOpen
+                    ? <ChevronDown size={12} className="shrink-0 text-gray-400" />
+                    : <ChevronRight size={12} className="shrink-0 text-gray-400" />}
+                  <span className="font-mono text-xs text-gray-700 break-all">{key}</span>
+                  <span className="text-[11px] text-gray-400 shrink-0">
+                    {Array.isArray(value) ? `[${size}]` : `{${size}}`}
+                  </span>
+                </button>
+                {isOpen && (
+                  <div className="ml-3">
+                    <ConfigTree node={value} depth={depth + 1} path={here} />
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-x-2 min-w-0 pl-4">
+                <span className="font-mono text-xs text-gray-500 break-all">{key}</span>
+                <span className="text-xs break-all">
+                  <ConfigTree node={value} depth={depth + 1} path={here} />
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * How this venue is configured, at venue, AP-group and per-AP level.
+ *
+ * Grouped by the R1 endpoint each block came from. That is a leaky
+ * abstraction and it is deliberate: a settings dump has no natural taxonomy,
+ * R1's own console groups these differently again, and a third grouping
+ * invented here would leave a reader unable to map the tab onto either. It
+ * also makes each category a unit an admin can hide.
+ *
+ * Group and per-AP settings are NOT loaded with the report. Each is one R1
+ * call per object, and an MDU with a per-unit AP group would put hundreds of
+ * requests behind a tab most readers never open — so there is a button.
+ */
+function Config({ report, base, qs }: {
+  report: any; base: string; qs: (extra?: Record<string, string>) => string;
+}) {
+  const config = report.config || {};
+  const categories: any[] = config.categories || [];
+  const [detail, setDetail] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      // qs() supplies the tenant only; the venue has to be named explicitly,
+      // the same way poll() and the PDF export do it.
+      const res = await apiFetch(
+        `${base}/config/detail${qs({ venue_id: report.meta?.venueId })}`,
+        { credentials: "include" });
+      if (!res.ok) {
+        throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      }
+      setDetail(await res.json());
+    } catch (e: any) {
+      setError(e.message || "Could not load configuration detail");
+    } finally {
+      setLoading(false);
+    }
+  }, [base, qs, report]);
+
+  return (
+    <div className="space-y-4">
+      <VenueConfigCard report={report} />
+
+      {categories.map((cat) => (
+        <Card key={cat.slug} id={`config.${cat.slug}`} title={cat.label}
+              hint={cat.hint || undefined}
+              right={<span className="text-[11px] font-mono text-gray-400 break-all">
+                       {cat.source}</span>}>
+          {cat.unavailable ? (
+            /* R1 not answering is different from R1 answering with nothing,
+               and a config review needs to tell them apart. */
+            <p className="text-sm text-amber-700">
+              RUCKUS ONE did not return this setting block.
+            </p>
+          ) : (
+            <ConfigTree node={cat.data} />
+          )}
+        </Card>
+      ))}
+
+      <Card id="config.ap-groups" title="AP group & per-AP settings"
+            icon={<SlidersHorizontal size={17} className="text-gray-400" />}
+            hint="Loaded on request. Each group and each AP is a separate call to
+                  RUCKUS ONE, so this is not fetched with the report.">
+        {!detail ? (
+          <>
+            <p className="text-sm text-gray-600 mb-3">
+              This venue has {fmtNum(config.groupTotal || 0)} AP group(s) and{" "}
+              {fmtNum(config.apTotal || 0)} AP(s) — about{" "}
+              {fmtNum(config.detailCalls || 0)} requests to RUCKUS ONE.
+            </p>
+            <button onClick={loadDetail} disabled={loading}
+                    className="inline-flex items-center gap-1.5 rounded bg-blue-600 px-3 py-2
+                               text-sm font-medium text-white hover:bg-blue-700
+                               disabled:opacity-50">
+              {loading && <Loader2 size={14} className="animate-spin" />}
+              {loading ? "Reading RUCKUS ONE…" : "Load group and per-AP settings"}
+            </button>
+            {error && (
+              <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            )}
+          </>
+        ) : (
+          <div className="space-y-5">
+            <div className="flex flex-wrap gap-2">
+              <Pill tone={detail.groupOverrideCount ? "amber" : "green"}>
+                {detail.groupOverrideCount} group override(s)
+              </Pill>
+              <Pill tone={detail.apOverrideCount ? "amber" : "green"}>
+                {detail.apOverrideCount} AP override(s)
+              </Pill>
+              {detail.apTruncated && (
+                /* "No overrides" on a partial list is a different statement
+                   from "no overrides", so the partiality is stated. */
+                <Pill tone="gray">
+                  showing {detail.apShown} of {detail.apTotal} APs
+                </Pill>
+              )}
+            </div>
+
+            <div>
+              <h4 className="font-semibold text-gray-800 mb-2">AP groups</h4>
+              <div className="space-y-2">
+                {detail.groups.map((g: any) => (
+                  <div key={g.id} className="min-w-0 rounded border border-gray-200 p-3">
+                    <div className="flex flex-wrap items-baseline gap-2 mb-1">
+                      <span className="font-medium text-gray-900 break-all">{g.name}</span>
+                      <span className="text-xs text-gray-500">{g.apCount} AP(s)</span>
+                      {g.isDefault && <Pill tone="gray">default</Pill>}
+                      {g.isEnforced && <Pill tone="blue">enforced</Pill>}
+                      {g.overrides.length
+                        ? <Pill tone="amber">overrides {g.overrides.join(", ")}</Pill>
+                        : <Pill tone="green">inherits the venue</Pill>}
+                    </div>
+                    <ConfigTree node={g.data} depth={1} path={g.id} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <Section id="config.ap-overrides">
+              <h4 className="font-semibold text-gray-800 mb-2">Per-AP settings</h4>
+              <div className="space-y-2">
+                {detail.aps.map((a: any) => (
+                  <div key={a.serial} className="min-w-0 rounded border border-gray-200 p-3">
+                    <div className="flex flex-wrap items-baseline gap-2 mb-1">
+                      <span className="font-medium text-gray-900 break-all">{a.name}</span>
+                      <span className="text-xs text-gray-500">{a.model || "?"}</span>
+                      {a.overridden
+                        ? <Pill tone="amber">overrides {a.overrides.join(", ")}</Pill>
+                        : <Pill tone="green">inherits the venue</Pill>}
+                    </div>
+                    <ConfigTree node={a.data} depth={1} path={a.serial} />
+                  </div>
+                ))}
+              </div>
+            </Section>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * The venue configuration summary, now the first thing on the Config tab.
+ *
+ * It lived on Overview, where it was the only configuration on a page
+ * otherwise about state. Moving it puts it at the head of the tab that
+ * continues into the raw settings underneath, so a reader goes from "what the
+ * venue is set to" into "and here is every field that says so".
+ *
+ * The id changed with the tab (ids are <tab>.<thing>), so visibility.RENAMED
+ * carries overview.venue-config -> config.venue-summary for policies written
+ * before the move.
+ */
+function VenueConfigCard({ report }: { report: any }) {
+  return (
+    <>
+        <Card id="config.venue-summary" title="Venue configuration" icon={<Building2 size={17} className="text-gray-400" />}
+              hint="What the venue is set to, as opposed to what the hardware landed on.">
+          <dl className="grid grid-cols-2 gap-y-2 text-sm">
+            <dt className="text-gray-500">AP management VLAN</dt>
+            <dd className="text-gray-900">{report.venue.managementVlan ?? "untagged"}</dd>
+
+            <dt className="text-gray-500">Mesh</dt>
+            <dd className="text-gray-900">
+              {report.venue.meshEnabled === null || report.venue.meshEnabled === undefined
+                ? "—" : report.venue.meshEnabled
+                  ? `enabled (${report.venue.mesh?.radioType || "?"})` : "disabled"}
+            </dd>
+
+            <dt className="text-gray-500">Mesh zero-touch</dt>
+            <dd className="text-gray-900">
+              {report.venue.meshZeroTouch === null || report.venue.meshZeroTouch === undefined
+                ? "—" : report.venue.meshZeroTouch ? "enabled" : "disabled"}
+            </dd>
+
+            <dt className="text-gray-500">AP groups</dt>
+            <dd className="text-gray-900">{report.wireless.groups.length}</dd>
+
+            <dt className="text-gray-500">SSIDs activated</dt>
+            <dd className="text-gray-900">{report.wireless.activated}</dd>
+
+            <dt className="text-gray-500">Config template</dt>
+            <dd className="text-gray-900">
+              {report.venue.enforced
+                ? "enforced — venue is driven by a template"
+                : "not enforced"}
+            </dd>
+
+            <dt className="text-gray-500">5 GHz radios</dt>
+            <dd className="text-gray-900">
+              {report.venue.dual5g ? "dual 5 GHz configured" : "single 5 GHz"}
+            </dd>
+
+            <dt className="text-gray-500">Country</dt>
+            <dd className="text-gray-900">
+              {report.venue.address.country || "—"}
+              {report.venue.address.timezone ? ` · ${report.venue.address.timezone}` : ""}
+            </dd>
+
+            <dt className="text-gray-500">Coordinates</dt>
+            <dd className="text-gray-900">
+              {report.venue.address.latitude && report.venue.address.longitude
+                ? `${report.venue.address.latitude}, ${report.venue.address.longitude}` : "—"}
+            </dd>
+          </dl>
+
+          <ChannelPlan plan={report.radios?.plan || []} />
+
+          {(report.venue.radio || []).length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-100">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Radio defaults</p>
+              <MiniTable
+                maxHeight="14rem"
+                columns={[
+                  { key: "band", header: "Band" },
+                  { key: "method", header: "Channel method" },
+                  { key: "width", header: "Width" },
+                  { key: "power", header: "Tx power" },
+                  // The whole list, wrapping. At 20 MHz a 6 GHz plan has 56
+                  // channels and the point of the row is which ones — a
+                  // truncated list answers nothing. `whitespace-normal`
+                  // overrides MiniTable's nowrap so it can run to several lines.
+                  { key: "allowedText", header: "Allowed channels",
+                    className: "whitespace-normal max-w-[46rem]" },
+                ]}
+                rows={(report.venue.radio || []).map((entry: any) => ({
+                  ...entry,
+                  allowedText: entry.allowed?.length ? (
+                    <span>
+                      <span className="font-semibold">{entry.allowed.length}</span>
+                      {" — "}{entry.allowed.join(", ")}
+                    </span>
+                  ) : null,
+                }))}
+                empty="No venue radio settings returned."
+              />
+            </div>
+          )}
+        </Card>
+    </>
+  );
+}
+
+const PUNCH_TONE: Record<string, string> = {
+  critical: "red", warning: "amber", info: "blue",
+};
+
+function PunchList({ report }: { report: any }) {
+  const punch = report.punchlist || {};
+  const groups: any[] = punch.groups || [];
+  const counts = punch.counts || {};
+
+  return (
+    <div className="space-y-4">
+      <Section id="punchlist.summary">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <Stat label="Outstanding" value={fmtNum(punch.total || 0)}
+                tone={punch.total ? "red" : "green"}
+                sub={punch.total ? "tasks on this list" : "nothing outstanding"} />
+          <Stat label="Critical" value={fmtNum(counts.critical || 0)}
+                tone={counts.critical ? "red" : "gray"} sub="fix before leaving" />
+          <Stat label="Warning" value={fmtNum(counts.warning || 0)}
+                tone={counts.warning ? "amber" : "gray"} sub="fix before handover" />
+          <Stat label="Devices to visit" value={fmtNum(punch.deviceCount || 0)}
+                tone={punch.deviceCount ? "blue" : "gray"} sub="named across all tasks" />
+          <Stat label="Checks passed" value={fmtNum(punch.passed || 0)} tone="green"
+                sub={punch.skipped?.length
+                  ? `${punch.skipped.length} could not run`
+                  : "every check ran"} />
+        </div>
+      </Section>
+
+      <Card id="punchlist.tasks" title="What is left to do"
+            icon={<ClipboardList size={17} className="text-gray-400" />}
+            hint="The same findings as Overview, grouped by who fixes them and
+                  ordered so the top of the list is the next thing to do.">
+        {!groups.length ? (
+          <p className="text-sm text-green-700">
+            Nothing outstanding. {fmtNum(punch.passed || 0)} checks passed and
+            RUCKUS ONE is raising no alarms for this venue.
+          </p>
+        ) : (
+          <div className="space-y-5">
+            {groups.map((group) => (
+              <div key={group.key} className="min-w-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+                  <h4 className="font-semibold text-gray-800">{group.label}</h4>
+                  <div className="flex flex-wrap gap-1.5 shrink-0">
+                    {(["critical", "warning", "info"] as const).map((level) =>
+                      group.counts?.[level]
+                        ? <Pill key={level} tone={PUNCH_TONE[level]}>
+                            {group.counts[level]} {level}
+                          </Pill>
+                        : null)}
+                    {!!group.devices?.length && (
+                      <Pill tone="gray">{group.devices.length} device(s)</Pill>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">{group.blurb}</p>
+                <div className="space-y-2">
+                  {group.tasks.map((task: any, i: number) => (
+                    /* Findings and alarms can share an id across groups in
+                       principle, so the index is part of the key.
+                       `check` is left unset: Finding renders it above the
+                       summary AND renders `detail` below, so passing the R1
+                       alarm type as both printed "ApDisConnected" twice. */
+                    <Finding key={`${task.id}-${i}`} finding={task} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!!punch.skipped?.length && (
+          /* A skipped check is not a pass. On an install it usually means a
+             prerequisite is missing — no switches read, no SSIDs activated —
+             which is itself worth seeing on the list of what is not finished. */
+          <div className="mt-5 border-t border-gray-200 pt-3">
+            <h4 className="font-semibold text-gray-800">
+              Could not be checked
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                not the same as passing
+              </span>
+            </h4>
+            <ul className="mt-2 space-y-1">
+              {punch.skipped.map((row: any) => (
+                <li key={row.id} className="text-sm text-gray-600">
+                  <span className="text-gray-900">{row.title}</span> — {row.summary}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * RUCKUS ONE's own live alarms for this venue.
+ *
+ * Sits beside Verification rather than inside it, and the distinction is the
+ * point: Verification is PISR's opinion about whether the install looks
+ * finished, this is the platform's opinion about whether the venue is healthy
+ * right now. They disagree usefully — a venue can pass every check here while
+ * R1 is shouting about an AP that dropped off an hour ago, or be quiet on R1
+ * while three SSIDs were never activated.
+ *
+ * Active alarms only. R1's query exposes no cleared time and no
+ * acknowledgement, so there is no history to show and the card does not
+ * pretend otherwise.
+ */
+function Incidents({ report }: { report: any }) {
+  const incidents = report.incidents || {};
+  const rows: any[] = incidents.rows || [];
+
+  const tone = (severity: string) => {
+    const s = (severity || "").toLowerCase();
+    if (s === "critical") return "red";
+    if (s === "major") return "red";
+    if (s === "minor" || s === "warning") return "amber";
+    return "gray";
+  };
+
+  return (
+    <Card id="overview.incidents"
+          title={`RUCKUS ONE alarms (${fmtNum(incidents.total || 0)})`}
+          icon={<Siren size={17} className="text-gray-400" />}
+          hint="Raised by R1 itself, not by PISR's checks. Active alarms only —
+                R1 does not expose a cleared or acknowledged state here.">
+      {!rows.length ? (
+        <p className="text-sm text-green-700">
+          RUCKUS ONE is raising nothing for this venue.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {(incidents.bySeverity || []).map((row: any) => (
+              <Pill key={row.label} tone={tone(row.label)}>
+                {row.count} {row.label.toLowerCase()}
+              </Pill>
+            ))}
+            {(incidents.byEntity || []).map((row: any) => (
+              <Pill key={row.label} tone="gray">{row.count} × {row.label}</Pill>
+            ))}
+          </div>
+          <MiniTable
+            maxHeight="20rem"
+            columns={[
+              { key: "severityCell", header: "Severity", className: "whitespace-nowrap" },
+              { key: "text", header: "Alarm" },
+              { key: "device", header: "Device", className: "whitespace-nowrap" },
+              { key: "type", header: "R1 type", className: "whitespace-nowrap" },
+              { key: "raisedCell", header: "Raised", className: "whitespace-nowrap" },
+            ]}
+            rows={rows.map((row) => ({
+              ...row,
+              severityCell: <Pill tone={tone(row.severity)}>{row.severity}</Pill>,
+              raisedCell: fmtTime(row.raisedAt),
+            }))}
+          />
+          {incidents.oldest && (
+            /* An alarm still raised from weeks ago on a fresh install is a
+               different conversation from one raised this morning, and the
+               table's own ordering puts severity first, so the age would
+               otherwise be easy to miss. */
+            <p className="mt-2 text-xs text-gray-500">
+              Oldest still raised: {fmtTime(incidents.oldest)}.
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 function Wired({ report }: { report: any }) {
+  const ports = report.ports;
+  return (
+    <div className="space-y-4">
+      <Section id="wired.ports">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat label="Ports up" value={`${fmtNum(ports.up)}/${fmtNum(ports.total)}`}
+                sub={`${fmtNum(ports.down)} down`} />
+          <Stat label="Counting errors" value={fmtNum(ports.erroredCount)}
+                tone={ports.erroredCount ? "amber" : "green"}
+                sub={ports.erroredCount ? "up ports with CRC or interface errors"
+                                        : "no up port is counting errors"} />
+          <Stat label="Learned addresses"
+                value={fmtNum((report.wiredClients || {}).total)} tone="blue"
+                sub={`on ${fmtNum((report.wiredClients || {}).portsInUse)} port(s)`} />
+        </div>
+      </Section>
+
+      <WiredClients report={report} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card id="wired.link-speeds" title="Link speeds" hint="Ports that are up.">
+          <BarList rows={ports.bySpeed} limit={6} />
+        </Card>
+        <Card id="wired.port-errors" title="Ports counting errors"
+              hint="Up ports with CRC or interface errors — cabling and optics show up here first.">
+          <MiniTable
+            columns={[
+              { key: "switch", header: "Switch" },
+              { key: "port", header: "Port" },
+              { key: "crc", header: "CRC" },
+              { key: "inErr", header: "In" },
+              { key: "outErr", header: "Out" },
+              { key: "speed", header: "Speed" },
+            ]}
+            rows={ports.errored || []}
+            empty="No up port is counting errors."
+          />
+        </Card>
+      </div>
+
+      <Vlans report={report} />
+    </div>
+  );
+}
+
+/**
+ * What is plugged into the switches, from the MAC address table.
+ *
+ * The counts are classified server-side (shape.wired_client_card) rather than
+ * being a row count: an AP's uplink has learned every wireless client behind
+ * it, and the APs and switches are in the table as addresses themselves. The
+ * excluded figures are shown rather than hidden, because a number that
+ * quietly leaves things out is worse than one that says what it left out.
+ */
+function WiredClients({ report }: { report: any }) {
+  const wired = report.wiredClients || {};
+  const total: number = wired.total || 0;
+
+  return (
+    <Card id="wired.clients" title={`Wired clients (${fmtNum(total)})`}
+          icon={<Cable size={17} className="text-gray-400" />}
+          hint="Addresses the switches have learned, minus the APs, the switches
+                themselves, and anything learned through an AP's uplink.">
+      {!wired.learned ? (
+        <p className="text-sm text-gray-500">
+          No switch reported a MAC address table for this venue. That is normal
+          where there are no switches, and worth checking where there are.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+            <Stat label="Wired clients" value={fmtNum(total)} tone="blue"
+                  sub={`on ${fmtNum(wired.portsInUse)} port(s), ${fmtNum(wired.switchCount)} switch(es)`} />
+            <Stat label="Learned addresses" value={fmtNum(wired.learned)}
+                  sub="everything the switches saw" />
+            <Stat label="Behind an AP" value={fmtNum(wired.behindAps)}
+                  sub="counted on the Wireless tab instead" />
+            <Stat label="Infrastructure" value={fmtNum(wired.infrastructure)}
+                  sub="the APs and switches themselves" />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">By switch</p>
+              <BarList rows={wired.bySwitch} limit={8} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">By VLAN</p>
+              <BarList rows={wired.byVlan} limit={8} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+                By device type
+                <span className="normal-case tracking-normal text-gray-400">
+                  {" "}— R1's own classification</span>
+              </p>
+              <BarList rows={wired.byType} limit={8} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+                Busiest ports
+                <span className="normal-case tracking-normal text-gray-400">
+                  {" "}— addresses learned per port</span>
+              </p>
+              <BarList rows={wired.topPorts} limit={8} />
+              {/* The point of this list. One or two per port is a normal
+                  install; a port with a dozen has something unmanaged behind
+                  it, and that is the one thing the MAC table can tell you that
+                  nothing else in this report can. */}
+              <p className="mt-2 text-xs text-gray-500">
+                More than a couple on one port means a hub, an unmanaged switch
+                or a mislabelled uplink behind it.
+              </p>
+            </div>
+          </div>
+
+          {!!total && (
+            <p className="mt-4 text-xs text-gray-500">
+              {fmtNum(wired.withIp)} of {fmtNum(total)} have an IP address and{" "}
+              {fmtNum(wired.withName)} a hostname. R1 populates both from its own
+              snooping, so a blank is "not seen", not "not present".
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Poe({ report }: { report: any }) {
   const poe = report.poe;
   const ports = report.ports;
   return (
     <div className="space-y-4">
-      <Section id="wired.summary">
-      <div className="grid gap-3 sm:grid-cols-4">
+      <Section id="poe.summary">
+      <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="PoE capacity" value={`${fmtNum(poe.capacityWatts, 1)} W`} sub="chassis budget" />
         <Stat label="Allocated" value={`${fmtNum(poe.allocatedWatts, 1)} W`}
               tone={(poe.allocatedPct || 0) >= 85 ? "amber" : "gray"} sub={pctText(poe.allocatedPct)} />
         <Stat label="Actually drawn" value={`${fmtNum(poe.drawWatts, 1)} W`} tone="blue"
               sub={`${poe.poweredPorts} powered ports`} />
-        <Stat label="Ports up" value={`${fmtNum(ports.up)}/${fmtNum(ports.total)}`}
-              tone={ports.erroredCount ? "amber" : "gray"}
-              sub={ports.erroredCount ? `${ports.erroredCount} counting errors` : "no errors counted"} />
       </div>
       </Section>
 
-      <Card id="wired.poe-budget" title="PoE budget per switch" icon={<Zap size={17} className="text-gray-400" />}
+      <Card id="poe.budget" title="PoE budget per switch" icon={<Zap size={17} className="text-gray-400" />}
             hint="Allocated is power committed to attached devices; drawn is what they are actually pulling. A wide gap is class negotiation, not capacity.">
         {poe.switches.length ? (
           <div className="space-y-3">
@@ -1646,16 +2327,11 @@ function Wired({ report }: { report: any }) {
         )}
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card id="wired.poe-standard" title="PoE standard in use" hint="Per powered port.">
-          <BarList rows={poe.byType} limit={6} />
-        </Card>
-        <Card id="wired.link-speeds" title="Link speeds" hint="Ports that are up.">
-          <BarList rows={ports.bySpeed} limit={6} />
-        </Card>
-      </div>
+      <Card id="poe.standard" title="PoE standard in use" hint="Per powered port — the class each device negotiated.">
+        <BarList rows={poe.byType} limit={6} />
+      </Card>
 
-      <Card id="wired.aps-on-ports" title="APs on switch ports" icon={<Zap size={17} className="text-gray-400" />}
+      <Card id="poe.aps-on-ports" title="APs on switch ports" icon={<Zap size={17} className="text-gray-400" />}
             hint="Joined by LLDP — the port reports the AP it can see. Watts and port speed are blank where the switch is not in this tenant.">
         <MiniTable
           columns={[
@@ -1677,80 +2353,65 @@ function Wired({ report }: { report: any }) {
         />
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card id="wired.top-poe-draws" title="Biggest PoE draws">
-          <MiniTable
-            columns={[
-              { key: "switch", header: "Switch" },
-              { key: "port", header: "Port" },
-              { key: "watts", header: "W" },
-              { key: "poeType", header: "Type" },
-              { key: "ap", header: "AP" },
-            ]}
-            rows={poe.topConsumers || []}
-            empty="No port is drawing power."
-          />
-        </Card>
-        <Card id="wired.port-errors" title="Ports counting errors" hint="Up ports with CRC or interface errors — cabling and optics show up here first.">
-          <MiniTable
-            columns={[
-              { key: "switch", header: "Switch" },
-              { key: "port", header: "Port" },
-              { key: "crc", header: "CRC" },
-              { key: "inErr", header: "In" },
-              { key: "outErr", header: "Out" },
-              { key: "speed", header: "Speed" },
-            ]}
-            rows={ports.errored || []}
-            empty="No up port is counting errors."
-          />
-        </Card>
-      </div>
+    </div>
+  );
+}
 
-      <Card id="wired.vlans" title="VLANs seen in this venue" icon={<Network size={17} className="text-gray-400" />}
-            hint="Where each VLAN is declared by configuration, and where it shows up in live traffic. The two are not the same thing.">
-        {!report.vlans.portsKnown && (
-          <p className="mb-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-3 py-2">
-            No switch ports were read for this venue, so the tagged and untagged
-            columns are <strong>unknown</strong>, not zero — nothing was looked at.
-          </p>
-        )}
-        {!!report.vlans.undeclaredWithClients && (
-          <p className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            {report.vlans.undeclaredWithClients} VLAN(s) carry clients but are declared
-            by nothing in this venue — no SSID, DHCP pool, switch port or venue setting.
-            On a DPSK or RADIUS site that is usually dynamic per-identity VLAN
-            assignment, which this venue's own config cannot show.
-          </p>
-        )}
-        <MiniTable
-          maxHeight="26rem"
-          columns={[
-            { key: "vlan", header: "VLAN" },
-            { key: "originCell", header: "Origin" },
-            { key: "untaggedCell", header: "Untagged ports" },
-            { key: "taggedCell", header: "Tagged ports" },
-            { key: "ssidText", header: "SSIDs" },
-            { key: "apsManagedOn", header: "APs managed" },
-            { key: "clients", header: "Clients" },
-            { key: "dhcpPool", header: "DHCP pool" },
-            { key: "declaredText", header: "Declared by" },
-          ]}
-          rows={(report.vlans.rows || []).map((row: any) => ({
-            ...row,
-            vlan: row.isManagement ? `${row.vlan} (mgmt)` : row.vlan,
-            originCell: row.origin === "configured"
-              ? <Pill tone="green">configured</Pill>
-              : <Pill tone={row.clients ? "amber" : "gray"}>undeclared</Pill>,
-            // A zero here is only meaningful if ports were actually read.
-            untaggedCell: report.vlans.portsKnown ? row.untaggedPorts : null,
-            taggedCell: report.vlans.portsKnown ? row.taggedPorts : null,
-            ssidText: row.ssids.join(", "),
-            declaredText: (row.declaredBy || []).join(", "),
-          }))}
-          empty="No VLAN information was returned."
-        />
-      </Card>
+
+/**
+ * VLANs, on the Wired tab beside the clients that sit on them.
+ *
+ * Was part of the old combined "Wired & PoE" tab. It reads as a wired-network
+ * question, not a power one, so it moved with the split rather than staying
+ * next to the budget meters.
+ */
+function Vlans({ report }: { report: any }) {
+  return (
+    <div className="space-y-4">
+        <Card id="wired.vlans" title="VLANs seen in this venue" icon={<Network size={17} className="text-gray-400" />}
+              hint="Where each VLAN is declared by configuration, and where it shows up in live traffic. The two are not the same thing.">
+          {!report.vlans.portsKnown && (
+            <p className="mb-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+              No switch ports were read for this venue, so the tagged and untagged
+              columns are <strong>unknown</strong>, not zero — nothing was looked at.
+            </p>
+          )}
+          {!!report.vlans.undeclaredWithClients && (
+            <p className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              {report.vlans.undeclaredWithClients} VLAN(s) carry clients but are declared
+              by nothing in this venue — no SSID, DHCP pool, switch port or venue setting.
+              On a DPSK or RADIUS site that is usually dynamic per-identity VLAN
+              assignment, which this venue's own config cannot show.
+            </p>
+          )}
+          <MiniTable
+            maxHeight="26rem"
+            columns={[
+              { key: "vlan", header: "VLAN" },
+              { key: "originCell", header: "Origin" },
+              { key: "untaggedCell", header: "Untagged ports" },
+              { key: "taggedCell", header: "Tagged ports" },
+              { key: "ssidText", header: "SSIDs" },
+              { key: "apsManagedOn", header: "APs managed" },
+              { key: "clients", header: "Clients" },
+              { key: "dhcpPool", header: "DHCP pool" },
+              { key: "declaredText", header: "Declared by" },
+            ]}
+            rows={(report.vlans.rows || []).map((row: any) => ({
+              ...row,
+              vlan: row.isManagement ? `${row.vlan} (mgmt)` : row.vlan,
+              originCell: row.origin === "configured"
+                ? <Pill tone="green">configured</Pill>
+                : <Pill tone={row.clients ? "amber" : "gray"}>undeclared</Pill>,
+              // A zero here is only meaningful if ports were actually read.
+              untaggedCell: report.vlans.portsKnown ? row.untaggedPorts : null,
+              taggedCell: report.vlans.portsKnown ? row.taggedPorts : null,
+              ssidText: row.ssids.join(", "),
+              declaredText: (row.declaredBy || []).join(", "),
+            }))}
+            empty="No VLAN information was returned."
+          />
+        </Card>
     </div>
   );
 }
@@ -2221,11 +2882,28 @@ function Devices({ report, filter, onFilter }: {
             { key: "mgmtVlan", header: "Mgmt VLAN", className: "whitespace-nowrap" },
             { key: "clients", header: "Clients", className: "whitespace-nowrap" },
             { key: "uplinkStatus", header: "Uplink", className: "whitespace-nowrap" },
+            // Mesh, uptime, placement and tags were fetched and shaped all
+            // along and never rendered. A meshing AP is green on every other
+            // view in this report while its cable is dead; an AP whose uptime
+            // is hours old on a settled site has been restarting.
+            { key: "meshCell", header: "Mesh", className: "whitespace-nowrap" },
+            { key: "uptimeText", header: "Uptime", className: "whitespace-nowrap" },
+            { key: "placedCell", header: "On plan", className: "whitespace-nowrap" },
+            { key: "tagText", header: "Tags" },
             { key: "ssidCount", header: "SSIDs on air", className: "whitespace-nowrap" },
           ]}
           rows={aps.map((row: any) => ({
             ...row,
             statusPill: <StatePill state={row.state} status={row.status} />,
+            // Only the fallback is called out. "DISABLED" is the ordinary
+            // state on a wired venue and a column full of it says nothing.
+            meshCell: row.meshing
+              ? <Pill tone="amber">mesh</Pill>
+              : <span className="text-gray-400">wired</span>,
+            placedCell: row.placed
+              ? <span className="text-green-700">yes</span>
+              : <span className="text-amber-700">no</span>,
+            tagText: (row.tags || []).join(", ") || null,
             ssidCount: row.ssidsBroadcast?.length || 0,
           }))}
           empty="No AP matches."

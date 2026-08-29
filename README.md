@@ -101,10 +101,10 @@ error anywhere. `config.py` uppercases and validates it for this reason.
 editing a file that is otherwise a verbatim copy.
 
 **The `{controller_id}` in the URLs is a vestige.** In rtools2 it selected one of
-a user's saved controllers. Here there is only ever one, from `.env`. It is kept
-so `pisr_router.py`, `PISR.tsx` and `useSingleEc.tsx` stay diffable against their
-originals — those three files are byte-identical to rtools2 apart from the router
-edits, and keeping them that way makes pulling upstream changes a readable merge.
+a user's saved controllers. Here there is only ever one, from `.env`. It stays
+because changing it would touch the router, both frontend callers and every
+saved URL, to remove a path segment nobody reads — not because the files are
+being kept diffable against anything. They no longer are; see Provenance.
 
 **The static mount in `main.py` must stay last.** Starlette matches routes in
 order and a `Mount("/")` matches everything; move it above the routers and every
@@ -436,7 +436,18 @@ curl -b jar localhost:8090/api/config
 
 ## Provenance
 
-Extracted from rtools2 at commit `c332420`. The report logic — `shape.py`,
-`checks.py`, `fetch.py`, `collect.py`, `reports/pisr.py`, the PDF template, and
-`PISR.tsx` — is carried across verbatim. What changed is only the layer that
-used to authenticate users and look credentials up in a database.
+Extracted from rtools2 at commit `c332420`, originally carrying the report logic
+across verbatim so that upstream changes stayed a readable diff.
+
+**That is no longer the case, deliberately.** PISR is freestanding. The report
+pipeline (`shape.py`, `fetch.py`, `collect.py`), both renderers (`PISR.tsx`, the
+PDF template and `reports/pisr.py`) and the whole role-and-visibility layer have
+diverged on their own merits — wired clients, channel-plan bucketing, the
+section policy, the Wired/PoE split. Judge a change here by whether it is right
+for this tool, not by whether it would merge cleanly somewhere else.
+
+Two things are still close to their originals, for reasons of their own:
+`api/r1api/**`, a general RUCKUS ONE client whose pagination and windowing
+quirks took live tenants to work out and which PISR uses a fraction of; and
+`checks.py`, which stays a pure reader over the report — the visibility layer
+filters findings by id rather than teaching the checks that a policy exists.

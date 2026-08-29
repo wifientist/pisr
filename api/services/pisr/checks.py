@@ -42,6 +42,27 @@ def _join(values, empty: str = "—") -> str:
     return ", ".join(text) if text else empty
 
 
+def _duration(seconds: Optional[float]) -> str:
+    """
+    Seconds as something a person reads: "3 days", "2 hours", "14 minutes".
+
+    Its own int() rather than shape._num: this module imports nothing from the
+    shapers on purpose, so that a check is only ever a pure reader of the
+    assembled report.
+    """
+    try:
+        total = int(float(seconds or 0))
+    except (TypeError, ValueError):
+        return "unknown"
+    if total <= 0:
+        return "unknown"
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if total >= size:
+            value = total // size
+            return f"{value} {unit}{'s' if value != 1 else ''}"
+    return f"{total} second{'s' if total != 1 else ''}"
+
+
 def _finding(check_id: str, name: str, severity: str, summary: str,
              evidence: Optional[List[Dict[str, Any]]] = None,
              detail: Optional[str] = None,
@@ -976,6 +997,96 @@ def check_24ghz_channel_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                     evidence=evidence)
 
 
+def check_ap_mesh_fallback(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    APs carrying traffic over the air instead of over their cable.
+
+    An install defect that passes every other check in this file. A mesh
+    fallback AP is online, provisioned, broadcasting and serving clients — the
+    whole report says green — while its drop is dead, its PoE port is dead, or
+    it was never patched at all. Nobody notices until someone measures
+    throughput, by which time the crew has gone.
+
+    Only APs the shaper positively identified as meshing are counted; an
+    unfamiliar meshRole is left alone. See shape._is_meshing.
+    """
+    rows = report["inventory"]["rows"]["aps"]
+    if not rows:
+        return _finding("ap-mesh-fallback", "APs are wired, not meshing", "skipped",
+                        "No APs are assigned to this venue.")
+    meshing = [r for r in rows if r.get("meshing")]
+    if meshing:
+        return _finding(
+            "ap-mesh-fallback", "APs are wired, not meshing", "warning",
+            f"{len(meshing)} of {len(rows)} APs are carrying traffic over mesh "
+            "rather than their own uplink. Each one is a dead drop, a dead PoE "
+            "port or a patch that was never made.",
+            headline=f"{len(meshing)} AP(s) fell back to mesh",
+            evidence=[{"ap": r["name"], "serial": r["serial"],
+                       "role": r.get("meshRole"),
+                       "switch": r.get("uplinkSwitch"),
+                       "port": r.get("uplinkPort")} for r in meshing])
+    return _finding("ap-mesh-fallback", "APs are wired, not meshing", "ok",
+                    f"All {len(rows)} APs are on their own uplink.")
+
+
+# An AP up for less than this, on a venue whose APs are otherwise settled, has
+# restarted recently. Loose on purpose — the point is to separate one outlier
+# from a fleet, not to measure anything.
+RECENT_RESTART_SECONDS = 3600
+SETTLED_FLEET_SECONDS = 86400
+
+
+def check_ap_uptime(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    An AP that has restarted while the rest of the fleet has not.
+
+    RELATIVE, not absolute, and that is the whole design. During an install
+    every AP has just booted, so a plain "uptime under an hour" check would
+    fire on every AP on the day it is most likely to be run — noise exactly
+    when the report needs to be trusted. Comparing each AP against the venue's
+    median instead means the check stays silent through commissioning and only
+    speaks once there is a settled fleet for an outlier to stand out from.
+
+    That also makes it a power check without any power data: an AP that reboots
+    while its neighbours do not is usually a marginal PoE budget, a failing
+    injector, or a cable moving in a duct.
+
+    No history is needed, and none is available — PISR stores nothing. One
+    poll, one comparison.
+    """
+    rows = [r for r in report["inventory"]["rows"]["aps"]
+            if r["state"] == "online" and r.get("uptimeSeconds")]
+    if len(rows) < 3:
+        return _finding("ap-uptime", "No AP has restarted on its own", "skipped",
+                        "Too few online APs report an uptime to compare them.")
+
+    uptimes = sorted(r["uptimeSeconds"] for r in rows)
+    median = uptimes[len(uptimes) // 2]
+    if median < SETTLED_FLEET_SECONDS:
+        # The whole venue is freshly booted — commissioning, or a site-wide
+        # power event. Either way there is no outlier to find.
+        return _finding("ap-uptime", "No AP has restarted on its own", "skipped",
+                        "Every AP here was started recently, so there is no "
+                        "settled fleet to compare against yet.")
+
+    recent = [r for r in rows if r["uptimeSeconds"] < RECENT_RESTART_SECONDS]
+    if recent:
+        return _finding(
+            "ap-uptime", "No AP has restarted on its own", "warning",
+            f"{len(recent)} AP(s) restarted within the last hour while the rest "
+            f"of this venue has been up for {_duration(median)}. That is usually "
+            "power rather than the AP.",
+            headline=f"{len(recent)} AP(s) restarted while the fleet did not",
+            evidence=[{"ap": r["name"], "serial": r["serial"],
+                       "uptime": r.get("uptimeText") or _duration(r["uptimeSeconds"]),
+                       "switch": r.get("uplinkSwitch"),
+                       "port": r.get("uplinkPort")} for r in recent])
+    return _finding("ap-uptime", "No AP has restarted on its own", "ok",
+                    f"Every online AP has been up at least "
+                    f"{_duration(min(uptimes))}.")
+
+
 def check_ap_placement(report: Dict[str, Any]) -> Dict[str, Any]:
     rows = report["inventory"]["rows"]["aps"]
     if not rows:
@@ -1064,6 +1175,8 @@ CHECKS: List[Callable[[Dict[str, Any]], Dict[str, Any]]] = [
     check_24ghz_channel_plan,
     check_ap_placement,
     check_ap_naming,
+    check_ap_mesh_fallback,
+    check_ap_uptime,
     check_clients_present,
 ]
 
