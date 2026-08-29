@@ -836,6 +836,63 @@ def test_redact_scrubs_before_it_does_anything_else():
             secret_scrub.REDACTED, f"credential survived redact(hidden={hidden})"
 
 
+# ── AP subnet grouping ───────────────────────────────────────────────
+
+from services.pisr.shape import _subnet_groups                # noqa: E402
+
+
+def _dev(ip, netmask=None, gateway=None):
+    return {"ip": ip, "netmask": netmask, "gateway": gateway}
+
+
+def test_maskless_devices_land_in_a_reported_subnet_that_contains_them():
+    """
+    The bug this guards. A site on a single 10.2.0.0/21 rendered as the /21
+    plus phantom /24s carved out of it — 10.2.6.0/24 and 10.2.7.0/24 with one
+    AP each — because a device with no netmask and no gateway was bucketed into
+    an assumed /24 without checking whether anything already described where it
+    was. Three rows, one network, and a subnet count that read as 3.
+    """
+    devices = [_dev(f"10.2.{i // 254}.{i % 254 + 1}", "255.255.248.0")
+               for i in range(418)]
+    devices += [_dev("10.2.6.50"), _dev("10.2.7.99")]
+    rows = _subnet_groups(devices)
+    assert len(rows) == 1, f"expected one subnet, got {[r['cidr'] for r in rows]}"
+    assert rows[0]["cidr"] == "10.2.0.0/21"
+    assert rows[0]["count"] == 420, "the maskless APs belong to the count"
+
+
+def test_a_genuinely_separate_subnet_still_gets_its_own_row():
+    """The fix must not swallow addresses that are actually elsewhere."""
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"), _dev("192.168.9.20")])
+    assert {r["cidr"] for r in rows} == {"10.2.0.0/21", "192.168.9.0/24"}
+
+
+def test_the_most_specific_containing_subnet_wins():
+    """
+    A device inside both a reported /21 and a reported /24 belongs in the /24 —
+    that is the more precise statement about where it is.
+    """
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"),
+                           _dev("10.2.6.10", "255.255.255.0"),
+                           _dev("10.2.6.77")])
+    by_cidr = {r["cidr"]: r["count"] for r in rows}
+    assert by_cidr["10.2.6.0/24"] == 2, "the maskless AP joined the /24, not the /21"
+    assert by_cidr["10.2.0.0/21"] == 1
+
+
+def test_gateway_inferred_devices_fold_into_a_reported_subnet():
+    """
+    Containment is the test, not a matching gateway. Keying on the gateway
+    meant a device whose gateway no reported row happened to list produced a
+    duplicate subnet inside a real one.
+    """
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"),
+                           _dev("10.2.4.9", None, "10.2.0.1")])
+    assert len(rows) == 1 and rows[0]["cidr"] == "10.2.0.0/21"
+    assert rows[0]["count"] == 2
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

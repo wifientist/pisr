@@ -291,7 +291,13 @@ def _subnet_groups(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
        a /22 — so it is reported as a floor, not a fact.
 
     Anything with neither mask nor gateway falls back to a /24 bucket and is
-    labelled as an assumption.
+    labelled as an assumption — but ONLY after checking it is not already
+    inside a subnet some other device reported. Without that check a site on a
+    single /21 rendered as the /21 plus a scattering of phantom /24s carved out
+    of it: 10.2.0.0/21 with 418 APs, then 10.2.6.0/24 and 10.2.7.0/24 with one
+    each, all three describing the same network. Every address is placed in the
+    most specific subnet already known to contain it before any assumption is
+    made about it.
     """
     exact: Dict[str, Dict[str, Any]] = {}
     by_gateway: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -321,6 +327,21 @@ def _subnet_groups(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     rows = list(exact.values())
 
+    def containing(addresses) -> Optional[Dict[str, Any]]:
+        """
+        The most specific known subnet holding every one of these addresses.
+
+        Most specific, not first: a device inside both a /21 and a /24 that
+        somebody reported belongs in the /24, because that is the more precise
+        statement about where it actually is.
+        """
+        best_row, best_prefix = None, -1
+        for row in rows:
+            network = ipaddress.ip_network(row["cidr"])
+            if network.prefixlen > best_prefix and all(a in network for a in addresses):
+                best_row, best_prefix = row, network.prefixlen
+        return best_row
+
     for gateway, members in by_gateway.items():
         addresses = [m["addr"] for m in members]
         gw_addr = _addr(gateway)
@@ -329,19 +350,32 @@ def _subnet_groups(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         network = _smallest_network(addresses)
         if network is None:
             continue
-        # If a device with a real mask already covers this gateway, trust that.
-        covered = next((row for row in rows
-                        if gateway in row["gateways"]
-                        and all(a in ipaddress.ip_network(row["cidr"]) for a in addresses)), None)
+        # If a subnet somebody actually reported already contains these,
+        # trust that over anything supernetted from a gateway. Containment is
+        # the test; a shared gateway is corroboration, not a requirement —
+        # keying on the gateway meant a device whose gateway no reported row
+        # happened to list produced a duplicate subnet inside a real one.
+        covered = containing(addresses)
         if covered:
             covered["count"] += len(members)
+            if gateway:
+                covered["gateways"].add(gateway)
             continue
         rows.append({"cidr": str(network), "prefix": network.prefixlen,
                      "source": "inferred", "count": len(members),
                      "gateways": {gateway}, "addresses": [m["addr"] for m in members]})
 
+    # Loose devices last, so they can land in a subnet inferred above as well
+    # as one that was reported.
     bucket = Counter()
     for item in loose:
+        covered = containing([item["addr"]])
+        if covered:
+            # It has no mask of its own, but something else established the
+            # subnet it sits in. Assuming a /24 here is what produced the
+            # phantom subnets described above.
+            covered["count"] += 1
+            continue
         bucket[str(ipaddress.ip_network(f"{item['addr']}/24", strict=False))] += 1
     for cidr, count in bucket.items():
         rows.append({"cidr": cidr, "prefix": 24, "source": "assumed",
