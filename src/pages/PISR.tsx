@@ -202,25 +202,42 @@ const pctText = (p: number | null | undefined) => (p === null || p === undefined
  * api/redact.py — see src/context/VisibilityContext.tsx. This removes the
  * container, not the contents.
  */
-function Card({ id, title, hint, right, icon, children, className = "" }: {
+function Card({ id, title, hint, right, icon, children, className = "",
+                collapsible, open, onToggle }: {
   id?: string; title?: string; hint?: string; right?: React.ReactNode;
   icon?: React.ReactNode; children: React.ReactNode; className?: string;
+  /*
+   * A collapsible card keeps its HEADER when closed — collapsed is a summary,
+   * not a disappearance. The Config tab has thirty-five of these and every one
+   * of them open is a wall nobody reads; closed, the headers are the checklist
+   * and the badges say which are worth opening.
+   */
+  collapsible?: boolean; open?: boolean; onToggle?: () => void;
 }) {
   if (!useVisible(id)) return null;
+  const showBody = !collapsible || open;
+  const header = (title || right) && (
+    <div className={`flex items-start justify-between gap-3 ${showBody ? "mb-3" : ""}`}>
+      <div className="min-w-0 flex items-start gap-1.5">
+        {collapsible && (open
+          ? <ChevronDown size={15} className="mt-1 shrink-0 text-gray-400" />
+          : <ChevronRight size={15} className="mt-1 shrink-0 text-gray-400" />)}
+        <div className="min-w-0">
+          <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+            {icon}{title}
+          </h3>
+          {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
+        </div>
+      </div>
+      {right}
+    </div>
+  );
   return (
     <div className={`min-w-0 bg-white border border-gray-200 rounded-lg p-4 ${className}`}>
-      {(title || right) && (
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="min-w-0">
-            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-              {icon}{title}
-            </h3>
-            {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
-          </div>
-          {right}
-        </div>
-      )}
-      {children}
+      {collapsible
+        ? <button onClick={onToggle} className="w-full text-left">{header}</button>
+        : header}
+      {showBody && children}
     </div>
   );
 }
@@ -1737,6 +1754,181 @@ function ConfigTree({ node, depth = 0, path = "" }: {
 }
 
 /**
+ * One category's settings as a comparison table.
+ *
+ * Was a raw JSON tree, which showed everything and meant nothing — a reader had
+ * to know R1's field names to get anything out of it. Each row now carries a
+ * readable label, a formatted value, and whatever the two baselines say about
+ * it, so the question changes from "what is this field" to "is this right".
+ *
+ * The raw path stays visible in small type. An installer does not need it; the
+ * person cross-referencing the R1 console or the OpenAPI spec cannot work
+ * without it, and they are the one who will be reading this at 11pm.
+ */
+/**
+ * A sub-section within a category, collapsed by default.
+ *
+ * The categories were collapsed first and that was not enough: a single
+ * category can hold ninety-seven settings, and "Radio" open is still a wall
+ * whether or not it is one of thirty-five. Splitting by band, by AP model or
+ * by profile means the reader opens 6 GHz, not Radio.
+ *
+ * The counts and the differ badge sit on the closed header for the same reason
+ * they sit on the category header: closed, these ARE the index.
+ */
+function ConfigGroup({ group, baselines, depth = 0 }: {
+  group: any; baselines: any; depth?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const rows: any[] = group.rows || [];
+  const differing = rows.filter(
+    (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+
+  return (
+    <div className={`min-w-0 rounded border border-gray-200 ${depth ? "ml-3" : ""}`}>
+      <button onClick={() => setOpen(!open)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left">
+        {open ? <ChevronDown size={13} className="shrink-0 text-gray-400" />
+              : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">
+          {group.label}
+        </span>
+        {!!differing.length && <Pill tone="amber">{differing.length} differ</Pill>}
+        <span className="shrink-0 text-xs text-gray-400">{rows.length}</span>
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 px-3 py-2">
+          {group.groups
+            ? <div className="space-y-2">
+                {group.groups.map((child: any) => (
+                  <ConfigGroup key={child.key} group={child}
+                               baselines={baselines} depth={depth + 1} />
+                ))}
+              </div>
+            : <ConfigRows rows={rows} baselines={baselines} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
+  rows: any[]; baselines: any; presentCount?: number; totalCount?: number;
+  groups?: any[] | null;
+}) {
+  const [onlyDiffs, setOnlyDiffs] = useState(false);
+  if (!rows?.length) return <p className="text-sm text-gray-400">Nothing set.</p>;
+
+  // Grouped categories render as sub-sections instead of one long table.
+  if (groups?.length) {
+    return (
+      <div className="space-y-2">
+        {!!presentCount && totalCount !== undefined && presentCount < totalCount && (
+          <Pill tone="gray">
+            {presentCount} of {totalCount} models are at this venue — those first
+          </Pill>
+        )}
+        {groups.map((g) => (
+          <ConfigGroup key={g.key} group={g} baselines={baselines} />
+        ))}
+      </div>
+    );
+  }
+
+  const compared = rows.filter((r) => r.org || r.ruckus);
+  const differing = compared.filter(
+    (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+  const shown = onlyDiffs ? differing : rows;
+
+  const hasOrg = rows.some((r) => r.org);
+  const hasRuckus = rows.some((r) => r.ruckus);
+
+  const cell = (rec: any) => {
+    if (!rec) return <span className="text-gray-300">—</span>;
+    return (
+      <span className={rec.matches ? "text-green-700" : "text-amber-800 font-medium"}>
+        {rec.text}
+      </span>
+    );
+  };
+
+  return (
+    <>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {!!presentCount && totalCount !== undefined && presentCount < totalCount && (
+          <Pill tone="gray">
+            {presentCount} of {totalCount} models are at this venue — those first
+          </Pill>
+        )}
+        {!!differing.length && (
+          <button onClick={() => setOnlyDiffs(!onlyDiffs)}
+                  className="text-xs text-blue-700 hover:underline">
+            {onlyDiffs
+              ? `Show all ${rows.length}`
+              : `Show only the ${differing.length} that differ`}
+          </button>
+        )}
+        {!differing.length && !!compared.length && (
+          <Pill tone="green">all {compared.length} compared settings match</Pill>
+        )}
+      </div>
+
+      <div className="overflow-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left">
+              <th className="py-1.5 pr-3 font-medium text-gray-600">Setting</th>
+              <th className="py-1.5 pr-3 font-medium text-gray-600">Value</th>
+              {hasOrg && (
+                <th className="py-1.5 pr-3 font-medium text-gray-600 whitespace-nowrap">
+                  {baselines?.org?.name || "Org"}
+                  {/* An unverified baseline is captioned every time it is
+                      shown. A fabricated "recommended" value read as
+                      authoritative by an install crew is worse than an empty
+                      column: an empty column asks a question, a wrong one
+                      answers it. */}
+                  {!baselines?.org?.verified && (
+                    <span className="ml-1 text-[10px] font-normal text-amber-700">
+                      unverified
+                    </span>
+                  )}
+                </th>
+              )}
+              {hasRuckus && (
+                <th className="py-1.5 pr-3 font-medium text-gray-600 whitespace-nowrap">
+                  RUCKUS
+                  {!baselines?.ruckus?.verified && (
+                    <span className="ml-1 text-[10px] font-normal text-amber-700">
+                      {baselines?.ruckus?.status === "placeholder"
+                        ? "placeholder" : "unverified"}
+                    </span>
+                  )}
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row) => (
+              <tr key={row.path} className="border-b border-gray-100 align-top">
+                <td className="py-1.5 pr-3 min-w-0">
+                  <div className="text-gray-900 break-words">{row.label}</div>
+                  <div className="font-mono text-[10px] text-gray-400 break-all">
+                    {row.path}
+                  </div>
+                </td>
+                <td className="py-1.5 pr-3 text-gray-800 break-words">{row.valueText}</td>
+                {hasOrg && <td className="py-1.5 pr-3 break-words">{cell(row.org)}</td>}
+                {hasRuckus && <td className="py-1.5 pr-3 break-words">{cell(row.ruckus)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/**
  * How this venue is configured, at venue, AP-group and per-AP level.
  *
  * Grouped by the R1 endpoint each block came from. That is a leaky
@@ -1754,6 +1946,9 @@ function Config({ report, base, qs }: {
 }) {
   const config = report.config || {};
   const categories: any[] = config.categories || [];
+  // Everything closed to begin with. Thirty-five open tables is a wall, and
+  // the point of the tab is to be able to find something in it.
+  const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1777,15 +1972,65 @@ function Config({ report, base, qs }: {
     }
   }, [base, qs, report]);
 
+  const toggleCat = (slug: string) => setOpenCats((current) => {
+    const next = new Set(current);
+    if (next.has(slug)) next.delete(slug); else next.add(slug);
+    return next;
+  });
+
+  const slugsWhere = (test: (cat: any) => boolean) =>
+    new Set(categories.filter(test).map((c) => c.slug));
+
+  const differingSlugs = slugsWhere((cat) =>
+    (cat.rows || []).some((r: any) =>
+      (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches)));
+
   return (
     <div className="space-y-4">
       <VenueConfigCard report={report} />
 
-      {categories.map((cat) => (
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <span className="text-gray-500">
+          {categories.length} setting group(s), all collapsed
+        </span>
+        {!!differingSlugs.size && (
+          <button onClick={() => setOpenCats(differingSlugs)}
+                  className="text-blue-700 hover:underline">
+            Open the {differingSlugs.size} with differences
+          </button>
+        )}
+        <button onClick={() => setOpenCats(slugsWhere(() => true))}
+                className="text-blue-700 hover:underline">Expand all</button>
+        <button onClick={() => setOpenCats(new Set())}
+                className="text-blue-700 hover:underline">Collapse all</button>
+      </div>
+
+      {categories.map((cat) => {
+        const rows: any[] = cat.rows || [];
+        const compared = rows.filter((r) => r.org || r.ruckus);
+        const differing = compared.filter(
+          (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+        return (
         <Card key={cat.slug} id={`config.${cat.slug}`} title={cat.label}
               hint={cat.hint || undefined}
-              right={<span className="text-[11px] font-mono text-gray-400 break-all">
-                       {cat.source}</span>}>
+              collapsible open={openCats.has(cat.slug)}
+              onToggle={() => toggleCat(cat.slug)}
+              right={
+                /* The badges ARE the checklist when everything is closed:
+                   scan for amber, open only those. */
+                <span className="flex shrink-0 items-center gap-2">
+                  {!!differing.length && (
+                    <Pill tone="amber">{differing.length} differ</Pill>
+                  )}
+                  {!differing.length && !!compared.length && (
+                    <Pill tone="green">all match</Pill>
+                  )}
+                  <span className="text-xs text-gray-400">{rows.length}</span>
+                  <span className="hidden text-[11px] font-mono text-gray-400 break-all sm:inline">
+                    {cat.source}
+                  </span>
+                </span>
+              }>
           {cat.unavailable ? (
             /* R1 not answering is different from R1 answering with nothing,
                and a config review needs to tell them apart. */
@@ -1793,10 +2038,13 @@ function Config({ report, base, qs }: {
               RUCKUS ONE did not return this setting block.
             </p>
           ) : (
-            <ConfigTree node={cat.data} />
+            <ConfigRows rows={cat.rows} groups={cat.groups}
+                        baselines={config.baselines}
+                        presentCount={cat.presentCount} totalCount={cat.totalCount} />
           )}
         </Card>
-      ))}
+        );
+      })}
 
       <Card id="config.ap-groups" title="AP group & per-AP settings"
             icon={<SlidersHorizontal size={17} className="text-gray-400" />}

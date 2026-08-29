@@ -345,11 +345,45 @@ an upstream.
   it.** The spec calls it "Get AP Password". Nothing in PISR has any use for
   it, and the scrubber should not be the reason it is safe.
 
+- **Config values are labelled and compared, not dumped.** `api/config_labels.py`
+  turns R1's keys into prose and its values into readable text; `api/baselines.py`
+  puts two "recommended" columns beside them.
+
+  **The label map is deliberately NOT exhaustive.** Roughly a hundred keys are
+  named explicitly; everything else de-camelCases, so `serverLossTimeout` reads
+  as "Server loss timeout". That fallback is the load-bearing part — R1 adds
+  fields without warning, and a hardcoded layout would make a new one silently
+  disappear, which is precisely what this tab exists to prevent. An unlabelled
+  field looks slightly worse; a missing field looks like a setting that does
+  not exist.
+
+  The raw path travels with every row. An installer does not need it; the
+  person cross-referencing the R1 console or the spec cannot work without it.
+
+  **Baselines are keyed on `<endpoint>.<dotted path>`, never on labels.**
+  Labels are prose and change; a baseline keyed to prose drifts silently, which
+  for a "recommended value" column means quietly comparing against nothing.
+
+  **The RUCKUS baseline ships as placeholders and says so.** `status:
+  "placeholder"` in `api/baselines/ruckus.json`, surfaced in the UI on every
+  column header until someone sources the real guidance and sets `"verified"`.
+  There is a test asserting it has not gone green by accident. A fabricated
+  "RUCKUS recommends" in front of an install crew is worse than an empty
+  column — an empty column asks a question, a wrong one answers it.
+
+  **The customer's name is `PISR_ORG_NAME` and their baseline is a mounted
+  file.** Neither belongs in this repository. Unset, the column reads "Org".
+
 - **R1 returns live credentials in ordinary config responses.** Observed on a
   live tenant, unmarked and with no opt-out:
 
       GET /venues/{id}/switchSettings  -> switchLoginPassword
       GET /venues/{id}/aps/{serial}    -> loginPassword
+      GET /venues/{id}/wifiSettings    -> apPassword
+
+  The third was found by the scrubber itself, after the Config tab started
+  reading `wifiSettings` for its other nineteen keys — which is exactly the
+  case the backstop exists for, and the reason its warning is worth reading.
 
   Those are working admin passwords for a customer's switches and APs. Any
   report carrying one puts it in a JSON response, in a PDF that gets emailed
@@ -377,6 +411,18 @@ an upstream.
   instead of by subsystem. A port error and a mesh fallback are the same visit
   with the same ladder; a firmware mismatch is a different person who is
   probably not on site. If a task is wrong, the bug is in the check.
+
+  **The PDF must not print the same finding twice.** On screen the Punch list
+  and Overview tabs are separate places a reader chooses between, and repeating
+  findings across them costs nothing. In one linear document it is the same
+  warnings again three pages later, and a reader who has to work out whether
+  the second list is new information stops trusting both. So in the template
+  `punchlist_shown` gates three things: the actionable findings loop collapses
+  to "Checks that passed", the skipped list drops (the punch list carries it),
+  and the standalone alarms table goes entirely. Every guard has a
+  `not punchlist_shown` fallback — hiding the punch list by policy must not
+  take the findings and alarms with it, and there is no test for that, so
+  check it by hand if you touch those guards.
 
   **`redact.py` REBUILDS it rather than filtering it.** The punch list is
   derived from `verification` and `incidents`, so after those are filtered it

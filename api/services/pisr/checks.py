@@ -1087,6 +1087,52 @@ def check_ap_uptime(report: Dict[str, Any]) -> Dict[str, Any]:
                     f"{_duration(min(uptimes))}.")
 
 
+def check_floorplans(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    A floor plan exists, and somebody set a scale on it.
+
+    `check_ap_placement` asks whether APs were dragged onto a plan. This asks
+    whether the plan they were dragged onto means anything.
+
+    AN UNSCALED PLAN IS THE QUIET FAILURE. It looks finished — it has an image,
+    APs sit on it, placement passes — but every distance derived from it is
+    meaningless, so coverage estimates and AP spacing are nonsense and nobody
+    finds out until someone surveys the site. Setting the scale is one drag and
+    a measurement, and it is skipped precisely because nothing complains.
+    """
+    plans = (report.get("venue") or {}).get("floorPlans") or []
+    if not plans:
+        return _finding("floorplans", "Floor plans exist and are scaled", "warning",
+                        "This venue has no floor plan, so no AP can be placed on "
+                        "one and nothing can be said about coverage or spacing.",
+                        headline="No floor plan on this venue")
+
+    unscaled = [p for p in plans if not p.get("scaleSet")]
+    if unscaled:
+        return _finding(
+            "floorplans", "Floor plans exist and are scaled", "warning",
+            f"{len(unscaled)} of {len(plans)} floor plan(s) have no scale set. "
+            "APs can still be placed on them, and every distance derived from "
+            "that placement is meaningless until a scale is drawn.",
+            headline=f"{len(unscaled)} floor plan(s) have no scale",
+            evidence=[{"floorPlan": p["name"], "floor": p.get("floorNumber"),
+                       "image": p.get("imageName"), "scaleSet": False}
+                      for p in unscaled])
+
+    missing_image = [p for p in plans if not p.get("hasImage")]
+    if missing_image:
+        return _finding(
+            "floorplans", "Floor plans exist and are scaled", "info",
+            f"{len(missing_image)} floor plan(s) are scaled but carry no image.",
+            headline=f"{len(missing_image)} floor plan(s) have no image",
+            evidence=[{"floorPlan": p["name"], "floor": p.get("floorNumber")}
+                      for p in missing_image])
+
+    return _finding("floorplans", "Floor plans exist and are scaled", "ok",
+                    f"All {len(plans)} floor plan(s) have an image and a scale "
+                    f"({_join(p['scaleDistance'] for p in plans)}).")
+
+
 def check_ap_placement(report: Dict[str, Any]) -> Dict[str, Any]:
     rows = report["inventory"]["rows"]["aps"]
     if not rows:
@@ -1174,6 +1220,7 @@ CHECKS: List[Callable[[Dict[str, Any]], Dict[str, Any]]] = [
     check_dpsk_identity_groups,
     check_24ghz_channel_plan,
     check_ap_placement,
+    check_floorplans,
     check_ap_naming,
     check_ap_mesh_fallback,
     check_ap_uptime,

@@ -100,6 +100,7 @@ CHECK_CATEGORY: Dict[str, str] = {
     # Documentation & handover
     "ap-naming": "documentation",
     "ap-placement": "documentation",
+    "floorplans": "documentation",
 }
 
 # Only these ask something of the reader. "ok" is done and "skipped" is neither

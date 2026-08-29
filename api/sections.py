@@ -573,7 +573,8 @@ SECTIONS: Tuple[Section, ...] = (
         tab="devices",
         hint="Full per-AP detail, including addressing and serials.",
         paths=("inventory.rows.aps",),
-        checks=("ap-naming", "ap-placement", "ap-mesh-fallback", "ap-uptime"),
+        checks=("ap-naming", "ap-placement", "ap-mesh-fallback", "ap-uptime",
+                "floorplans"),
     ),
     Section(
         id="devices.switches",

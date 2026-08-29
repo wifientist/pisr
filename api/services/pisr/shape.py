@@ -25,6 +25,9 @@ milliwatts, and `poeUtilization` is allocated power, NOT a percentage. Port
 
 import ipaddress
 import json
+
+import baselines
+import config_labels
 import logging
 import re
 from collections import Counter, defaultdict
@@ -633,6 +636,51 @@ def _channel_list(params: Dict[str, Any]) -> List[str]:
     return [str(channel) for channel in (allowed or [])]
 
 
+def floorplan_summary(venue: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Each floor plan, and whether it is actually usable.
+
+    R1 returns a `scales` array of raw coordinate pairs — x1, y1, x2, y2 and a
+    real-world distance. Rendered as-is that is eight numbers per plan saying
+    nothing; what an install review needs to know is narrower and never stated
+    directly: does a floor plan exist, does it have an image, and has anyone
+    set a scale on it.
+
+    THE SCALE IS THE PART THAT MATTERS. An unscaled floor plan still lets APs
+    be dragged onto it and still satisfies "AP is placed on a plan", but every
+    distance derived from it is meaningless — coverage estimates, AP spacing,
+    the lot. It is a step that gets skipped precisely because the plan looks
+    finished without it.
+
+    A scale counts as set when it names a real-world distance. R1 fills the
+    unit that was not used with 0.0, so both are checked and neither is
+    trusted to be present.
+    """
+    out: List[Dict[str, Any]] = []
+    for plan in venue.get("floorPlans") or []:
+        if not isinstance(plan, dict):
+            continue
+        scales = [s for s in (plan.get("scales") or []) if isinstance(s, dict)]
+        metres = next((_num(s.get("distanceInMeters")) for s in scales
+                       if _num(s.get("distanceInMeters")) > 0), 0)
+        feet = next((_num(s.get("distanceInFeet")) for s in scales
+                     if _num(s.get("distanceInFeet")) > 0), 0)
+        distance = (f"{metres:g} m" if metres else
+                    f"{feet:g} ft" if feet else None)
+        out.append({
+            "id": plan.get("id"),
+            "name": plan.get("name") or "Unnamed floor plan",
+            "floorNumber": plan.get("floorNumber"),
+            "imageName": plan.get("imageName") or plan.get("imageId"),
+            "hasImage": bool(plan.get("imageId") or plan.get("imageName")),
+            "scaleCount": len(scales),
+            "scaleSet": bool(distance),
+            "scaleDistance": distance,
+        })
+    out.sort(key=lambda row: (_as_int(row.get("floorNumber")), str(row["name"])))
+    return out
+
+
 def venue_card(venue: Dict[str, Any], prop: Optional[Dict[str, Any]],
                units: Dict[str, Any], mgmt_vlan: Optional[int],
                radio: Dict[str, Any], mesh: Dict[str, Any]) -> Dict[str, Any]:
@@ -655,6 +703,9 @@ def venue_card(venue: Dict[str, Any], prop: Optional[Dict[str, Any]],
             "latitude": address.get("latitude") or venue.get("latitude"),
             "longitude": address.get("longitude") or venue.get("longitude"),
         },
+        # Shaped rather than passed through: the raw form is coordinate pairs.
+        # Read by the Config tab and by check_floorplans.
+        "floorPlans": floorplan_summary(venue),
         "isProperty": prop is not None,
         # Field names verified against a live property. The previous set was
         # guessed and every one of them missed: `page.totalElements` (the count
@@ -1334,6 +1385,186 @@ def _override_flags(node: Any) -> List[str]:
     return sorted(set(found))
 
 
+def _config_rows(node: Any, endpoint: str, parts: Tuple[str, ...] = (),
+                 depth: int = 0,
+                 literals: Optional[set] = None) -> List[Dict[str, Any]]:
+    """
+    A settings blob flattened into labelled rows, ready to compare.
+
+    The tab started as a raw tree, which showed everything and meant nothing —
+    a reader had to know R1's field names to get anything out of it. Rows carry
+    a readable label, formatted value, and the path a baseline is keyed on, so
+    the same data becomes a table with an "is this right?" column beside it.
+
+    LISTS OF PER-MODEL OBJECTS keep the model as the path segment rather than
+    an index: `R550.lanPorts[0].type` survives R1 reordering the list, while
+    `[3].lanPorts[0].type` silently starts describing a different AP model.
+    Anything else keyed by `id` or `name` gets the same treatment for the same
+    reason; a bare index is the last resort.
+
+    THE PATH IS A TUPLE, joined only for display. R1 ships keys with dots in
+    them — `2.4GChannels` — so splitting a joined string back apart produced
+    a "2" section and a "4GChannels" section. Segments that came from DATA
+    rather than from a key (a model name, a profile name) are recorded in
+    `literals` so the grouping does not try to de-camelCase them into
+    "Radius2 32744".
+    """
+    if depth > 8 or node is None:
+        return []
+    if literals is None:
+        literals = set()
+
+    rows: List[Dict[str, Any]] = []
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key.startswith("_"):
+                continue
+            here = parts + (str(key),)
+            # A list of SCALARS is one setting with several values —
+            # `allowedChannels: [1, 6, 11]` is the channel plan, not three
+            # separate settings. Recursing into it produced 282 rows for the
+            # radio card, most of them a channel number labelled "Allowed
+            # channels". format_value joins them instead.
+            structured = isinstance(value, (dict, list)) and value and not (
+                isinstance(value, list)
+                and all(not isinstance(v, (dict, list)) for v in value))
+            if structured:
+                rows.extend(_config_rows(value, endpoint, here, depth + 1, literals))
+                continue
+            rows.append(_config_row(endpoint, here, key, value))
+        return rows
+
+    if isinstance(node, list):
+        for index, item in enumerate(node):
+            if isinstance(item, dict):
+                # A stable name beats a positional index — see the docstring.
+                anchor = (item.get("model") or item.get("name")
+                          or item.get("id") or item.get("portId"))
+                segment = str(anchor) if anchor else str(index)
+                if anchor:
+                    literals.add(segment)
+                rows.extend(_config_rows(item, endpoint, parts + (segment,),
+                                         depth + 1, literals))
+            else:
+                rows.append(_config_row(endpoint, parts + (f"[{index}]",),
+                                        parts[-1] if parts else "", item))
+        return rows
+
+    return rows
+
+
+# A category with fewer rows than this is easier to read flat than split into
+# named sections that each hold two lines.
+_GROUP_MIN_ROWS = 6
+_GROUP_MAX_DEPTH = 2
+
+
+def _group_config_rows(rows: List[Dict[str, Any]], depth: int = 0,
+                       literals: Optional[set] = None
+                       ) -> Optional[List[Dict[str, Any]]]:
+    """
+    Split a category's rows into collapsible sub-sections by path prefix.
+
+    Purely structural — it groups on the shape of the data rather than a
+    hand-written list of which settings belong together, so the split survives
+    RUCKUS adding a band, a model or a profile. `radioParams24G` /
+    `radioParams50G` / `radioParams6G` become 2.4 GHz, 5 GHz and 6 GHz; a
+    per-model LAN port list becomes one section per model; `floorPlans` becomes
+    Floor plans.
+
+    Returns None when grouping would not help — a short category, or one where
+    every prefix holds a single row — because a page of one-line sections is
+    worse than a plain list.
+
+    Rows whose path has no prefix at all (a scalar at the root, like the
+    venue's `name`) collect into a leading "General" section rather than
+    becoming a section each.
+    """
+    if depth >= _GROUP_MAX_DEPTH or len(rows) < _GROUP_MIN_ROWS:
+        return None
+
+    buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    general: List[Dict[str, Any]] = []
+    for row in rows:
+        parts = row.get("parts") or []
+        if len(parts) <= depth + 1:
+            general.append(row)
+        else:
+            buckets[parts[depth]].append(row)
+
+    # A prefix holding one row is not a section; fold it back in.
+    for key in [k for k, v in buckets.items() if len(v) < 2]:
+        general.extend(buckets.pop(key))
+
+    # A level that holds EVERYTHING says nothing — `apModelCapabilities` wraps
+    # its whole payload in one `apModels` key, which as a section heading is
+    # just the category's name again. Skip past it to the level that varies.
+    if len(buckets) == 1 and not general:
+        return _group_config_rows(rows, depth + 1, literals)
+
+    if len(buckets) < 2:
+        return None
+
+    groups: List[Dict[str, Any]] = []
+    if general:
+        groups.append({"key": "_general", "label": "General",
+                       "rows": general, "groups": None})
+    literals = literals or set()
+    for key, members in buckets.items():
+        groups.append({
+            "key": key,
+            # A segment that came from the DATA is a name, not a key: a model
+            # or a RADIUS profile. De-camelCasing it produced headings like
+            # "Radius2 32744".
+            "label": key if key in literals else config_labels.label_for(key),
+            "rows": members,
+            # One more level, so wifiSettings.radioCustomization splits into
+            # its per-band params rather than staying one long section.
+            "groups": _group_config_rows(members, depth + 1, literals),
+        })
+    return groups
+
+
+def _config_row(endpoint: str, parts: Tuple[str, ...], key: str,
+                value: Any) -> Dict[str, Any]:
+    """
+    One setting, with whatever the baselines say about it.
+
+    The baseline key is `<endpoint>.<dotted path>` — the R1 path, not the
+    label. Labels are prose and change; a baseline keyed to prose drifts
+    silently, which for a "recommended value" column means quietly comparing
+    against nothing.
+    """
+    path = ".".join(parts)
+    baseline_key = f"{endpoint}.{path}"
+    recommendations = baselines.lookup(baseline_key)
+
+    row: Dict[str, Any] = {
+        "path": path,
+        # The un-joined form, so grouping never has to split a string that may
+        # contain a dot of its own.
+        "parts": list(parts),
+        "key": key,
+        "label": config_labels.label_for(key),
+        "value": value,
+        "valueText": config_labels.format_value(key, value),
+        "baselineKey": baseline_key,
+    }
+    for who in ("org", "ruckus"):
+        if who not in recommendations:
+            continue
+        expected = recommendations[who]
+        row[who] = {
+            "value": expected,
+            "text": config_labels.format_value(key, expected),
+            # Compared on the raw value, not the formatted text: "Enabled" and
+            # "enabled" would match by accident, and 1800 and "1800" would not.
+            "matches": value == expected,
+        }
+    return row
+
+
 def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
                 radio: Any, mesh: Any, mgmt_vlan: Any,
                 groups: List[Dict[str, Any]], ap_total: int,
@@ -1387,9 +1618,25 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
              "dhcpServiceProfile": "dhcp-service-profile",
              "trustedPorts": "trusted-ports"}
 
+    # The R1 endpoint each category came from, for keying baselines on.
+    ENDPOINTS = dict(fetch_module.VENUE_CONFIG_SOURCES)
+    ENDPOINTS.update({"venue": "venue", "radio": "apRadioSettings",
+                      "mesh": "apMeshSettings",
+                      "mgmtVlan": "apManagementTrafficVlanSettings",
+                      "radiusProfiles": "radiusServerProfiles"})
+
     def add(key: str, label: str, source: str, payload: Any, hint: str = "") -> None:
+        endpoint = ENDPOINTS.get(key, key)
+        # `literals` collects the segments that came from data rather than
+        # from a key — model names, profile names — so the grouping below can
+        # print them verbatim instead of de-camelCasing them.
+        literals: set = set()
+        rows = (_config_rows(_config_clean(payload), endpoint, literals=literals)
+                if payload is not None else [])
         categories.append({
-            "key": key, "slug": SLUGS.get(key, key),
+            "key": key, "slug": SLUGS.get(key, key), "endpoint": endpoint,
+            "rows": rows,
+            "groups": _group_config_rows(rows, literals=literals),
             "label": label, "source": source, "hint": hint,
             # None means R1 did not answer, which is different from {} meaning
             # it answered with nothing configured. The UI says so.
@@ -1397,61 +1644,105 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
             "data": _config_clean(payload) if payload is not None else None,
         })
 
-    add("venue", "Venue", "GET /venues/{id}", _config_clean(venue_raw),
-        "The venue object itself.")
+    # floorPlans is replaced with the shaped summary — the raw form is eight
+    # coordinate numbers per plan, which answers nothing a reader is asking.
+    venue_for_config = dict(venue_raw)
+    venue_for_config["floorPlans"] = floorplan_summary(venue_raw)
+    add("venue", "Venue", "GET /venues/{id}", _config_clean(venue_for_config),
+        "The venue object itself, including its floor plans and whether a "
+        "scale has been set on them.")
+    # Second, immediately under the venue: this is R1's own aggregate of the
+    # whole Wi-Fi configuration, so it reads as the summary and everything
+    # below it as the detail. Added here rather than in the loop below purely
+    # to get it into that position.
+    add("wifiSettings", "Venue Wi-Fi settings",
+        "GET /venues/{id}/wifiSettings", venue_config.get("wifiSettings"),
+        "RUCKUS ONE's own aggregate of the venue's Wi-Fi configuration. Much "
+        "of it repeats the individual sections below, which is why it leads.")
     add("radio", "Radio", "GET /venues/{id}/apRadioSettings", radio,
         "Per-band channel method, width, power and the permitted channel list.")
     add("mesh", "Mesh", "GET /venues/{id}/apMeshSettings", mesh)
     add("mgmtVlan", "AP management VLAN",
         "GET /venues/{id}/apManagementTrafficVlanSettings",
         {"managementVlan": mgmt_vlan} if mgmt_vlan is not None else None)
+    # ORDERED BY WHAT A READER IS LOOKING FOR, not by endpoint name.
+    #
+    # `wifiSettings` sits near the top because it is R1's own aggregate — it
+    # repeats much of what the individual endpoints below return, so it reads
+    # as the summary and they read as the detail. Then radio and spectrum,
+    # then per-model hardware, then the operational services, then
+    # authentication, logging and the rest.
+    #
+    # Related endpoints are adjacent rather than merged: antenna type and
+    # external antenna are two endpoints and stay two sections, so an admin can
+    # still hide one without the other. Adjacency gets the reading benefit
+    # without coarsening the control.
     for key, label, hint in (
-        ("loadBalancing", "Load balancing & steering",
-         "Band balancing, client steering, sticky-client thresholds."),
+        # radio and spectrum
         ("availableChannels", "Available channels",
          "What the regulatory domain and AFC permit, per band and width."),
+        ("regulatoryChannels", "Default regulatory channels",
+         "What the regulatory domain permits, before the venue narrows it."),
+        ("loadBalancing", "Load balancing & steering",
+         "Band balancing, client steering, sticky-client thresholds."),
         ("clientAdmission", "Client admission control",
          "Minimum client counts and radio load before admission is refused."),
-        ("directedMulticast", "Directed multicast", ""),
-        ("smartMonitor", "Smart monitor", ""),
         ("bandMode", "Model band mode", "Per AP model, where set."),
+
+        # per-model hardware
+        ("antennaType", "Antenna type", "Per AP model — sector or omni, where "
+         "the model offers a choice. Reads with External antenna below."),
+        ("externalAntenna", "External antenna", "Per AP model — per-band enable "
+         "and gain. Mostly an outdoor concern."),
+        ("modelCapabilities", "AP model capabilities",
+         "What each model supports. Antenna defaults live in here too — there "
+         "is no separate endpoint for them."),
         ("lanPorts", "LAN port settings",
          "Per AP MODEL — the venue default each AP inherits. A per-AP "
          "`lanPorts` override shows up in the on-demand detail below."),
-        ("modelCapabilities", "AP model capabilities & antenna defaults",
-         "What each model supports, including external-antenna gain and "
-         "per-band enable. There is no separate antenna endpoint."),
-        ("models", "AP models in use", ""),
+        ("usbPorts", "USB ports", "Per AP model."),
+        ("led", "AP LEDs", "Per AP model."),
+        ("cellular", "Cellular", "Only meaningful on a cellular-capable model."),
+
+        # services on the air
+        ("bssColoring", "BSS coloring", ""),
+        ("directedMulticast", "Directed multicast", ""),
+        ("mdnsFencing", "mDNS fencing", ""),
+        ("smartMonitor", "Smart monitor", ""),
+
+        # security
+        ("dosProtection", "DoS protection", ""),
+        ("rogueAp", "Rogue AP detection", "Whether to look for rogues."),
+        ("roguePolicy", "Rogue policy", "What to do about one."),
+        ("tlsKey", "TLS enhanced key", ""),
+
+        # authentication — AAA and the two RADIUS sections read together
         ("aaa", "AAA / CLI authentication",
          "Console and SSH authentication order, and command accounting."),
-        ("dosProtection", "DoS protection", ""),
-        ("rogueAp", "Rogue AP detection", ""),
-        ("syslog", "Syslog", ""),
-        ("snmp", "AP SNMP agent", ""),
-        ("led", "AP LEDs", "Per AP model."),
-        ("bssColoring", "BSS coloring", ""),
-        ("cellular", "Cellular", "Only meaningful on a cellular-capable model."),
-        ("antennaType", "Antenna type", "Per AP model — sector or omni, where "
-         "the model offers a choice."),
-        ("externalAntenna", "External antenna", "Per AP model — per-band enable "
-         "and gain. Mostly an outdoor concern."),
-        ("mdnsFencing", "mDNS fencing", ""),
         ("radiusOptions", "RADIUS options",
          "Called-station and NAS id formats sent with RADIUS requests."),
+        ("_radiusProfiles", "RADIUS server profiles", ""),
+
+        # logging and management
+        ("syslog", "Syslog", ""),
+        ("syslogProfile", "Syslog server profile", ""),
+        ("snmp", "AP SNMP agent", ""),
+        ("dhcpServiceProfile", "DHCP service profile", ""),
         ("rebootTimeout", "Auto-reboot timers",
          "How long an AP tolerates losing its gateway or the cloud before "
          "restarting itself."),
-        ("tlsKey", "TLS enhanced key", ""),
-        ("usbPorts", "USB ports", "Per AP model."),
-        ("roguePolicy", "Rogue policy",
-         "What to do about a rogue, as opposed to whether to look for one."),
-        ("wifiSettings", "Venue Wi-Fi settings", ""),
-        ("regulatoryChannels", "Default regulatory channels",
-         "What the regulatory domain permits, before the venue narrows it."),
-        ("syslogProfile", "Syslog server profile", ""),
-        ("dhcpServiceProfile", "DHCP service profile", ""),
         ("trustedPorts", "Trusted ports", ""),
+        ("models", "AP models in use", ""),
     ):
+        if key == "_radiusProfiles":
+            # Tenant-wide rather than venue-scoped, so it is fetched
+            # separately — but it belongs next to the RADIUS options a reader
+            # is comparing it against, not stranded at the end of the tab.
+            add("radiusProfiles", label, "GET /radiusServerProfiles",
+                radius_profiles,
+                "Tenant-wide, not scoped to this venue. Shared secrets are "
+                "redacted before the report leaves the process.")
+            continue
         add(key, label,
             f"GET /venues/{{id}}/{fetch_source(key)}", venue_config.get(key), hint)
 
@@ -1461,9 +1752,7 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
     #
     # Shared secrets come back in plaintext and api/scrub.py removes them from
     # every report — see the test written against this exact shape.
-    add("radiusProfiles", "RADIUS server profiles", "GET /radiusServerProfiles",
-        radius_profiles,
-        "Tenant-wide, not scoped to this venue. Shared secrets are redacted.")
+
 
     # R1 returns the per-model blocks for EVERY model it knows — fifty of them
     # on this tenant, of which three are installed. Left raw, the LAN port
@@ -1490,9 +1779,21 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
             category["presentCount"] = sum(
                 1 for r in rows if isinstance(r, dict) and r.get("_atThisVenue"))
             category["totalCount"] = len(rows)
+            # Rebuilt from the sorted data: `rows` was flattened when the
+            # category was added, before the models present here were floated
+            # to the front, so without this the table still leads with fifty
+            # models nobody has installed.
+            model_literals: set = set()
+            category["rows"] = _config_rows(category["data"], category["endpoint"],
+                                            literals=model_literals)
+            category["groups"] = _group_config_rows(category["rows"],
+                                                    literals=model_literals)
 
     return {
         "categories": categories,
+        # Whose recommendations the two comparison columns carry, and whether
+        # either has been verified. The UI captions an unverified column.
+        "baselines": baselines.describe(),
         # Recorded so the tab can say what it looked for and did not find,
         # rather than leaving a reader to wonder whether the setting is absent
         # or the report simply never asked. See fetch.VENUE_CONFIG_NOT_FOUND.
@@ -1566,6 +1867,7 @@ def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
     }
 
 
+from services.pisr import fetch as fetch_module  # noqa: E402
 from services.pisr.fetch import VENUE_CONFIG_NOT_FOUND as FETCH_NOT_FOUND  # noqa: E402
 
 
