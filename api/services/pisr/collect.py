@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from services.pisr import checks, fetch, shape
+from services.pisr import checks, fetch, punchlist, shape
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,9 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         "switches": (fetch.switches, (r1, tenant_id, venue_id)),
         "ports": (fetch.switch_ports, (r1, tenant_id, venue_id)),
         "clients": (fetch.clients, (r1, tenant_id, venue_id)),
+        "wiredClients": (fetch.wired_clients, (r1, tenant_id, venue_id)),
+        "incidents": (fetch.incidents, (r1, tenant_id, venue_id)),
+        "radiusProfiles": (fetch.radius_server_profiles, (r1, tenant_id)),
         "networks": (fetch.wifi_networks, (r1, tenant_id)),
         "activations": (fetch.venue_activations, (r1, tenant_id, venue_id)),
         "dpskPools": (fetch.dpsk_pools, (r1, tenant_id)),
@@ -120,6 +123,14 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         "radiusGroups": (fetch.radius_attribute_groups, (r1, tenant_id)),
     }
 
+    # The venue-level config blocks join the SAME fan-out rather than getting
+    # their own thread pool. Nineteen more reads, but bounded by the one
+    # executor — a second pool oversubscribed R1's connection pool and urllib3
+    # started discarding connections. See fetch.venue_config_one.
+    for config_key in fetch.VENUE_CONFIG_SOURCES:
+        reads[f"venueConfig:{config_key}"] = (
+            fetch.venue_config_one, (r1, tenant_id, venue_id, config_key))
+
     keys = list(reads)
     results = await asyncio.gather(
         *(asyncio.to_thread(reads[key][0], *reads[key][1]) for key in keys),
@@ -128,12 +139,17 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
 
     raw: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
-    empty = {"venue": {}, "property": None, "units": {}, "mgmtVlan": None,
+    empty: Dict[str, Any] = {"venue": {}, "property": None, "units": {}, "mgmtVlan": None,
              "dhcpPools": [], "apGroups": [], "radio": {}, "mesh": {}, "aps": [],
              "apTotal": None,
-             "switches": [], "ports": [], "clients": [], "networks": [], "activations": [],
+             "switches": [], "ports": [], "clients": [], "wiredClients": [],
+             "incidents": [], "radiusProfiles": [],
+             "networks": [], "activations": [],
              "dpskPools": [], "identityGroups": {"rows": [], "total": 0, "complete": True},
              "policySets": [], "policies": [], "radiusGroups": []}
+    # A config block that failed to read is None, which config_card renders as
+    # "RUCKUS ONE did not return this" — distinct from an empty answer.
+    empty.update({f"venueConfig:{key}": None for key in fetch.VENUE_CONFIG_SOURCES})
     for key, result in zip(keys, results):
         if isinstance(result, Exception):
             logger.warning("pisr: %s read failed for venue %s: %s", key, venue_id, result)
@@ -141,6 +157,11 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             raw[key] = empty[key]
         else:
             raw[key] = result
+
+    # Reassembled from the individual reads above, then scrubbed once.
+    raw["venueConfig"] = fetch.scrub_venue_config(
+        {key: raw.pop(f"venueConfig:{key}", None)
+         for key in fetch.VENUE_CONFIG_SOURCES})
 
     # Passphrase counts are a second, smaller fan-out: they need the pool list
     # from the round above, and only the pools this venue actually activates are
@@ -239,6 +260,23 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         "dpsk": dpsk,
         "policy": policy,
     }
+    # Needs the flat AP views and the port list to tell a wired client from an
+    # AP, and from a wireless client learned through an AP's uplink.
+    # R1's own live alarms for this venue, kept apart from `verification`:
+    # that is PISR's opinion about the install, this is the platform's opinion
+    # about the venue right now, and they disagree usefully.
+    # Venue-level config only. Group and per-AP settings are one R1 call per
+    # object — a 200-unit MDU has a per-unit AP group each — so they are
+    # fetched on demand by /pisr/{cid}/config/detail rather than put behind
+    # every report for a tab most readers never open.
+    report["config"] = shape.config_card(
+        raw["venue"], raw["venueConfig"], raw["radio"], raw["mesh"],
+        raw["mgmtVlan"], raw["apGroups"], len(aps), raw["radiusProfiles"])
+
+    report["incidents"] = shape.incident_card(
+        raw["incidents"], aps, raw["switches"])
+    report["wiredClients"] = shape.wired_client_card(
+        raw["wiredClients"], raw["ports"], aps, raw["switches"])
     report["wireless"] = shape.wireless_card(raw["networks"], raw["activations"],
                                              raw["apGroups"], aps, clients)
     # VLANs read from every other section, so it is shaped last.
@@ -262,6 +300,11 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
 
     report["verification"] = checks.run_checks(report)
 
+    # Built last, because it is a re-cut of the two sections above rather than
+    # a source of anything: findings grouped by trade instead of by subsystem,
+    # for the crew finishing the site rather than the engineer reading it.
+    report["punchlist"] = punchlist.build(report["verification"], report["incidents"])
+
     report["meta"] = {
         "venueId": venue_id,
         "tenantId": tenant_id,
@@ -273,6 +316,8 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             "switches": len(raw["switches"]),
             "ports": len(raw["ports"]),
             "clients": len(raw["clients"]),
+            "wiredClients": len(raw["wiredClients"]),
+            "incidents": len(raw["incidents"]),
             "networks": len(raw["networks"]),
             "activations": len(raw["activations"]),
         },
@@ -290,6 +335,16 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             "POST /venues/aps/query",
             "POST /venues/switches/query",
             "POST /venues/switches/switchPorts/query",
+            "POST /venues/switches/clients/query",
+            "POST /alarms/query",
+            "GET /venues/{venueId}/apLoadBalancingSettings",
+            "GET /venues/{venueId}/wifiAvailableChannels",
+            "GET /venues/{venueId}/apClientAdmissionControlSettings",
+            "GET /venues/{venueId}/apDirectedMulticastSettings",
+            "GET /venues/{venueId}/apSmartMonitorSettings",
+            "GET /venues/{venueId}/apModelBandModeSettings",
+            "GET /venues/{venueId}/apGroups/{groupId}",
+            "GET /venues/aps/{serialNumber}",
             "POST /venues/aps/clients/query",
             "POST /wifiNetworks/query",
             "POST /venues/wifiNetworks/query",

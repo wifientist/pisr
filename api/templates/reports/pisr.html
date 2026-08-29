@@ -242,6 +242,44 @@
     generated. Client counts and radio state move minute to minute.</div>
 </div>
 
+{% if visible('punchlist.tasks') and punchlist.total %}
+<h2>Punch list</h2>
+<p class="note">The findings below, re-cut by who fixes them and ordered so the
+  top of the list is the next thing to do. Nothing here is new — it is the same
+  verification and the same alarms, grouped for the crew rather than the
+  engineer. {{ punchlist.deviceCount or 0 }} device(s) are named across all
+  tasks.</p>
+{% for group in punchlist.groups %}
+  <h3>{{ group.label }}
+    <span class="note">— {{ group.tasks | length }} task(s){% if group.devices %},
+      {{ group.devices | length }} device(s){% endif %}</span></h3>
+  <p class="note">{{ group.blurb }}</p>
+  {% for task in group.tasks %}
+  <div class="finding {{ task.severity }}">
+    <div class="t"><span class="pill {{ task.severity }}">{{ task.severity }}</span>
+      {{ task.title }}</div>
+    {% if task.summary %}<div class="c">{{ task.summary }}</div>{% endif %}
+    {% if task.evidence %}
+    <table>
+      <thead><tr>{% for key in task.evidence[0].keys() %}
+        <th>{{ evidence_header(key) }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in task.evidence[:12] %}
+        <tr>{% for value in row.values() %}<td>{{ value if value is not none else "—" }}</td>{% endfor %}</tr>
+      {% endfor %}</tbody>
+    </table>
+    {% if task.evidence | length > 12 %}
+      <div class="c">…and {{ task.evidence | length - 12 }} more.</div>{% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+{% endfor %}
+{% if punchlist.skipped %}
+  <h3>Could not be checked <span class="note">— not the same as passing</span></h3>
+  <ul>{% for row in punchlist.skipped %}
+    <li>{{ row.title }} — {{ row.summary }}</li>{% endfor %}</ul>
+{% endif %}
+{% endif %}
+
 {% if visible('overview.verification') %}
 <h2>Findings</h2>
 <p class="note">Every check that ran, most serious first. Findings that ask something of
@@ -295,6 +333,22 @@
 {% endif %}
 {% endif %}
 
+{% if visible('overview.incidents') and incidents.total %}
+<h2>RUCKUS ONE alarms</h2>
+<p class="note">Raised by RUCKUS ONE itself, not by the checks above — the
+  platform's view of whether this venue is healthy right now, as opposed to
+  PISR's view of whether the install looks finished. Active alarms only: R1
+  exposes no cleared or acknowledged state here, so nothing can be said about
+  what has already been dealt with.</p>
+<table>
+  <thead><tr><th>Severity</th><th>Alarm</th><th>Device</th><th>R1 type</th><th>Raised</th></tr></thead>
+  <tbody>{% for row in incidents.rows %}
+    <tr><td>{{ row.severity }}</td><td>{{ row.text }}</td><td>{{ row.device or "—" }}</td>
+        <td>{{ row.type or "—" }}</td><td>{{ fmt_time(row.raisedAt) }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% endif %}
+
 {% if visible('overview.access-points') or visible('overview.switches') %}
 <h2>Inventory</h2>
 <div class="charts">
@@ -315,7 +369,7 @@
 {% endif %}
 {% endif %}
 
-{% if visible('overview.venue-config') %}
+{% if visible('config.venue-summary') %}
 <h2>Venue configuration</h2>
 <dl>
   <dt>AP management VLAN</dt><dd>{{ venue.managementVlan if venue.managementVlan is not none else "untagged" }}</dd>
@@ -401,7 +455,7 @@
 {% endfor %}
 {% endif %}
 
-{% if venue.radio and visible('overview.venue-config') %}
+{% if venue.radio and visible('config.venue-summary') %}
 <h3>Radio defaults</h3>
 <table>
   <thead><tr><th>Band</th><th>Channel method</th><th>Width</th><th>Tx power</th><th>Allowed channels</th></tr></thead>
@@ -450,6 +504,39 @@
   </table>
 {% else %}<p class="empty">No Wi-Fi network is activated on this venue.</p>{% endif %}
 {% endif %}
+{% endif %}
+
+{% if visible('wired.clients') and wired_clients.learned %}
+<h2>Wired clients</h2>
+<p class="note">From the switch MAC address table. A learned address is not the
+  same as a client: an AP's uplink port has learned every wireless client behind
+  it, and the APs and switches appear as addresses themselves. Those are counted
+  out separately below rather than folded in, so the headline figure is things
+  plugged into a wall.</p>
+<div class="tiles">
+  <div class="tile"><div class="n">{{ wired_clients.total or 0 }}</div>
+    <div class="l">Wired clients</div></div>
+  <div class="tile"><div class="n">{{ wired_clients.learned or 0 }}</div>
+    <div class="l">Learned addresses</div></div>
+  <div class="tile"><div class="n">{{ wired_clients.behindAps or 0 }}</div>
+    <div class="l">Behind an AP</div></div>
+  <div class="tile"><div class="n">{{ wired_clients.infrastructure or 0 }}</div>
+    <div class="l">Infrastructure</div></div>
+</div>
+<div class="charts">
+  {{ bars(wired_by_switch, "Wired clients by switch") }}
+  {{ bars(wired_by_vlan, "Wired clients by VLAN") }}
+</div>
+<div class="charts">
+  {{ bars(wired_by_type, "By device type (R1's classification)") }}
+  {{ bars(wired_top_ports, "Addresses learned per port") }}
+</div>
+<p class="note">One or two addresses on a port is an ordinary install. A port
+  with many has a hub, an unmanaged switch or a mislabelled uplink behind it —
+  the one thing the MAC table shows that nothing else in this report does.
+  {{ wired_clients.withIp or 0 }} of {{ wired_clients.total or 0 }} have an IP
+  address; R1 populates that from its own snooping, so a blank means not seen
+  rather than not present.</p>
 {% endif %}
 
 {% if visible('wired.vlans') %}

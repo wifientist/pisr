@@ -91,6 +91,42 @@ FORMAT_VERSION = 2
 # entirely. A third role would be a new key here and a new column in the portal.
 MANAGED_ROLES: Tuple[str, ...] = ("user",)
 
+# Section ids that have been renamed, old -> new.
+#
+# A stored policy names sections by id, so renaming one in `sections.py` would
+# otherwise make every mention of it unknown — and `_clean` drops unknown ids,
+# which means a section an admin had HIDDEN silently becomes visible. That is
+# the wrong direction to fail in for a rename, and it fails at the next report
+# rather than at the rename, so nobody connects the two.
+#
+# Entries stay until the next save rewrites the file with the new ids; leaving
+# one here forever costs a dictionary lookup. An id that was DELETED rather
+# than renamed does not belong here — it should drop, and it does.
+RENAMED: Dict[str, str] = {
+    # The "Wired & PoE" tab became separate Wired and PoE tabs. Ids are
+    # <tab>.<thing>, so the sections that moved to PoE had to be renamed.
+    #
+    # ONLY IDS THAT ACTUALLY SHIPPED belong here — these are the ones deployed
+    # in the first role-policy release. Ids that existed only between two
+    # uncommitted edits were never in anybody's policy file, and adding them
+    # would be dead weight at best. At worst it is a bug: a key here that is
+    # ALSO a live section id would migrate an admin's deliberate choice into
+    # something else on every load, permanently. test_renames_point_at_real
+    # _sections asserts that cannot happen.
+    "wired.summary": "poe.summary",
+    "wired.poe-budget": "poe.budget",
+    "wired.poe-standard": "poe.standard",
+    "wired.aps-on-ports": "poe.aps-on-ports",
+    # The venue-configuration card moved off Overview onto the Config tab.
+    "overview.venue-config": "config.venue-summary",
+    # "wired.link-speeds" and "wired.port-errors" are absent because they kept
+    # their ids: they briefly moved to the PoE tab and moved back, port health
+    # being a wired question rather than a power one.
+    #
+    # "wired.top-poe-draws" is absent for the other reason — that card was
+    # removed, so a policy hiding it should simply forget it.
+}
+
 
 class PolicyStore:
     """
@@ -217,9 +253,16 @@ class PolicyStore:
             wanted = hidden.get(role)
             if not isinstance(wanted, list):
                 continue
-            known = sorted({sid for sid in wanted
-                            if isinstance(sid, str) and sid in section_catalogue.BY_ID})
-            dropped = len(set(str(s) for s in wanted)) - len(known)
+            migrated = {RENAMED.get(sid, sid) for sid in wanted if isinstance(sid, str)}
+            renamed = sum(1 for sid in wanted
+                          if isinstance(sid, str) and sid in RENAMED)
+            if renamed:
+                logger.info(
+                    "visibility: migrated %d renamed section id(s) for role %r. "
+                    "The next save from the portal writes the new ids.",
+                    renamed, role)
+            known = sorted({sid for sid in migrated if sid in section_catalogue.BY_ID})
+            dropped = len(migrated) - len(known)
             if dropped > 0:
                 logger.warning(
                     "visibility: dropped %d unknown section id(s) for role %r. "

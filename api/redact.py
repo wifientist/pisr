@@ -36,6 +36,7 @@ from typing import Any, Dict, Iterable, List
 
 import scrub as secret_scrub
 import sections as section_catalogue
+from services.pisr import punchlist as punchlist_builder
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +202,34 @@ def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
         if not _blank_path(redacted, path):
             logger.debug("visibility: path %s did not resolve in this report", path)
 
+    # Config categories live in a LIST, so no dotted path can own one and the
+    # generic path-emptying above cannot reach them. Filtered by slug instead,
+    # which makes hiding a config category withhold the data rather than only
+    # un-draw the card — the categories are the unit an admin was given to
+    # hand subsets to users, so they should mean something in the payload.
+    config = redacted.get("config")
+    if isinstance(config, dict) and isinstance(config.get("categories"), list):
+        config["categories"] = [
+            category for category in config["categories"]
+            if f"config.{category.get('slug')}" not in set(hidden)]
+
     hidden_checks = section_catalogue.checks_for(hidden)
     if hidden_checks and isinstance(redacted.get("verification"), dict):
         _filter_findings(redacted["verification"], hidden_checks)
+
+    # The punch list is a re-cut of `verification` and `incidents`, so it is
+    # REBUILT from the redacted copies rather than filtered alongside them.
+    # Filtering would mean two implementations of the same rule and one of them
+    # eventually falling behind — and the failure mode is a task naming a
+    # finding the reader is no longer shown, which is exactly the leak this
+    # module exists to prevent.
+    #
+    # Skipped when the punch list is itself hidden: its path has just been
+    # emptied above, and rebuilding would quietly fill it back in.
+    punchlist_hidden = any(path.split(".")[0] == "punchlist"
+                           for path in section_catalogue.paths_for(hidden))
+    if not punchlist_hidden and isinstance(redacted.get("punchlist"), dict):
+        redacted["punchlist"] = punchlist_builder.build(
+            redacted.get("verification") or {}, redacted.get("incidents") or {})
 
     return redacted
