@@ -46,8 +46,16 @@ set -uo pipefail
 BASE="${1:-}"
 [ -n "$BASE" ] || { echo "usage: PISR_PROBE_USER=... PISR_PROBE_PASS=... $0 <base-url>" >&2; exit 2; }
 BASE="${BASE%/}"
+# The <NAME>_FILE convention config.py uses for every secret, for the same
+# reason: a file can be mode 0600 and never touches the environment, which is
+# readable from /proc/<pid>/environ and tends to end up in shell history.
+[ -n "${PISR_PROBE_PASS_FILE:-}" ] && \
+  PISR_PROBE_PASS="$(tr -d '\r\n' < "$PISR_PROBE_PASS_FILE")"
+[ -n "${PISR_PROBE_ADMIN_PASS_FILE:-}" ] && \
+  PISR_PROBE_ADMIN_PASS="$(tr -d '\r\n' < "$PISR_PROBE_ADMIN_PASS_FILE")"
+
 : "${PISR_PROBE_USER:?set PISR_PROBE_USER}"
-: "${PISR_PROBE_PASS:?set PISR_PROBE_PASS}"
+: "${PISR_PROBE_PASS:?set PISR_PROBE_PASS (or PISR_PROBE_PASS_FILE)}"
 
 ADMIN_USER="${PISR_PROBE_ADMIN_USER:-}"
 ADMIN_PASS="${PISR_PROBE_ADMIN_PASS:-}"
@@ -90,10 +98,21 @@ code_q() {  # code_q <jar> <path> <param> <value> [extra-param] [extra-value]
     -G "${args[@]}" "$BASE$path"
 }
 
+# Minimal JSON string escaping, so a password containing a quote or a
+# backslash produces valid JSON rather than a confusing 422.
+_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+_login_body() { printf '{"username":"%s","password":"%s"}' \
+  "$(_json_escape "$1")" "$(_json_escape "$2")"; }
+
+# THE BODY GOES OVER STDIN, NOT ARGV. /proc/<pid>/cmdline is world-readable on
+# Linux, so a password passed as `curl -d '{...}'` is visible in `ps` to every
+# user on the box for as long as the request takes. This script warns about
+# argv in its own header; it should not then do it itself.
 login() {  # login <jar> <user> <pass>
-  curl -s -o /dev/null -w '%{http_code}' --max-time 25 -c "$1" -X POST "$BASE/api/login" \
-    -H 'Content-Type: application/json' \
-    -d "$(printf '{"username":"%s","password":"%s"}' "$2" "$3")"
+  _login_body "$2" "$3" \
+    | curl -s -o /dev/null -w '%{http_code}' --max-time 25 -c "$1" -X POST \
+        "$BASE/api/login" -H 'Content-Type: application/json' --data-binary @-
 }
 
 # The verdict used throughout: refused by AUTHORIZATION, or refused by
@@ -119,9 +138,9 @@ ok "signed in"
 
 # Cookie flags. The unauthenticated probe never obtains a real session, so this
 # is the only place they are ever verified.
-SC="$(curl -s -D - -o /dev/null --max-time 25 -X POST "$BASE/api/login" \
-      -H 'Content-Type: application/json' \
-      -d "$(printf '{"username":"%s","password":"%s"}' "$PISR_PROBE_USER" "$PISR_PROBE_PASS")" \
+SC="$(_login_body "$PISR_PROBE_USER" "$PISR_PROBE_PASS" \
+      | curl -s -D - -o /dev/null --max-time 25 -X POST "$BASE/api/login" \
+          -H 'Content-Type: application/json' --data-binary @- \
       | grep -i '^set-cookie: *pisr_session' | tr -d '\r')"
 printf '%s' "$SC" | grep -qi 'httponly' \
   && ok "cookie is HttpOnly" || bad "cookie is NOT HttpOnly — an XSS could read the session"

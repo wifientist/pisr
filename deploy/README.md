@@ -177,8 +177,26 @@ PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
   ~/app/deploy/pisr-probe-authed.sh https://pisr.example.com
 ```
 
-Credentials come from the environment, never argv — argv shows up in `ps` and in
-shell history. Admin credentials are optional and used READ-ONLY, to find an EC
+**Where to put the credentials.** Never on the command line: `/proc/<pid>/cmdline`
+is world-readable, so anything in argv is visible to every user on the box via
+`ps`. Three ways, best first:
+
+```bash
+# 1. a file, mode 0600 — the same <NAME>_FILE convention config.py uses
+printf '%s' 'the-password' > ~/.probe.pass && chmod 600 ~/.probe.pass
+PISR_PROBE_USER=probe PISR_PROBE_PASS_FILE=~/.probe.pass ./pisr-probe-authed.sh <url>
+
+# 2. typed, never stored — nothing reaches history or the disk
+read -rsp 'probe password: ' PISR_PROBE_PASS; echo
+PISR_PROBE_USER=probe ./pisr-probe-authed.sh <url>
+unset PISR_PROBE_PASS
+
+# 3. inline — fine for a throwaway account, but it lands in shell history
+PISR_PROBE_USER=probe PISR_PROBE_PASS='...' ./pisr-probe-authed.sh <url>
+```
+
+The script sends the login body to `curl` over stdin rather than `-d`, so the
+password is not in curl's argv either. Admin credentials are optional and used READ-ONLY, to find an EC
 that exists and that the user's filtered list omits, which is the only way to
 test the cross-customer case for real rather than against a made-up id.
 
