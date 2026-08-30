@@ -115,6 +115,24 @@ fi
 [ -n "${PISR_PROBE_ADMIN_PASS_FILE:-}" ] && \
   PISR_PROBE_ADMIN_PASS="$(tr -d '\r\n' < "$PISR_PROBE_ADMIN_PASS_FILE")"
 
+# A username PISR could never issue means the creds file did not parse the way
+# you meant. Usernames are [a-z0-9][a-z0-9._-]{1,31} — no spaces, no '#' — so
+# anything else here is an inline comment or stray text that got swept into the
+# value, which otherwise surfaces much later as an unexplained 401.
+for _pair in "user:${PISR_PROBE_USER:-}" "admin:${PISR_PROBE_ADMIN_USER:-}"; do
+  _who="${_pair%%:*}"; _name="${_pair#*:}"
+  [ -z "$_name" ] && continue
+  case "$_name" in
+    *[!a-z0-9._-]*)
+      printf '  \033[31mFAIL\033[0m  the %s username parsed as %s\n' "$_who" "$(printf '%q' "$_name")" >&2
+      printf '        That is not a username PISR can issue. Almost always an\n' >&2
+      printf '        inline comment in the creds file — comments must be on\n' >&2
+      printf '        their own line, because a password may contain a "#".\n' >&2
+      exit 2 ;;
+  esac
+done
+unset _pair _who _name
+
 : "${PISR_PROBE_USER:?set PISR_PROBE_USER}"
 : "${PISR_PROBE_PASS:?set PISR_PROBE_PASS (or PISR_PROBE_PASS_FILE)}"
 

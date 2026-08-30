@@ -183,7 +183,8 @@ PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
 cat > ~/probe.creds <<'EOF'
 PISR_PROBE_USER=probeuser
 PISR_PROBE_PASS=whatever-you-set
-PISR_PROBE_ADMIN_USER=probeadmin      # optional, read-only
+# admin is optional and used read-only; comments must be on their own line
+PISR_PROBE_ADMIN_USER=probeadmin
 PISR_PROBE_ADMIN_PASS=whatever
 EOF
 chmod 600 ~/probe.creds
