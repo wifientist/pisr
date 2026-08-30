@@ -137,6 +137,36 @@ export default function AdminScope(
     return current === ALL_VENUES || (Array.isArray(current) && current.includes(venueId));
   };
 
+  const rows: EcRow[] = isMsp
+    ? (ecs || [])
+    : (soleTenant ? [{ id: soleTenant, name: "This RUCKUS ONE tenant" }] : []);
+
+  /**
+   * Set every venue on one customer at once.
+   *
+   * "None" leaves the customer TICKED with an empty venue list, which is a real
+   * and reachable state — the customer is named, and no venue within it is
+   * allowed. It is not the same as unticking the customer, and api/scope.py
+   * treats an empty list as none rather than as all, so this is honest rather
+   * than a shortcut for removal.
+   */
+  const setEveryVenue = (tenant: string, on: boolean) => {
+    const rows = venues[tenant];
+    if (!Array.isArray(rows)) return;
+    onChange({
+      ...scope,
+      ecs: { ...scope.ecs, [tenant]: on ? rows.map((v) => v.id) : [] },
+    });
+  };
+
+  /** Tick or untick every customer in the live list at once. */
+  const setEveryEc = (on: boolean) => {
+    if (!on) { onChange({ ...scope, ecs: {} }); return; }
+    const next: Record<string, string | string[]> = { ...scope.ecs };
+    for (const ec of rows) if (!(ec.id in next)) next[ec.id] = ALL_VENUES;
+    onChange({ ...scope, ecs: next });
+  };
+
   const emptySelection = useMemo(
     () => !scope.unrestricted && Object.keys(scope.ecs).length === 0,
     [scope]);
@@ -224,10 +254,6 @@ export default function AdminScope(
     }
     onChange({ ...scope, ecs: next });
   };
-
-  const rows: EcRow[] = isMsp
-    ? (ecs || [])
-    : (soleTenant ? [{ id: soleTenant, name: "This RUCKUS ONE tenant" }] : []);
 
   return (
     <div className="space-y-4">
@@ -347,6 +373,25 @@ export default function AdminScope(
         </p>
       )}
 
+      {!scope.unrestricted && rows.length > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-gray-500">
+            {Object.keys(scope.ecs).length} of {rows.length} customer(s) selected
+          </p>
+          <span className="flex items-center gap-2 text-xs">
+            <button type="button" onClick={() => setEveryEc(true)}
+                    className="text-blue-700 underline-offset-2 hover:underline">
+              Select all
+            </button>
+            <span className="text-gray-300">·</span>
+            <button type="button" onClick={() => setEveryEc(false)}
+                    className="text-blue-700 underline-offset-2 hover:underline">
+              Select none
+            </button>
+          </span>
+        </div>
+      )}
+
       <div className={`space-y-1 ${scope.unrestricted ? "opacity-50 pointer-events-none" : ""}`}>
         {rows.map((ec) => {
           const allowed = ecAllowed(ec.id);
@@ -381,11 +426,26 @@ export default function AdminScope(
                   )}
                   {allowed && (
                     <>
-                      <label className="mb-2 flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
-                        <input type="checkbox" checked={all}
-                               onChange={(e) => setAllVenues(ec.id, e.target.checked)} />
-                        Every venue on this customer, including ones added later
-                      </label>
+                      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                          <input type="checkbox" checked={all}
+                                 onChange={(e) => setAllVenues(ec.id, e.target.checked)} />
+                          Every venue on this customer, including ones added later
+                        </label>
+                        {!all && Array.isArray(rowsForEc) && rowsForEc.length > 1 && (
+                          <span className="flex items-center gap-2 text-xs">
+                            <button type="button" onClick={() => setEveryVenue(ec.id, true)}
+                                    className="text-blue-700 underline-offset-2 hover:underline">
+                              Select all
+                            </button>
+                            <span className="text-gray-300">·</span>
+                            <button type="button" onClick={() => setEveryVenue(ec.id, false)}
+                                    className="text-blue-700 underline-offset-2 hover:underline">
+                              Select none
+                            </button>
+                          </span>
+                        )}
+                      </div>
                       {rowsForEc === "loading" && (
                         <p className="flex items-center gap-2 text-xs text-gray-500">
                           <Loader2 size={13} className="animate-spin" /> Loading venues…
