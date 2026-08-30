@@ -1,0 +1,30 @@
+{
+  "name": "RUCKUS",
+  "status": "placeholder",
+  "note": "PLACEHOLDER VALUES. These have NOT been taken from RUCKUS documentation and must not be acted on. Every consumer of this file surfaces `status` so the column is labelled unverified until someone sources the real guidance and sets status to \"verified\". See api/baselines.py.",
+  "source": "",
+  "verifiedAt": null,
+  "values": {
+    "apDosProtectionSettings.enabled": true,
+    "apSmartMonitorSettings.enabled": true,
+    "rogueApSettings.enabled": true,
+    "roguePolicySettings.networkProtection": true,
+    "apBssColoringSettings.bssColoringEnabled": true,
+    "syslogSettings.enabled": true,
+    "snmpAgentSettings.enableApSnmp": false,
+    "apTlsKeyEnhancedSettings.tlsKeyEnhancedModeEnabled": true,
+    "apMulticastDnsFencingSettings.enabled": false,
+    "apLoadBalancingSettings.enabled": true,
+    "apLoadBalancingSettings.bandBalancingEnabled": true,
+    "apLoadBalancingSettings.steeringMode": "BASIC",
+    "apClientAdmissionControlSettings.enable24G": false,
+    "apClientAdmissionControlSettings.enable50G": false,
+    "apRebootTimeoutSettings.gatewayLossTimeout": 1800,
+    "apRebootTimeoutSettings.serverLossTimeout": 7200,
+    "apDirectedMulticastSettings.wiredEnabled": true,
+    "apDirectedMulticastSettings.wirelessEnabled": true,
+    "apDirectedMulticastSettings.networkEnabled": true,
+    "apRadioSettings.method": "CHANNELFLY",
+    "ledSettings.ledEnabled": true
+  }
+}

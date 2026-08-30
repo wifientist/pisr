@@ -125,6 +125,17 @@ class AuthConfig:
     # nothing". Empty means the admin portal is read-only.
     visibility_file: str
 
+    # The name shown above the "recommended" column on the Config tab, and the
+    # file those recommendations come from.
+    #
+    # THE NAME IS AN ENV VAR AND THE VALUES ARE A MOUNTED FILE, deliberately.
+    # A customer's name and their agreed configuration baseline are theirs, not
+    # this tool's, and neither belongs in a repository that is not theirs
+    # either. PISR ships knowing how to compare against a baseline and knowing
+    # nothing about whose it is.
+    org_name: str
+    org_baseline_file: str
+
     # Both modes. In proxy mode this list is the whole of the security — only
     # these peers may assert an identity. In passphrase mode it is narrower:
     # it says whose `client_ip_header` may be believed when working out who a
@@ -260,6 +271,26 @@ def _admin_emails() -> frozenset:
     return frozenset(entries)
 
 
+def _org_name() -> str:
+    """
+    Who the "recommended" column speaks for.
+
+    Defaults to a generic word rather than a placeholder like "ACME": the
+    column header is read by an install crew, and "Org recommended" is honest
+    where "ACME recommended" would be a lie that looks like a configuration
+    error. Set PISR_ORG_NAME to the customer's name in the deployment.
+    """
+    return _env("PISR_ORG_NAME") or "Org"
+
+
+def _org_baseline_file() -> str:
+    """
+    The customer's configuration baseline, as a JSON file mounted alongside
+    the visibility policy. Never committed — see config.org_name.
+    """
+    return _env("PISR_ORG_BASELINE_FILE") or "/data/org-baseline.json"
+
+
 def _visibility_file() -> str:
     """
     Where the section visibility policy lives, or "" for nowhere.
@@ -292,6 +323,7 @@ def _load_auth() -> AuthConfig:
             # whoever is standing at the machine. Giving them the user role
             # would hide sections from the only person who could unhide them.
             admin_emails=frozenset(), visibility_file=_visibility_file(),
+            org_name=_org_name(), org_baseline_file=_org_baseline_file(),
         )
 
     mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
@@ -338,6 +370,7 @@ def _load_auth() -> AuthConfig:
             client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
             admin_emails=admin_emails, visibility_file=_visibility_file(),
+            org_name=_org_name(), org_baseline_file=_org_baseline_file(),
         )
 
     passphrase = _env("PISR_AUTH_PASSPHRASE")
@@ -392,6 +425,7 @@ def _load_auth() -> AuthConfig:
         client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
         access_team=access_team, access_aud=access_aud,
         admin_emails=admin_emails, visibility_file=_visibility_file(),
+        org_name=_org_name(), org_baseline_file=_org_baseline_file(),
     )
 
 

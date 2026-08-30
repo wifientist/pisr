@@ -242,7 +242,22 @@
     generated. Client counts and radio state move minute to minute.</div>
 </div>
 
-{% if visible('punchlist.tasks') and punchlist.total %}
+{#  THE PDF MUST NOT PRINT THE SAME FINDING TWICE.
+    On screen the Punch list and Overview tabs are separate places a reader
+    chooses between, and repeating the findings across them costs nothing. In
+    one linear document it is just the same warnings again three pages later,
+    and a reader who has to work out whether the second list is new information
+    stops trusting both.
+
+    So the punch list is the actionable section, and when it renders the
+    Findings section drops to what it alone carries — the record of what passed
+    — and the alarms table drops entirely, since every alarm is already a task.
+    When the punch list is HIDDEN by policy, the guards below put the full
+    findings and alarms back, or hiding one section would lose the other's
+    content with it. #}
+{% set punchlist_shown = visible('punchlist.tasks') and punchlist.total %}
+
+{% if punchlist_shown %}
 <h2>Punch list</h2>
 <p class="note">The findings below, re-cut by who fixes them and ordered so the
   top of the list is the next thing to do. Nothing here is new — it is the same
@@ -281,11 +296,19 @@
 {% endif %}
 
 {% if visible('overview.verification') %}
+{% if punchlist_shown %}
+<h2>Checks that passed</h2>
+<p class="note">Everything asking for action is in the punch list above; this is
+  the other half of the record — what was examined and found correct. A review
+  is only evidence if it says what it looked at, not just what was wrong.</p>
+{% else %}
 <h2>Findings</h2>
 <p class="note">Every check that ran, most serious first. Findings that ask something of
   you come first with their full evidence; the checks that came back clean are listed
   after them, so the report records what was examined as well as what was wrong.</p>
+{% endif %}
 
+{% if not punchlist_shown %}
 {% if findings_actionable %}
 {% for f in findings_actionable %}
 <div class="finding {{ f.severity }}">
@@ -317,14 +340,21 @@
   <div class="d">No check returned a critical, warning or informational finding.</div>
 </div>
 {% endif %}
+{% endif %}
 
-{% if findings_clear %}
+{#  With the punch list above, the skipped checks are already listed there
+    under "Could not be checked" — so only the passes are left to record. #}
+{% set clear_shown = findings_clear | selectattr("severity", "equalto", "ok") | list
+                     if punchlist_shown else findings_clear %}
+{% if clear_shown %}
+{% if not punchlist_shown %}
 <h3 class="sub">Checks that came back clean
   <span style="font-weight:400;color:#6b7280;font-size:10px">
     — {{ counts.ok or 0 }} passed{% if counts.skipped %}, {{ counts.skipped }} not applicable{% endif %}</span></h3>
+{% endif %}
 {# A pass keeps its title and its one-line result, but not its evidence: the
    evidence for "every AP is online" is the AP table already in this report. #}
-{% for f in findings_clear %}
+{% for f in clear_shown %}
 <div class="finding compact {{ f.severity }}">
   <div class="t"><span class="pill {{ f.severity }}">{{ f.severity }}</span> {{ f.check or f.title }}</div>
   <div class="d">{{ f.summary }}</div>
@@ -333,7 +363,9 @@
 {% endif %}
 {% endif %}
 
-{% if visible('overview.incidents') and incidents.total %}
+{#  Dropped when the punch list ran: every alarm is already a task in its
+    "RUCKUS ONE alarms" group, with the same device and timestamp. #}
+{% if visible('overview.incidents') and incidents.total and not punchlist_shown %}
 <h2>RUCKUS ONE alarms</h2>
 <p class="note">Raised by RUCKUS ONE itself, not by the checks above — the
   platform's view of whether this venue is healthy right now, as opposed to

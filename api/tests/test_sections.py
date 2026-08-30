@@ -836,6 +836,209 @@ def test_redact_scrubs_before_it_does_anything_else():
             secret_scrub.REDACTED, f"credential survived redact(hidden={hidden})"
 
 
+# ── config labels and baselines ──────────────────────────────────────
+
+import config_labels                                        # noqa: E402
+import baselines as baseline_module                          # noqa: E402
+
+
+def test_unmapped_keys_still_read_like_english():
+    """
+    The load-bearing rule. R1 adds fields without warning, and a hardcoded
+    label map would make a new one disappear or render as a raw key. It has to
+    degrade to something readable so the field still APPEARS.
+    """
+    assert config_labels.label_for("someBrandNewFieldR1Added") == \
+        "Some brand new field R1 added"
+
+
+def test_known_acronyms_are_not_mangled():
+    """
+    "Ap snmp agent" looks like a bug, and a reader who cannot tell a bug from
+    a label stops trusting the page.
+    """
+    assert config_labels.label_for("apSnmpAgentEnabled") == "AP SNMP agent enabled"
+    assert config_labels.label_for("vlanMembers") == "VLAN members"
+
+
+def test_mixed_case_units_survive():
+    """Regression: the fallback lowercased "MHz" and produced "20 mhz"."""
+    assert config_labels.label_for("20MHz") == "20 MHz"
+    assert config_labels.label_for("160MHz") == "160 MHz"
+
+
+def test_labels_with_underscores_are_found():
+    """
+    Regression: LABELS is looked up through a normaliser that strips
+    underscores, so keys written with them never matched.
+    """
+    assert config_labels.label_for("snr_dB") == "Signal-to-noise ratio"
+
+
+def test_values_read_as_settings_not_json():
+    assert config_labels.format_value("enabled", True) == "Enabled"
+    assert config_labels.format_value("enabled", False) == "Disabled"
+    assert config_labels.format_value("method", "CHANNELFLY") == "ChannelFly"
+    assert config_labels.format_value("gain24G", 3) == "3 dBi"
+    assert config_labels.format_value("serverLossTimeout", 7200) == "2 hours"
+    assert config_labels.format_value("allowedChannels", [1, 6, 11]) == "1, 6, 11"
+
+
+def test_null_reads_as_not_set_not_as_missing_data():
+    """
+    On a settings page the reader is asking what something is configured to.
+    An em dash reads as "no data" when the answer is "nothing is configured".
+    """
+    assert config_labels.format_value("anything", None) == "not set"
+    assert config_labels.format_value("anything", "") == "not set"
+
+
+def test_shipped_ruckus_baseline_is_marked_unverified():
+    """
+    THE SAFETY PROPERTY. The shipped values are invented placeholders so the
+    mechanism can be exercised. A fabricated "RUCKUS recommends" read as
+    authoritative by an install crew is worse than an empty column — an empty
+    column asks a question, a wrong one answers it. This must not go green
+    until somebody sources the real guidance.
+    """
+    ruckus = baseline_module.RUCKUS.describe()
+    assert ruckus["verified"] is False, (
+        "the shipped baseline claims to be verified — if the values are now "
+        "real, that is fine, but check `source` is filled in too")
+    assert ruckus["status"] == "placeholder"
+    assert ruckus["count"] > 0, "the placeholder file should still exercise the UI"
+
+
+def test_a_setting_no_baseline_mentions_gets_no_columns():
+    """Two empty columns on every row would drown the ones that matter."""
+    assert baseline_module.lookup("nothing.at.all") == {}
+
+
+def test_missing_is_distinct_from_a_recommended_null():
+    assert baseline_module.MISSING is not None
+
+
+# ── AP subnet grouping ───────────────────────────────────────────────
+
+from services.pisr.shape import _subnet_groups                # noqa: E402
+
+
+def _dev(ip, netmask=None, gateway=None):
+    return {"ip": ip, "netmask": netmask, "gateway": gateway}
+
+
+def test_maskless_devices_land_in_a_reported_subnet_that_contains_them():
+    """
+    The bug this guards. A site on a single 10.2.0.0/21 rendered as the /21
+    plus phantom /24s carved out of it — 10.2.6.0/24 and 10.2.7.0/24 with one
+    AP each — because a device with no netmask and no gateway was bucketed into
+    an assumed /24 without checking whether anything already described where it
+    was. Three rows, one network, and a subnet count that read as 3.
+    """
+    devices = [_dev(f"10.2.{i // 254}.{i % 254 + 1}", "255.255.248.0")
+               for i in range(418)]
+    devices += [_dev("10.2.6.50"), _dev("10.2.7.99")]
+    rows = _subnet_groups(devices)
+    assert len(rows) == 1, f"expected one subnet, got {[r['cidr'] for r in rows]}"
+    assert rows[0]["cidr"] == "10.2.0.0/21"
+    assert rows[0]["count"] == 420, "the maskless APs belong to the count"
+
+
+def test_a_genuinely_separate_subnet_still_gets_its_own_row():
+    """The fix must not swallow addresses that are actually elsewhere."""
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"), _dev("192.168.9.20")])
+    assert {r["cidr"] for r in rows} == {"10.2.0.0/21", "192.168.9.0/24"}
+
+
+def test_the_most_specific_containing_subnet_wins():
+    """
+    A device inside both a reported /21 and a reported /24 belongs in the /24 —
+    that is the more precise statement about where it is.
+    """
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"),
+                           _dev("10.2.6.10", "255.255.255.0"),
+                           _dev("10.2.6.77")])
+    by_cidr = {r["cidr"]: r["count"] for r in rows}
+    assert by_cidr["10.2.6.0/24"] == 2, "the maskless AP joined the /24, not the /21"
+    assert by_cidr["10.2.0.0/21"] == 1
+
+
+def test_gateway_inferred_devices_fold_into_a_reported_subnet():
+    """
+    Containment is the test, not a matching gateway. Keying on the gateway
+    meant a device whose gateway no reported row happened to list produced a
+    duplicate subnet inside a real one.
+    """
+    rows = _subnet_groups([_dev("10.2.0.5", "255.255.248.0"),
+                           _dev("10.2.4.9", None, "10.2.0.1")])
+    assert len(rows) == 1 and rows[0]["cidr"] == "10.2.0.0/21"
+    assert rows[0]["count"] == 2
+
+
+# ── floor plans ──────────────────────────────────────────────────────
+
+from services.pisr.shape import floorplan_summary              # noqa: E402
+from services.pisr.checks import check_floorplans               # noqa: E402
+
+
+def test_floorplan_scale_is_read_from_either_unit():
+    """
+    R1 fills the unit that was not used with 0.0, so both have to be checked
+    and neither can be trusted to be present.
+    """
+    plans = floorplan_summary({"floorPlans": [
+        {"name": "Metres", "scales": [{"distanceInMeters": 30.0,
+                                       "distanceInFeet": 0.0}]},
+        {"name": "Feet", "scales": [{"distanceInMeters": 0.0,
+                                     "distanceInFeet": 98.4}]},
+    ]})
+    # Keyed by name, not by position: the summary sorts by floor then name so
+    # the tab lists plans in a stable order, which is not input order.
+    by_name = {p["name"]: p["scaleDistance"] for p in plans}
+    assert by_name == {"Metres": "30 m", "Feet": "98.4 ft"}
+    assert all(p["scaleSet"] for p in plans)
+
+
+def test_a_plan_with_coordinates_but_no_distance_is_not_scaled():
+    """
+    The quiet failure. A scale entry can exist with the coordinate pairs filled
+    in and no real-world distance, which looks set and measures nothing.
+    """
+    plans = floorplan_summary({"floorPlans": [
+        {"name": "Unscaled", "scales": [{"x1": 1, "y1": 2, "x2": 3, "y2": 4,
+                                         "distanceInMeters": 0.0,
+                                         "distanceInFeet": 0.0}]}]})
+    assert plans[0]["scaleSet"] is False
+    assert plans[0]["scaleCount"] == 1, "the entry exists, it just says nothing"
+
+
+def test_unscaled_plan_is_a_finding_not_a_pass():
+    report = {"venue": {"floorPlans": floorplan_summary({"floorPlans": [
+        {"name": "Unscaled", "imageId": "x.jpg", "scales": []}]})}}
+    finding = check_floorplans(report)
+    assert finding["severity"] == "warning"
+    assert "no scale" in finding["title"]
+
+
+def test_no_floorplan_at_all_is_a_finding():
+    finding = check_floorplans({"venue": {"floorPlans": []}})
+    assert finding["severity"] == "warning"
+
+
+def test_a_scaled_plan_with_an_image_passes():
+    report = {"venue": {"floorPlans": floorplan_summary({"floorPlans": [
+        {"name": "Good", "imageId": "x.jpg",
+         "scales": [{"distanceInMeters": 30.0}]}]})}}
+    assert check_floorplans(report)["severity"] == "ok"
+
+
+def test_existence_booleans_read_as_yes_no():
+    """"Has image: Enabled" reads as though the image were a feature."""
+    assert config_labels.format_value("hasImage", True) == "Yes"
+    assert config_labels.format_value("scaleSet", False) == "No"
+    assert config_labels.format_value("enabled", True) == "Enabled"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
