@@ -160,6 +160,17 @@ Read them in this order; each explains the next.
   start. See the docstring on `build_r1_client` in `api/r1_client.py`.
 - **The `StaticFiles` mount in `api/main.py` must stay last** — a `Mount("/")`
   matches everything above it.
+- **A wrong METHOD on an `/api` route 404s in production and 405s in dev**, and
+  the difference is the SPA mount. Starlette treats "path matched, method did
+  not" as a PARTIAL match and keeps looking; the `Mount("/")` then matches
+  everything and `StaticFiles` answers 404. Dev sets
+  `PISR_STATIC_DIR=/nonexistent`, so there is nothing to fall through to and the
+  405 survives. Harmless — 404 arguably leaks less — but it means a method error
+  never surfaces in production, and anything asserting on 405 passes in dev and
+  fails on the box. Do not "fix" it by moving the mount above the routers: that
+  trades a cosmetic difference for every API call returning index.html with a
+  200. `deploy/pisr-probe-auth.sh` accepts both for this reason.
+
 - **The SPA bundle is served unauthenticated, on purpose.** It has to load in
   order to render the login form, and it carries no tenant data. Everything
   that *does* know the tenant is behind the gate. Don't "fix" this by gating
