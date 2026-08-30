@@ -67,17 +67,39 @@ BASE="${BASE%/}"
 if [ -n "${PISR_PROBE_CREDS:-}" ]; then
   [ -r "$PISR_PROBE_CREDS" ] || { echo "cannot read $PISR_PROBE_CREDS" >&2; exit 2; }
   while IFS='=' read -r _k _v; do
-    _k="${_k#"${_k%%[![:space:]]*}"}"          # trim leading space
+    # Trim BOTH ends of the key. Only the leading end was trimmed before, so
+    # `PISR_PROBE_ADMIN_PASS = x` produced a key with a trailing space, matched
+    # nothing, and left the password empty — which the server then answered
+    # with a 401 that looked like wrong credentials.
+    _k="${_k#"${_k%%[![:space:]]*}"}"
+    _k="${_k%"${_k##*[![:space:]]}"}"
     case "$_k" in ''|'#'*) continue ;; esac
     _v="$(printf '%s' "$_v" | tr -d '\r' | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+    # Surrounding whitespace in a VALUE is not trimmed — a password may legally
+    # contain it — but it is almost always a typo, so it is pointed out.
+    case "$_v" in
+      ' '*|*' ')  printf '  \033[33mnote\033[0m  %s has leading or trailing whitespace in its value.\n' "$_k" ;;
+    esac
+    # An inline `#` is NOT treated as a comment, because a password may contain
+    # one. Comments must be on their own line.
     case "$_k" in
       PISR_PROBE_USER)       PISR_PROBE_USER="$_v" ;;
       PISR_PROBE_PASS)       PISR_PROBE_PASS="$_v" ;;
       PISR_PROBE_ADMIN_USER) PISR_PROBE_ADMIN_USER="$_v" ;;
       PISR_PROBE_ADMIN_PASS) PISR_PROBE_ADMIN_PASS="$_v" ;;
+      *) printf '  \033[33mnote\033[0m  ignoring unknown key %s in %s\n' "$_k" "$PISR_PROBE_CREDS" ;;
     esac
   done < "$PISR_PROBE_CREDS"
   unset _k _v
+
+  # PISR_PROBE_DEBUG=1 shows what was parsed WITHOUT printing any password:
+  # the username in full, and the passwords as lengths. A length of 0, or one
+  # that is not what you typed, is the answer.
+  if [ -n "${PISR_PROBE_DEBUG:-}" ]; then
+    printf '  parsed user=%s pass=%s chars | admin=%s pass=%s chars\n' \
+      "${PISR_PROBE_USER:-(unset)}" "${#PISR_PROBE_PASS}" \
+      "${PISR_PROBE_ADMIN_USER:-(unset)}" "${#PISR_PROBE_ADMIN_PASS}"
+  fi
   # Said once, not enforced: these are meant to be throwaway accounts you
   # delete afterwards, so this is a reminder rather than a rule.
   case "$(ls -l "$PISR_PROBE_CREDS" 2>/dev/null | cut -c5-10)" in
@@ -254,8 +276,13 @@ if [ -n "$ADMIN_USER" ]; then
   ac="$(login "$AJAR" "$ADMIN_USER" "$ADMIN_PASS")"
   case "$ac" in
     204) ADMIN_OK=yes ;;
-    401) bad "admin credentials were supplied but REJECTED (401). Check "\
-             "PISR_PROBE_ADMIN_USER/PASS — everything needing them is skipped." ;;
+    401) bad "admin credentials were supplied but REJECTED (401)."
+         note "Three things to check, in order:"
+         note "  1. is the account ENROLLED? \`pisr_admin.py list\` shows its state —"
+         note "     an account created but never enrolled has no password and 401s."
+         note "  2. is it disabled? same listing."
+         note "  3. re-run with PISR_PROBE_DEBUG=1 to see the parsed password LENGTH"
+         note "     (never the value). A length of 0 means the creds file did not parse." ;;
     429) bad "admin login was throttled (429). Wait ~5 minutes and re-run; "\
              "the checks needing admin are skipped." ;;
     *)   bad "admin login returned $ac — the checks needing admin are skipped." ;;

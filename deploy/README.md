@@ -230,6 +230,21 @@ Two lessons from writing it, both worth knowing before you read its output:
   script inspects the body for file content, tracebacks and real venue data
   instead of judging on the status code.
 
+**If a login is rejected, `PISR_PROBE_DEBUG=1` says why** without printing any
+password — it shows the usernames and the password *lengths* it parsed. A
+length of 0, or one that is not what you typed, is a creds-file problem. The
+right length and still a 401 means the account itself cannot sign in, and the
+commonest reason is that it was created but never enrolled:
+
+```
+probeadmin  admin  invited, not yet enrolled
+```
+
+An account with no password 401s exactly like a wrong one. `pisr_admin.py list`
+is the fastest way to tell them apart. Note also that keys are matched after
+trimming whitespace, but an inline `#` is not a comment — a password may
+contain one, so comments must be on their own line.
+
 **Supply the admin credentials.** Without them three checks silently lose their
 meaning, and two of them used to lie about it:
 
