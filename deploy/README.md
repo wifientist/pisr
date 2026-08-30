@@ -128,6 +128,45 @@ ps` says Up and the container's own healthcheck passes — it asks localhost fro
 inside, where nothing is wrong. Only the published address sees it, and this
 script tells you the recovery when it does.
 
+## Probing the gate from outside
+
+`pisr-probe-auth.sh` asks the questions a stranger would, against a running
+instance:
+
+```bash
+~/app/deploy/pisr-probe-auth.sh https://pisr.example.com
+~/app/deploy/pisr-probe-auth.sh          # defaults to the published address
+```
+
+It exists because accounts mode changed what the login page is. Behind
+Cloudflare Access it was the inner of two gates; on its own it is the only one,
+and a handful of properties that used to be belt-and-braces became
+load-bearing — no account enumeration, a throttle that slows an attacker
+without ever locking a real person out, nothing under `/api` answering without
+a cookie. Those are asserted in `api/tests/`, but a test asserts them about the
+source; this asserts them about the thing actually serving traffic, through
+whatever proxy, tunnel and configuration sit in front of it.
+
+It creates nothing, changes no password and needs no session — every request is
+a GET or a login that is meant to fail. Exit status is the number of failures,
+so it works from a timer.
+
+Two things to know before running it against production:
+
+- **It trips the login backoff.** Under rootless podman every caller shares one
+  apparent address, so real people may see "Too many attempts" for up to a
+  minute. It cannot lock anyone out — that it *cannot* is one of the things
+  being tested — but it is not a thing to run mid-shift.
+- **The failure counter is remembered for `PISR_AUTH_LOCKOUT_SECONDS`** (300s
+  by default) even after a block expires, so a second run inside five minutes
+  starts part way up the backoff curve and the enumeration checks skip
+  themselves rather than report a number they cannot measure. Wait it out.
+
+What it deliberately does not cover: role enforcement, EC/venue scope and
+credential scrubbing all need a session, and a version of this that
+authenticated would stop being the outside view. `api/tests/test_sections.py`
+and `api/tests/test_accounts.py` own those.
+
 ## Operating it
 
 ```bash
