@@ -7,6 +7,11 @@
 # by asking for things that are not theirs — another customer's tenant, an
 # admin route, a venue outside their scope, an id they made up.
 #
+#   PISR_PROBE_CREDS=~/probe.creds ./pisr-probe-authed.sh https://pisr.example.com
+#
+# where ~/probe.creds holds PISR_PROBE_USER= and PISR_PROBE_PASS= lines. Or
+# pass them in the environment directly:
+#
 #   PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
 #     ./pisr-probe-authed.sh https://pisr.example.com
 #
@@ -46,9 +51,43 @@ set -uo pipefail
 BASE="${1:-}"
 [ -n "$BASE" ] || { echo "usage: PISR_PROBE_USER=... PISR_PROBE_PASS=... $0 <base-url>" >&2; exit 2; }
 BASE="${BASE%/}"
-# The <NAME>_FILE convention config.py uses for every secret, for the same
-# reason: a file can be mode 0600 and never touches the environment, which is
-# readable from /proc/<pid>/environ and tends to end up in shell history.
+# One file holding everything, which is the usual way to run this:
+#
+#   PISR_PROBE_CREDS=~/probe.creds ./pisr-probe-authed.sh <url>
+#
+#   # ~/probe.creds
+#   PISR_PROBE_USER=probeuser
+#   PISR_PROBE_PASS=whatever-you-set
+#   PISR_PROBE_ADMIN_USER=probeadmin      # optional
+#   PISR_PROBE_ADMIN_PASS=whatever        # optional
+#
+# PARSED, NOT SOURCED. Sourcing would execute whatever is in the file, and a
+# credentials file is exactly the thing somebody pastes into without reading.
+# Splitting on the first `=` also means a password may contain `=` freely.
+if [ -n "${PISR_PROBE_CREDS:-}" ]; then
+  [ -r "$PISR_PROBE_CREDS" ] || { echo "cannot read $PISR_PROBE_CREDS" >&2; exit 2; }
+  while IFS='=' read -r _k _v; do
+    _k="${_k#"${_k%%[![:space:]]*}"}"          # trim leading space
+    case "$_k" in ''|'#'*) continue ;; esac
+    _v="$(printf '%s' "$_v" | tr -d '\r' | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+    case "$_k" in
+      PISR_PROBE_USER)       PISR_PROBE_USER="$_v" ;;
+      PISR_PROBE_PASS)       PISR_PROBE_PASS="$_v" ;;
+      PISR_PROBE_ADMIN_USER) PISR_PROBE_ADMIN_USER="$_v" ;;
+      PISR_PROBE_ADMIN_PASS) PISR_PROBE_ADMIN_PASS="$_v" ;;
+    esac
+  done < "$PISR_PROBE_CREDS"
+  unset _k _v
+  # Said once, not enforced: these are meant to be throwaway accounts you
+  # delete afterwards, so this is a reminder rather than a rule.
+  case "$(ls -l "$PISR_PROBE_CREDS" 2>/dev/null | cut -c5-10)" in
+    ------) ;;
+    *) printf '  \033[33mnote\033[0m  %s is readable by others; chmod 600 it.\n' \
+              "$PISR_PROBE_CREDS" ;;
+  esac
+fi
+
+# Or the <NAME>_FILE convention config.py uses for every other secret.
 [ -n "${PISR_PROBE_PASS_FILE:-}" ] && \
   PISR_PROBE_PASS="$(tr -d '\r\n' < "$PISR_PROBE_PASS_FILE")"
 [ -n "${PISR_PROBE_ADMIN_PASS_FILE:-}" ] && \

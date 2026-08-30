@@ -177,24 +177,28 @@ PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
   ~/app/deploy/pisr-probe-authed.sh https://pisr.example.com
 ```
 
-**Where to put the credentials.** Never on the command line: `/proc/<pid>/cmdline`
-is world-readable, so anything in argv is visible to every user on the box via
-`ps`. Three ways, best first:
+**Where to put the credentials.** One file with both, which is the usual way:
 
 ```bash
-# 1. a file, mode 0600 — the same <NAME>_FILE convention config.py uses
-printf '%s' 'the-password' > ~/.probe.pass && chmod 600 ~/.probe.pass
-PISR_PROBE_USER=probe PISR_PROBE_PASS_FILE=~/.probe.pass ./pisr-probe-authed.sh <url>
+cat > ~/probe.creds <<'EOF'
+PISR_PROBE_USER=probeuser
+PISR_PROBE_PASS=whatever-you-set
+PISR_PROBE_ADMIN_USER=probeadmin      # optional, read-only
+PISR_PROBE_ADMIN_PASS=whatever
+EOF
+chmod 600 ~/probe.creds
 
-# 2. typed, never stored — nothing reaches history or the disk
-read -rsp 'probe password: ' PISR_PROBE_PASS; echo
-PISR_PROBE_USER=probe ./pisr-probe-authed.sh <url>
-unset PISR_PROBE_PASS
-
-# 3. inline — fine for a throwaway account, but it lands in shell history
-PISR_PROBE_USER=probe PISR_PROBE_PASS='...' ./pisr-probe-authed.sh <url>
+PISR_PROBE_CREDS=~/probe.creds ./pisr-probe-authed.sh https://pisr.example.com
 ```
 
+The file is PARSED, not sourced — sourcing would execute whatever is in it, and
+a credentials file is exactly the thing somebody pastes into without reading.
+Splitting on the first `=` means a password may contain `=` freely. Individual
+env vars still work, as does the `<NAME>_FILE` convention
+(`PISR_PROBE_PASS_FILE`).
+
+Never put the password on the command line: `/proc/<pid>/cmdline` is
+world-readable, so argv is visible to every user on the box via `ps`.
 The script sends the login body to `curl` over stdin rather than `-d`, so the
 password is not in curl's argv either. Admin credentials are optional and used READ-ONLY, to find an EC
 that exists and that the user's filtered list omits, which is the only way to
