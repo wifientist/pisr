@@ -1039,6 +1039,50 @@ def test_existence_booleans_read_as_yes_no():
     assert config_labels.format_value("enabled", True) == "Enabled"
 
 
+
+def test_pdf_template_autoescapes():
+    """
+    Jinja defaults autoescape to OFF, and this template interpolates strings
+    that callers control — `label` is a query parameter on the PDF route, so
+    any authenticated user can put markup in it, and venue and device names
+    come from the RUCKUS ONE tenant.
+
+    The output is a PDF rather than a page, so this is not stored XSS: nothing
+    runs JavaScript. What makes it matter is that WeasyPrint RESOLVES the
+    resources a document references, so an injected `<img src="http://...">`
+    makes the container issue that request and a `file://` URL asks it to read
+    a local path — a `user`-triggered SSRF from a role that should only be able
+    to read one venue's report.
+
+    Found by deploy/pisr-probe-authed.sh, which is why that script exists.
+    """
+    from routers.pisr_router import _jinja
+
+    env = _jinja()
+    assert env.autoescape, (
+        "the PDF Jinja Environment has autoescape off — a caller-supplied "
+        "label or venue name would reach WeasyPrint as live markup")
+
+    hostile = '</div><img src="http://attacker.example/x">'
+    rendered = env.from_string("<p>{{ v }}</p>").render(v=hostile)
+    assert "<img" not in rendered, f"markup survived escaping: {rendered}"
+    assert "&lt;" in rendered, f"nothing was escaped: {rendered}"
+
+
+def test_pdf_template_never_uses_safe():
+    """
+    Turning autoescape on is only safe while nothing relies on it being off.
+    A `|safe` filter added later would punch a hole through the check above
+    without failing it — so the template is asserted to contain none.
+    """
+    template = (_repo_root() / "api" / "templates" / "reports" / "pisr.html")
+    body = template.read_text(encoding="utf-8")
+    assert "|safe" not in body and "| safe" not in body, (
+        "the PDF template uses |safe, which bypasses autoescaping. If that is "
+        "deliberate, the value it is applied to must be proven not to contain "
+        "anything a tenant or a caller supplied.")
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

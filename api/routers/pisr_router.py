@@ -34,7 +34,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Response
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML as WeasyHTML
 
 import sections as section_catalogue
@@ -63,9 +63,31 @@ def _jinja() -> Environment:
     Two parents, not three: rtools2 had this file one level deeper, at
     routers/pisr/pisr_router.py. Getting this wrong fails at PDF-request time,
     not at import, so it is worth a comment.
+
+    AUTOESCAPE IS ON, AND MUST STAY ON. Jinja defaults it to OFF, and this
+    template interpolates strings that callers control: `label` is a query
+    parameter on the PDF route, so ANY authenticated user — including a plain
+    `user` — could put markup in it, and venue and device names arrive from the
+    RUCKUS ONE tenant. Without escaping, all of that lands in the HTML that
+    WeasyPrint renders.
+
+    That is not the usual stored-XSS story, because the output is a PDF and
+    WeasyPrint runs no JavaScript. It is worse in one specific way: WeasyPrint
+    RESOLVES the resources the document references. An injected
+    `<img src="http://...">` makes the container issue that request, and a
+    `file://` URL asks it to read a local path — so an unescaped label is a
+    `user`-triggered SSRF and a candidate local-file read, from a role that is
+    supposed to be able to read one venue's report.
+
+    Safe to turn on: the template uses `|safe` nowhere, so nothing in it was
+    relying on markup passing through. `test_sections.py::test_pdf_template_
+    autoescapes` is what stops this being switched back off.
     """
-    return Environment(loader=FileSystemLoader(
-        str(Path(__file__).resolve().parent.parent / "templates")))
+    return Environment(
+        loader=FileSystemLoader(
+            str(Path(__file__).resolve().parent.parent / "templates")),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
 
 
 def _export_name(venue_name: str, extension: str) -> str:

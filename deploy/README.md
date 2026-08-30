@@ -167,6 +167,49 @@ credential scrubbing all need a session, and a version of this that
 authenticated would stop being the outside view. `api/tests/test_sections.py`
 and `api/tests/test_accounts.py` own those.
 
+### As a signed-in user
+
+`pisr-probe-authed.sh` is the other half: what somebody who legitimately holds a
+`user` session can reach by asking for things that are not theirs.
+
+```bash
+PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
+  ~/app/deploy/pisr-probe-authed.sh https://pisr.example.com
+```
+
+Credentials come from the environment, never argv — argv shows up in `ps` and in
+shell history. Admin credentials are optional and used READ-ONLY, to find an EC
+that exists and that the user's filtered list omits, which is the only way to
+test the cross-customer case for real rather than against a made-up id.
+
+It covers every admin route, EC/venue scope on all four paths that enforce it
+(report, PDF, config detail, venue list), traversal and injection payloads in
+`venue_id` and the PDF `label`, made-up controller ids, credential scrubbing in
+the returned report, and the session cookie's flags — which the unauthenticated
+probe cannot check, because it never obtains a session.
+
+**It does not mutate, and that is enforced by construction.** Every destructive
+verb is aimed at an account id that does not exist, or carries a body that fails
+validation, so a *broken* authorization check is still harmless. That also
+sharpens the result: `403` means authorization refused it, while `404` or `422`
+means the request reached the handler and something else refused it — which is a
+failure, because authorization did not gate it.
+
+Two lessons from writing it, both worth knowing before you read its output:
+
+- **On an MSP controller, omitting `tenant_id` makes every payload test
+  vacuous.** The request is refused with 400 before `venue_id` is looked at, so
+  ten injection payloads "passed" without ever reaching the code being probed.
+  It now sends the user's own tenant so the request gets as far as the scope
+  check and the R1 client.
+- **A 200 is not automatically a finding.** An unscoped user asking for a venue
+  id that does not exist correctly gets a report-shaped object with nothing in
+  it, because the id is an opaque lookup key passed to R1, never a path. The
+  script inspects the body for file content, tracebacks and real venue data
+  instead of judging on the status code.
+
+Delete the test account when you are done.
+
 ## Operating it
 
 ```bash
