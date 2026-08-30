@@ -42,6 +42,20 @@ BASE="${1:-}"
 # container keeps serving to nobody while its own healthcheck still passes.
 if [ -z "$BASE" ]; then
   _env_file="${PISR_ENV_FILE:-${PISR_APP_DIR:-$HOME/app}/.env}"
+  # REFUSE TO GUESS OFF-BOX. Without that env file there is nothing to derive
+  # from, and the fallback would be http://127.0.0.1:8080 — which on a
+  # developer's laptop is whatever else happens to be on 8080. Probing the
+  # wrong thing and reporting a clean bill of health is the worst outcome this
+  # script has, so it declines instead.
+  if [ ! -r "$_env_file" ]; then
+    printf 'No URL given and %s is not readable, so there is nothing to\n' "$_env_file" >&2
+    printf 'derive an address from. Name the target explicitly:\n\n' >&2
+    printf '  %s https://pisr.example.com\n\n' "$0" >&2
+    printf 'Running it from your own machine against the public hostname is the\n' >&2
+    printf 'better test anyway — it goes through the tunnel and the proxy, which\n' >&2
+    printf 'is the path that is actually exposed.\n' >&2
+    exit 2
+  fi
   _get() { [ -r "$_env_file" ] && sed -n "s/^$1=//p" "$_env_file" | tail -1 | tr -d '"'"'"'\r'; }
   _bind="$(_get PISR_BIND)"
   _port="$(_get PISR_PORT)"
