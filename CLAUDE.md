@@ -231,6 +231,18 @@ Read them in this order; each explains the next.
   than passed through. On an MSP tenant the ECs are different companies. Do not
   let a refactor make the two consistent with each other.
 
+- **The scope dialog lists policy ids this tenant does not contain.**
+  `AdminScope` builds its rows from the LIVE EC list, so a stored id that no
+  longer resolves was rendered nowhere — filtering for users and invisible to
+  the admin who would have to fix it. That is the state a deployment lands in
+  the moment `R1_TENANT_ID` is repointed: every id in the policy goes stale at
+  once, scope fails closed, users can open nothing, and admins see nothing
+  wrong. It reads like an auth bug and is not one. Venue lists for allowed ECs
+  are fetched on open rather than on expand, because a check that needs the
+  admin to go looking is most of the way back to no check. The footer says
+  "customer id(s) named", not "reachable", so it cannot contradict the warning
+  sitting above it.
+
 - **Scope is enforced at the route, not by filtering a response.**
   `pisr_router._require_scope` 403s on the report, the PDF and the venue list;
   the filtering in `msp_router` and `get_venues` only keeps other customers'

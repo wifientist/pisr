@@ -154,7 +154,10 @@ export default function AdminVisibility({ onClose }: { onClose: () => void }) {
       setData((current) => (current ? { ...current, policy: body as Policy } : current));
       const ecCount = Object.keys(scope.ecs).length;
       setSaved(`Saved. ${hidden.size} section(s) hidden; `
-        + (scope.unrestricted ? "every customer reachable." : `${ecCount} customer(s) reachable.`));
+        // "named", not "reachable": an id in the policy that this tenant does
+        // not contain still counts here, and calling it reachable contradicted
+        // the warning shown right above it in AdminScope.
+        + (scope.unrestricted ? "every customer reachable." : `${ecCount} customer id(s) named.`));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed.");
     } finally {
@@ -306,7 +309,7 @@ export default function AdminVisibility({ onClose }: { onClose: () => void }) {
               {hidden.size} of {data.sections.length} sections hidden ·{" "}
               {scope.unrestricted
                 ? "every customer reachable"
-                : `${Object.keys(scope.ecs).length} customer(s) reachable`}.
+                : `${Object.keys(scope.ecs).length} customer id(s) named`}.
               {data.policy.updatedAt && (
                 <> Last saved {new Date(data.policy.updatedAt).toLocaleString()}
                   {data.policy.updatedBy ? ` by ${data.policy.updatedBy}` : ""}.</>

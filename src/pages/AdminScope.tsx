@@ -141,6 +141,90 @@ export default function AdminScope(
     () => !scope.unrestricted && Object.keys(scope.ecs).length === 0,
     [scope]);
 
+  /**
+   * Ids in the stored policy that this tenant does not contain.
+   *
+   * THE LIST BELOW IS BUILT FROM THE LIVE TENANT, so a stored id that no
+   * longer resolves is not rendered anywhere — it is filtering for users and
+   * invisible to the admin who would have to fix it. That is the state a
+   * deployment lands in the moment the RUCKUS ONE credentials are repointed at
+   * a different tenant: every id in the policy becomes meaningless at once,
+   * and because scope FAILS CLOSED, users stop being able to open anything
+   * while admins see nothing wrong. It reads like an authentication bug and
+   * is not one.
+   *
+   * Venues are only checkable for customers whose venue list has been loaded,
+   * so this reports what it knows rather than pretending to be exhaustive.
+   */
+  // Load the venue list for every customer the policy names an explicit venue
+  // list for, without waiting to be expanded. The orphan check below cannot
+  // see a stale VENUE id until that customer's venues are known, and asking
+  // the admin to expand each one in turn to discover a problem they do not yet
+  // know exists is most of the way back to not reporting it at all. Bounded by
+  // the number of allowed customers, which is small by construction.
+  useEffect(() => {
+    if (scope.unrestricted || !ecs) return;
+    for (const [tenant, allowed] of Object.entries(scope.ecs)) {
+      if (allowed === ALL_VENUES || !Array.isArray(allowed) || !allowed.length) continue;
+      loadVenues(tenant);
+    }
+  }, [ecs, scope.unrestricted, scope.ecs, loadVenues]);
+
+  const orphanEcs = useMemo(() => {
+    if (!ecs || scope.unrestricted) return [];
+    const live = new Set(ecs.map((e) => e.id));
+    return Object.keys(scope.ecs).filter((id) => !live.has(id));
+  }, [ecs, scope]);
+
+  const orphanVenues = useMemo(() => {
+    if (scope.unrestricted) return [];
+    const out: { tenant: string; tenantName: string; ids: string[] }[] = [];
+    for (const [tenant, allowedIds] of Object.entries(scope.ecs)) {
+      if (allowedIds === ALL_VENUES || !Array.isArray(allowedIds)) continue;
+      const rows = venues[tenant];
+      if (!rows || rows === "loading" || rows === "error") continue;
+      const live = new Set(rows.map((v) => v.id));
+      const missing = allowedIds.filter((id) => !live.has(id));
+      if (missing.length) {
+        out.push({
+          tenant,
+          tenantName: ecs?.find((e) => e.id === tenant)?.name || tenant,
+          ids: missing,
+        });
+      }
+    }
+    return out;
+  }, [ecs, venues, scope]);
+
+  // True while some allowed customer's venue list has not arrived, which is the
+  // only remaining reason the venue check above could be incomplete. Customers
+  // set to "all venues" have no list to check, so their absence is not a gap.
+  const venueCheckPending = useMemo(() => {
+    if (scope.unrestricted) return false;
+    return Object.entries(scope.ecs).some(([tenant, allowed]) => {
+      if (allowed === ALL_VENUES || !Array.isArray(allowed) || !allowed.length) return false;
+      const rows = venues[tenant];
+      return !rows || rows === "loading" || rows === "error";
+    });
+  }, [venues, scope]);
+
+  const dropOrphanEcs = () => {
+    const next = { ...scope.ecs };
+    for (const id of orphanEcs) delete next[id];
+    onChange({ ...scope, ecs: next });
+  };
+
+  const dropOrphanVenues = () => {
+    const next = { ...scope.ecs };
+    for (const { tenant, ids } of orphanVenues) {
+      const current = next[tenant];
+      if (!Array.isArray(current)) continue;
+      const gone = new Set(ids);
+      next[tenant] = current.filter((id) => !gone.has(id));
+    }
+    onChange({ ...scope, ecs: next });
+  };
+
   const rows: EcRow[] = isMsp
     ? (ecs || [])
     : (soleTenant ? [{ id: soleTenant, name: "This RUCKUS ONE tenant" }] : []);
@@ -175,6 +259,80 @@ export default function AdminScope(
             tick the box above.
           </span>
         </p>
+      )}
+
+      {(orphanEcs.length > 0 || orphanVenues.length > 0) && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+          <p className="flex items-start gap-2 text-sm text-amber-900">
+            <TriangleAlert size={15} className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <b>This policy names things that are not in this tenant.</b> They
+              still count: scope refuses anything not selected, so a user
+              allowed <i>only</i> these can open nothing at all. The usual cause
+              is the RUCKUS ONE credentials being repointed at a different
+              tenant after the policy was written.
+            </span>
+          </p>
+
+          {orphanEcs.length > 0 && (
+            <div className="mt-2 min-w-0">
+              <p className="text-xs font-medium text-amber-900">
+                {orphanEcs.length} customer id(s) not in this tenant:
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {orphanEcs.map((id) => (
+                  <li key={id} className="break-all font-mono text-[11px] text-amber-800">
+                    {id}
+                    {scope.ecs[id] === ALL_VENUES
+                      ? " · all venues"
+                      : ` · ${(scope.ecs[id] as string[]).length} venue(s)`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {orphanVenues.map(({ tenant, tenantName, ids }) => (
+            <div key={tenant} className="mt-2 min-w-0">
+              <p className="text-xs font-medium text-amber-900">
+                {ids.length} venue id(s) not in {tenantName}:
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {ids.map((id) => (
+                  <li key={id} className="break-all font-mono text-[11px] text-amber-800">{id}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+
+          {venueCheckPending && (
+            <p className="mt-2 text-[11px] text-amber-800">
+              Still loading venues for one or more customers, so there may be
+              more than this.
+            </p>
+          )}
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            {orphanEcs.length > 0 && (
+              <button type="button" onClick={dropOrphanEcs}
+                      className="rounded-md border border-amber-400 bg-white px-2.5 py-1
+                                 text-xs font-medium text-amber-900 hover:bg-amber-100">
+                Remove the {orphanEcs.length} customer id(s)
+              </button>
+            )}
+            {orphanVenues.length > 0 && (
+              <button type="button" onClick={dropOrphanVenues}
+                      className="rounded-md border border-amber-400 bg-white px-2.5 py-1
+                                 text-xs font-medium text-amber-900 hover:bg-amber-100">
+                Remove the stale venue id(s)
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] text-amber-800">
+            Removing them changes nothing about what users can reach — these ids
+            match nothing. It only takes them out of the saved policy. Save to apply.
+          </p>
+        </div>
       )}
 
       {ecError && (
