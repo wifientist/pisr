@@ -230,6 +230,25 @@ Two lessons from writing it, both worth knowing before you read its output:
   script inspects the body for file content, tracebacks and real venue data
   instead of judging on the status code.
 
+**Supply the admin credentials.** Without them three checks silently lose their
+meaning, and two of them used to lie about it:
+
+- the cross-customer test falls back to a made-up tenant id, which proves
+  fail-closed but not isolation between real customers;
+- whether the role is scoped at all is unknown, and an unrestricted role
+  reaching any tenant is *correct* — judging that without knowing is how a
+  clean instance gets reported as leaking;
+- redaction cannot be measured, because measuring it means fetching the same
+  report as both roles and comparing.
+
+A rejected admin login is now a FAIL that names the reason, not a note.
+
+**Redaction is compared, not inferred, and the comparison recurses.** Hiding the
+Config tab empties `config.categories` while `config` itself stays a populated
+dict, so a top-level diff sees nothing and reports that redaction is not
+working. The script walks both reports and names the paths that are full for an
+admin and empty for the user.
+
 Delete the test account when you are done.
 
 ## Operating it

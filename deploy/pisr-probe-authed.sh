@@ -239,6 +239,42 @@ MY_EC="$(printf '%s' "$MINE" | grep -o '"id":"[0-9a-f]\{16,\}"' | head -1 | cut 
 # A tenant id certainly in nobody's policy. Note that a role with NO scope set
 # is unrestricted by design, so a non-403 here is only a finding once a scope
 # exists — the message says so rather than crying wolf.
+# IS THIS ROLE SCOPED AT ALL? Everything below depends on the answer and the
+# script used to assume it. An UNRESTRICTED role reaching a foreign tenant is
+# correct behaviour, not a leak — reporting it as a failure sends you hunting
+# for a bug in the one case where there is none. With admin credentials the
+# policy says; without them this stays honestly unknown.
+# ONE admin login, reused by everything below. Two of them would spend the
+# login backoff twice, and the second failure then reports "throttled" when the
+# real cause was "rejected" — which is precisely the misdiagnosis this whole
+# section exists to avoid.
+SCOPED="unknown"
+ADMIN_OK=""
+if [ -n "$ADMIN_USER" ]; then
+  ac="$(login "$AJAR" "$ADMIN_USER" "$ADMIN_PASS")"
+  case "$ac" in
+    204) ADMIN_OK=yes ;;
+    401) bad "admin credentials were supplied but REJECTED (401). Check "\
+             "PISR_PROBE_ADMIN_USER/PASS — everything needing them is skipped." ;;
+    429) bad "admin login was throttled (429). Wait ~5 minutes and re-run; "\
+             "the checks needing admin are skipped." ;;
+    *)   bad "admin login returned $ac — the checks needing admin are skipped." ;;
+  esac
+  if [ -n "$ADMIN_OK" ]; then
+    POL="$(bodyof "$AJAR" /api/admin/visibility)"
+    case "$POL" in
+      *'"unrestricted": true'*|*'"unrestricted":true'*) SCOPED="no" ;;
+      *'"ecs"'*)                                        SCOPED="yes" ;;
+      *)                                                SCOPED="unknown" ;;
+    esac
+  fi
+fi
+case "$SCOPED" in
+  yes) printf '  this role IS scoped, so a foreign tenant must be refused\n' ;;
+  no)  printf '  this role is UNRESTRICTED, so reaching any tenant is correct\n' ;;
+  *)   printf '  scope state unknown (no admin session) — judging conservatively\n' ;;
+esac
+
 FAKE_EC="00000000000000000000000000000000"
 for p in "/api/pisr/$CID/venues?tenant_id=$FAKE_EC" \
          "/api/pisr/$CID/report?tenant_id=$FAKE_EC&venue_id=$FAKE_EC" \
@@ -249,15 +285,19 @@ for p in "/api/pisr/$CID/venues?tenant_id=$FAKE_EC" \
     403) ok "$short with a foreign tenant -> 403" ;;
     401) note "$short -> 401" ;;
     429) note "$short -> 429 (throttled)" ;;
-    200) bad "$short with a foreign tenant -> 200  ** data returned **" ;;
-    *)   note "$short with a foreign tenant -> $c (no scope set? then unrestricted by design)" ;;
+    200) case "$SCOPED" in
+           yes) bad  "$short with a foreign tenant -> 200  ** data returned **" ;;
+           no)  ok   "$short -> 200 (this role is unrestricted; correct)" ;;
+           *)   note "$short with a foreign tenant -> 200 — correct IF this role is unrestricted, a leak if not" ;;
+         esac ;;
+    *)   note "$short with a foreign tenant -> $c" ;;
   esac
 done
 
 # With admin credentials, the real version: an EC that EXISTS and that this
 # user's filtered list omits.
-if [ -n "$ADMIN_USER" ]; then
-  if [ "$(login "$AJAR" "$ADMIN_USER" "$ADMIN_PASS")" = "204" ]; then
+if [ -n "$ADMIN_OK" ]; then
+  if true; then
     ALL="$(bodyof "$AJAR" "/api/r1/$CID/msp/mspEcs")"
     for ec in $(printf '%s' "$ALL" | grep -o '"id":"[0-9a-f]\{16,\}"' | cut -d'"' -f4); do
       printf '%s' "$MINE" | grep -q "$ec" && continue
@@ -269,8 +309,6 @@ if [ -n "$ADMIN_USER" ]; then
       esac
       break
     done
-  else
-    note "admin credentials did not sign in; skipping the cross-customer check"
   fi
 fi
 
@@ -395,12 +433,60 @@ else
       && bad "the report body contains a traceback" \
       || ok "no traceback in the report body"
 
-    if [ -n "$ADMIN_USER" ] && [ -s "$AJAR" ]; then
-      HID="$(bodyof "$AJAR" /api/admin/visibility | grep -o '"hidden":{[^}]*}')"
-      case "$HID" in
-        *'[]'*|'') note "no sections are hidden from users, so redaction is untested."
-                   note "hide one in the portal and re-run to exercise it." ;;
-        *) ok "a policy hides sections; diff the two reports by hand to confirm" ;;
+    # REDACTION, MEASURED RATHER THAN INFERRED. The earlier version read the
+    # policy through the admin session and reported "nothing is hidden" when
+    # that session had failed — a false negative that flatly contradicted the
+    # configured policy. Fetching the SAME report as both roles and comparing
+    # is the only version of this check that cannot lie: whatever the policy
+    # says, what matters is that the user's copy is emptier.
+    if [ -z "$ADMIN_OK" ]; then
+      note "no working admin session, so redaction could not be compared."
+      note "supply PISR_PROBE_ADMIN_USER/PASS to exercise it."
+    else
+      AREP="$TMPD/admin-report.json"
+      curl -s -o "$AREP" --max-time 120 -g -b "$AJAR" -G \
+        --data-urlencode "venue_id=$VENUE" ${MY_EC:+--data-urlencode "tenant_id=$MY_EC"} \
+        "$BASE/api/pisr/$CID/report" >/dev/null
+      printf '%s' "$REP" > "$TMPD/user-report.json"
+
+      emptied="$(python3 - "$AREP" "$TMPD/user-report.json" <<'PYEOF'
+import json, sys
+def load(p):
+    try:
+        with open(p) as f: return json.load(f)
+    except Exception: return None
+a, u = load(sys.argv[1]), load(sys.argv[2])
+if not isinstance(a, dict) or not isinstance(u, dict):
+    print("ERR"); sys.exit()
+def filled(v):
+    if v is None: return False
+    if isinstance(v, (list, dict, str)): return len(v) > 0
+    return True
+
+# RECURSIVE, because redaction mostly empties NESTED paths. Hiding the Config
+# tab empties `config.categories`, and `config` itself stays a populated dict —
+# so a top-level comparison sees no difference and reports, wrongly, that
+# nothing was redacted.
+def walk(av, uv, path="", depth=0):
+    if depth > 4:
+        return []
+    if isinstance(av, dict) and isinstance(uv, dict):
+        out = []
+        for k in av:
+            out += walk(av[k], uv.get(k), f"{path}.{k}" if path else k, depth + 1)
+        return out
+    return [path] if filled(av) and not filled(uv) else []
+
+gone = walk(a, u)
+print(",".join(gone[:12]) if gone else "NONE")
+PYEOF
+)"
+      case "$emptied" in
+        ERR)  note "could not parse one of the reports; compare them by hand" ;;
+        NONE) note "the user's report is not emptier than the admin's anywhere."
+              note "if you have hidden a section, check it names a path that this"
+              note "venue actually populates — otherwise nothing visibly changes." ;;
+        *)    ok "redaction is applied: emptied for this user -> $emptied" ;;
       esac
     fi
   fi
