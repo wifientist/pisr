@@ -29,17 +29,27 @@ upstream copy. It is not.
   import by `api/config.py`. Any setting can arrive as `<NAME>_FILE` pointing
   at a file instead, which is how a secret gets in without going through the
   container environment.
-- **Auth has two modes, both in `api/auth.py`**, gating everything under `/api`
-  plus `/docs`. `passphrase` (default) is one shared secret for a signed
+- **Auth has three modes, all in `api/auth.py`**, gating everything under
+  `/api` plus `/docs`. `passphrase` (default) is one shared secret for a signed
   HttpOnly cookie. `proxy` trusts an identity header from an authenticating
-  reverse proxy (oauth2-proxy) and switches the passphrase off. No accounts, no
-  session store, and no OIDC implemented here.
+  reverse proxy (oauth2-proxy, or Cloudflare Access with a verified assertion)
+  and switches the passphrase off. `accounts` keeps per-person logins in a JSON
+  file — see `api/accounts.py`. No session store and no OIDC implemented here.
+- **`accounts` mode exists because Cloudflare Access stopped being usable.**
+  Its one-time-PIN mail is silently discarded by two of three customer domains,
+  and every mail-based scheme inherits that — a new sending domain is a *worse*
+  corporate-filter signal than cloudflare.com, not a better one. So an admin
+  creates an account and hands over a single-use enrolment link OUT OF BAND.
+  Nothing is emailed, deliberately and permanently: if a future change makes
+  sign-in depend on mail arriving, it has reintroduced the exact fault this
+  replaced.
 - **Two roles, `admin` and `user`.** In proxy mode the role comes from the
-  verified identity against `PISR_ADMIN_EMAILS`; in passphrase mode from which
-  of two passphrases signed the cookie. An admin sets a policy — which report
-  sections a user is shown, and which MSP-ECs and venues a user may reach —
-  stored as one JSON file. Both roles are fully authenticated; the role decides
-  what a report contains, not whether you may have one.
+  verified identity against `PISR_ADMIN_EMAILS`; in accounts mode it is stored
+  per account; in passphrase mode it comes from which of two passphrases signed
+  the cookie. An admin sets a policy — which report sections a user is shown,
+  and which MSP-ECs and venues a user may reach — stored as one JSON file. Both
+  roles are fully authenticated; the role decides what a report contains, not
+  whether you may have one.
 - **External API**: RuckusONE only. R1 has a 15-SSID-per-AP-Group limit, which
   `checks.py` asserts on.
 
@@ -52,12 +62,21 @@ upstream copy. It is not.
 - **Human-triggered.** No scheduler, no background tasks, no recurring polls. If
   something needs to happen repeatedly, a person clicks the button.
 - **PISR stores nothing — of the tenant.** No snapshot files, no cache, no
-  database, no report that outlives the response carrying it. The ONE file it
-  writes is the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`,
-  backed by the `pisr-config` volume): a list of section ids and venue ids, no
-  venue data, no device, no credential. See `api/visibility.py` for the
-  argument. Guard the distinction — if something later wants to keep a *report*
-  there, that is a different feature and it has to make its own case.
+  database, no report that outlives the response carrying it. It writes exactly
+  TWO files, both on the `pisr-config` volume, and neither holds anything
+  belonging to the customer whose network is being reported on:
+
+  - the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`) — a
+    list of section ids and venue ids, no venue data, no device, no credential.
+    See `api/visibility.py`.
+  - local accounts at `PISR_ACCOUNTS_FILE` (`/data/accounts.json`), in
+    `accounts` mode only — usernames, roles and scrypt hashes for the OPERATORS
+    of the tool. See `api/accounts.py`.
+
+  Guard the distinction rather than the file count. Both of these are
+  configuration with a portal in front of it; a customer's *report* is the
+  thing that must not be persisted, and if something later wants to keep one
+  there it is a different feature that has to make its own case.
 
 ## The role policy, in four files
 
@@ -73,6 +92,68 @@ Read them in this order; each explains the next.
 - `api/visibility.py` — the file on disk, holding both halves.
 
 ## Traps
+
+- **`hashlib.scrypt` needs `maxmem` passed explicitly.** At PISR's parameters
+  (N=2^15, r=8) it wants 128·N·r = *exactly* 32 MiB, which is also OpenSSL's
+  default ceiling — so the default raises `ValueError: memory limit exceeded`
+  rather than being merely slow, and it raises at the first sign-in rather than
+  at import. `accounts._SCRYPT_MAXMEM` is 64 MiB for that reason. Raise N
+  without raising it and nobody can log in;
+  `test_accounts.py::test_scrypt_params_are_within_the_maxmem_ceiling` is what
+  says so.
+
+- **The session key includes the stored password hash**
+  (`auth._account_key`). That is what makes a password change end that
+  person's other sessions, and a disable or delete end them immediately rather
+  than at the next expiry. It is `_signing_key`'s trick applied per person. Do
+  not "simplify" it to sign on the account id alone — revocation silently
+  becomes "within twelve hours".
+
+- **The login throttle keys on BOTH the address and the username, and in
+  `accounts` mode it backs off rather than locking out.** Both halves matter.
+  Under rootless podman every caller shares one apparent address, so `ip:`
+  collapses to a global counter and a hard lockout there is an outage switch
+  anyone can flip; a hard lockout on `user:` lets anyone lock out a named
+  person on purpose. Backoff (doubling, capped at 60s) throttles guessing
+  without handing a stranger a way to take the tool away. `ip:` and `enroll:`
+  additionally get a free allowance because they are shared — a colleague
+  mistyping a password must not slow everybody else down — while `user:` gets
+  none, since only the person guessing pays it.
+
+- **The enrolment routes throttle FAILURES ONLY, checked after the lookup.** A
+  valid token is answered whatever anyone else has been doing, because the
+  address is shared; throttling before the lookup would let one person clicking
+  a stale link delay everybody's enrolment. Note also that a password below the
+  floor is classified as the invitee's own slip and never counted — otherwise
+  mistyping your new password makes fixing it slower, during the one flow you
+  cannot skip.
+
+- **The enrolment link is built by the BROWSER, not the server.**
+  `accounts_router` returns a path and `AdminAccounts.tsx` resolves it against
+  `window.location.origin`. The server does not know its own public address: an
+  earlier version produced `http://backend:8080/...` in dev, and "fixing" that
+  by reading `X-Forwarded-Host` would believe a header from any peer, which is
+  precisely what `auth.py` is careful never to do.
+
+- **`PISR_AUTH_ADMIN_PASSPHRASE` is break-glass in `accounts` mode**, and that
+  is a deliberate exception to proxy mode's rule that a shared secret must not
+  be a way around the identity system. The difference is where identity lives:
+  proxy mode's IDP is external and is still there when the volume is not,
+  whereas accounts live ON that volume. Losing it, or deleting the last admin,
+  would otherwise need an SSH session to a box that is deliberately awkward to
+  SSH into. `main.py` warns about it at every startup on purpose.
+
+- **The accounts file fails CLOSED; the visibility policy fails OPEN.** Same
+  volume, same shape, opposite rules, for the reason the existing section-vs-
+  scope trap gives: one is de-cluttering and one is the gate. An unreadable
+  accounts file admits nobody and is *not overwritten* — a damaged but
+  recoverable file is worth more than our idea of what was in it.
+
+- **`scripts/pisr_admin.py` is a SECOND WRITER of `/data/accounts.json`**,
+  running in its own container against the same volume. That is why
+  `AccountStore` compares `st_mtime_ns` rather than `st_mtime` (two writes in
+  one second is a real sequence here) and re-reads before every mutation. Drop
+  either and a portal save silently deletes what the CLI just added.
 
 - **Never cache `R1Client` at module level.** It authenticates once in
   `__init__` and never re-authenticates; a process-lifetime client dies ~1h after

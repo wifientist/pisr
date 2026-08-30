@@ -60,6 +60,43 @@ them is which cards a report contains, never whether they may have one.
   secret: a shared secret cannot be revoked for one person, and the user
   passphrase will be in a group chat by Thursday.
 
+  In ACCOUNTS mode the role is stored per account, in the file. It is the
+  first mode where an admin can promote and revoke somebody without an env
+  change and a restart.
+
+ACCOUNTS MODE. Local per-person logins, added when Cloudflare Access stopped
+being usable — its one-time-PIN mail is silently discarded by two of three
+customer domains, and every mail-based scheme inherits that failure. An admin
+creates an account, PISR mints a single-use enrolment link, and the admin
+delivers it OUT OF BAND. Nothing has to arrive by email at the moment somebody
+is trying to sign in. See `api/accounts.py` for the store and the argument
+about what it is allowed to hold.
+
+  POST /api/login    {"username": "...", "password": "..."} -> 204 + Set-Cookie
+  GET  /api/enroll/{token}   is this link good, and whose is it
+  POST /api/enroll           redeem it and set a password
+  POST /api/account/password change your own password
+
+  THE SESSION KEY INCLUDES THE STORED HASH. `_account_key` derives from the
+  session secret, the role, the account id AND the password hash, which buys
+  three things for free: changing a password ends that person's other
+  sessions, disabling or deleting an account ends them immediately, and a role
+  change re-keys rather than being carried in a payload somebody could edit.
+  This is `_signing_key`'s trick applied per person instead of per passphrase.
+
+  THE LOGIN PAGE IS NOW THE PERIMETER. Under Access there were two gates and
+  this was the inner one. In accounts mode there is one, so the throttle below
+  is load-bearing rather than a nicety — read its comment before changing it.
+
+  BREAK-GLASS. PISR_AUTH_ADMIN_PASSPHRASE still signs in as an admin in this
+  mode, and that is a deliberate exception to the rule proxy mode states above
+  ("leaving both doors open makes the shared secret a way around SSO"). The
+  difference is where the identity lives. Proxy mode's IDP is external and is
+  still there when PISR's volume is not; accounts mode's identities are a file
+  ON that volume, so losing it — or deleting the last admin — would otherwise
+  need an SSH session to a box that is deliberately awkward to SSH into. It is
+  optional, off unless set, and main.py says so loudly at every startup.
+
 Everything under /api (and /docs, /redoc, /openapi.json) requires proof in
 whichever form the mode calls for. The static SPA bundle is deliberately NOT
 gated: it contains no tenant data, and it has to load in order to render the
@@ -117,7 +154,19 @@ _GATED_EXACT = ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
 # Reachable without a cookie. /healthz is deliberately outside /api so the
 # container healthcheck does not need a session; it returns a bare "ok" and
 # names neither the tenant nor the region.
-_PUBLIC_PATHS = {"/api/login", "/api/logout", "/api/auth/status"}
+_PUBLIC_PATHS = {"/api/login", "/api/logout", "/api/auth/status", "/api/enroll"}
+
+# Enrolment, which has to be reachable by somebody who by definition has no
+# session yet — that is what they are here to obtain. The token in the URL is
+# the credential.
+#
+# A PREFIX, because the token is a path segment. Kept deliberately short and
+# specific: this is the only place in the file where a prefix opens a hole, and
+# a wider one ("/api/enrol", say, or a trailing-slash-less "/api/enroll" that
+# also matched "/api/enrollments") would open more than it means to. The routes
+# behind it are the only unauthenticated write path in PISR and they carry
+# their own throttle.
+_PUBLIC_PREFIXES = ("/api/enroll/",)
 
 
 # ── Session token ────────────────────────────────────────────────────
@@ -162,6 +211,105 @@ def _role_keys() -> Tuple[Tuple[str, bytes], ...]:
         return ((ROLE_ADMIN, _signing_key(AUTH.admin_passphrase)),
                 (ROLE_USER, _signing_key(AUTH.passphrase)))
     return ((ROLE_ADMIN, _signing_key(AUTH.passphrase)),)
+
+
+# The account id the break-glass passphrase signs in as. Reserved: real ids are
+# "u_" + a random suffix and usernames cannot contain "!", so nothing in the
+# accounts file can collide with it.
+BREAKGLASS_ID = "!breakglass"
+BREAKGLASS_NAME = "break-glass (passphrase)"
+
+
+def _account_key(account) -> bytes:
+    """
+    The key that signs one person's session.
+
+    Derived from the session secret, the role, the account id AND the stored
+    password hash. That last ingredient is the interesting one: it means the
+    key changes whenever the password does, so a password change silently ends
+    every other session that person had — the property `_signing_key` gives
+    passphrase mode, here given per person.
+
+    It also means a disabled or deleted account cannot present a working
+    cookie, because `_valid_account` looks the account up before it can derive
+    a key at all. Revocation is immediate rather than "at the next expiry",
+    which is the thing a shared passphrase could never offer.
+
+    The role is in the key rather than the payload for the same reason it is in
+    passphrase mode: there is then no role field for anyone to edit, and a
+    demoted admin's outstanding cookie stops verifying instead of staying
+    admin until it expires.
+    """
+    material = f"{account.role}:{account.id}:{account.hash or ''}"
+    return hmac.new(AUTH.session_secret.encode(), material.encode(), sha256).digest()
+
+
+def _mint_account(account, now: Optional[float] = None) -> str:
+    """A session cookie for one account. Payload is `<id>.<expires>`."""
+    expires = int((now or time.time()) + AUTH.session_seconds)
+    payload = f"{account.id}.{expires}"
+    sig = hmac.new(_account_key(account), payload.encode(), sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _mint_breakglass(now: Optional[float] = None) -> str:
+    """A session cookie for the env-configured emergency admin."""
+    expires = int((now or time.time()) + AUTH.session_seconds)
+    payload = f"{BREAKGLASS_ID}.{expires}"
+    key = _signing_key(AUTH.admin_passphrase)
+    sig = hmac.new(key, payload.encode(), sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _valid_account(token: str) -> Optional[Tuple[str, str]]:
+    """
+    The (identity, role) this cookie proves in accounts mode, or None.
+
+    Every failure is None and none of them are distinguished to the caller: a
+    malformed cookie, an unknown id, a deleted account, a disabled one, a
+    rotated password and an expired session all mean "sign in again".
+
+    Note that the account is looked up BEFORE the signature can be checked,
+    because the account is where the key comes from. That is not a
+    verify-then-trust inversion — nothing is trusted on the strength of the
+    lookup, and an attacker who names a real id still cannot forge a signature
+    without the hash. It does mean the timing differs between a real id and a
+    made-up one, which is not worth defending: account ids are opaque random
+    strings that the holder of a valid cookie already knows.
+    """
+    if not token:
+        return None
+    rest, _, sig = token.rpartition(".")
+    uid, _, expires_raw = rest.partition(".")
+    if not uid or not expires_raw or not sig:
+        return None
+
+    if uid == BREAKGLASS_ID:
+        if not AUTH.admin_passphrase:
+            # The passphrase was withdrawn while a cookie was outstanding.
+            # Withdrawing it has to end those sessions, or it withdraws
+            # nothing.
+            return None
+        key = _signing_key(AUTH.admin_passphrase)
+        identity, role = BREAKGLASS_NAME, ROLE_ADMIN
+    else:
+        import accounts  # local: config is validated before this module loads
+        account = accounts.STORE.by_id(uid)
+        if account is None or not account.can_sign_in:
+            return None
+        key = _account_key(account)
+        identity, role = account.username, account.role
+
+    expected = hmac.new(key, rest.encode(), sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+
+    try:
+        if int(expires_raw) <= time.time():
+            return None
+    except ValueError:
+        return None
+    return (identity, role)
 
 
 def _mint(role: str, now: Optional[float] = None) -> str:
@@ -285,41 +433,149 @@ def _request_is_https(request: Request) -> bool:
 
 # ── Brute-force throttle ─────────────────────────────────────────────
 #
-# A shared passphrase with unlimited guesses is a passphrase with no length.
-# One process, no Redis, so this is an in-memory dict — which means it resets on
-# restart, and means it counts per client address as resolved above.
+# A password with unlimited guesses is a password with no length. One process,
+# no Redis, so this is an in-memory dict: it resets on restart, which is a real
+# weakness and the reason there is a length floor in config.py at all.
+#
+# TWO KINDS OF KEY, WITH DIFFERENT POLICIES, and the difference is the point.
+#
+#   ip:<addr>    the client address as `_client_ip` resolves it
+#   user:<name>  the username offered, in accounts mode
+#
+# The second exists because the first BARELY WORKS HERE. Under rootless podman
+# publishing a port rewrites the source address, so every caller arrives from
+# inside podman's own network and `ip:` collapses to a single global counter —
+# CLAUDE.md documents this at length. Counting per username is the only key
+# that distinguishes anything in that deployment.
+#
+# HARD LOCKOUT vs BACKOFF is then forced by that same fact:
+#
+#   * PASSPHRASE mode keeps the historical hard lockout — N wrong guesses and
+#     that key refuses for `lockout_seconds`. It is one shared secret on a LAN
+#     instance and the behaviour is long-standing.
+#
+#   * ACCOUNTS mode uses EXPONENTIAL BACKOFF on both keys and never refuses
+#     outright. A hard lockout here would be an outage switch, twice over: on
+#     the `ip:` key, where every caller looks the same, five wrong guesses from
+#     anyone would lock out everyone; and on the `user:` key, where anybody
+#     could lock out a named person on purpose just by guessing at them. This
+#     mode's login page is directly internet-facing, so both are things people
+#     would actually do.
+#
+# Backoff is enough: the delay doubles to a minute, scrypt costs ~60ms a try,
+# and the floor is twelve characters. What it will not do is hand a stranger a
+# way to take the tool away from the people using it.
 
-_attempts: Dict[str, Tuple[int, float]] = {}
+_BACKOFF_CAP_SECONDS = 60
+
+# Failures a key may spend before backoff starts biting, by prefix.
+#
+# `user:` gets none. A delay on one username is paid only by whoever is
+# guessing at it, and the real owner avoids it by knowing their own password.
+#
+# `ip:` and `enroll:` get an allowance, because under rootless podman they are
+# shared: every caller arrives from the same apparent address, so a colleague
+# mistyping a password would otherwise slow everybody else down. The allowance
+# is what keeps ordinary fumbling free while still catching the attack this key
+# exists for — spraying one password across many usernames, which the `user:`
+# key cannot see because it only ever counts one failure per account.
+_FREE_ATTEMPTS = {"ip": 5, "enroll": 3, "user": 0}
+
+
+def _free_attempts(key: str) -> int:
+    return _FREE_ATTEMPTS.get(key.split(":", 1)[0], 0)
+
+# How long a failure is REMEMBERED, as distinct from how long it blocks. These
+# must differ for backoff to work at all: if the count reset as soon as the
+# (short) block expired, the delay would return to one second after every wait
+# and never grow. The count is forgotten after `lockout_seconds`.
+
+# count, blocked-until, forget-at
+_attempts: Dict[str, Tuple[int, float, float]] = {}
 _attempts_lock = Lock()
 _ATTEMPTS_MAX_TRACKED = 2048
 
 
-def _locked_until(ip: str) -> float:
-    with _attempts_lock:
-        count, until = _attempts.get(ip, (0, 0.0))
-    return until if count >= AUTH.max_attempts and until > time.time() else 0.0
+def _uses_backoff() -> bool:
+    return AUTH.mode == "accounts"
 
 
-def _record_failure(ip: str) -> None:
+def _locked_until(key: str) -> float:
+    """When this key may try again, or 0.0 if it may try now."""
     now = time.time()
     with _attempts_lock:
-        # Bounded: a spoofed-source flood should not be able to grow this
-        # without limit. Drop everything already expired, then everything at
-        # all if that was not enough.
+        count, blocked, _ = _attempts.get(key, (0, 0.0, 0.0))
+    if blocked <= now:
+        return 0.0
+    if _uses_backoff():
+        # No count threshold: every failure delays the next attempt, and the
+        # delay is capped, so there is no number of failures at which this
+        # refuses outright.
+        return blocked
+    return blocked if count >= AUTH.max_attempts else 0.0
+
+
+def _record_failure(*keys: str) -> None:
+    """
+    Count one failure against every key given.
+
+    Variadic because accounts mode always records against BOTH the address and
+    the username — recording only one of them would leave the other as an
+    unthrottled way to make the same guesses.
+    """
+    for key in keys:
+        _record_one_failure(key)
+
+
+def _record_one_failure(key: str) -> None:
+    now = time.time()
+    with _attempts_lock:
+        # Bounded: a flood of varied usernames or spoofed sources should not
+        # grow this without limit. Drop everything already forgotten, then
+        # everything at all if that was not enough.
         if len(_attempts) >= _ATTEMPTS_MAX_TRACKED:
-            for key in [k for k, (_, u) in _attempts.items() if u <= now]:
-                del _attempts[key]
+            for stale in [k for k, (_, _, f) in _attempts.items() if f <= now]:
+                del _attempts[stale]
             if len(_attempts) >= _ATTEMPTS_MAX_TRACKED:
                 _attempts.clear()
 
-        count, until = _attempts.get(ip, (0, 0.0))
-        count = 1 if until and until <= now else count + 1
-        _attempts[ip] = (count, now + AUTH.lockout_seconds)
+        count, _, forget_at = _attempts.get(key, (0, 0.0, 0.0))
+        count = 1 if forget_at and forget_at <= now else count + 1
+        if _uses_backoff():
+            over = count - _free_attempts(key)
+            blocked = (now + min(2 ** (over - 1), _BACKOFF_CAP_SECONDS)
+                       if over > 0 else 0.0)
+        else:
+            blocked = now + AUTH.lockout_seconds
+        _attempts[key] = (count, blocked, now + AUTH.lockout_seconds)
 
 
-def _clear_failures(ip: str) -> None:
+def _clear_failures(*keys: str) -> None:
     with _attempts_lock:
-        _attempts.pop(ip, None)
+        for key in keys:
+            _attempts.pop(key, None)
+
+
+def _throttled(keys: Tuple[str, ...]) -> Optional[JSONResponse]:
+    """
+    A 429 if any of these keys is waiting out a delay, else None.
+
+    The message names the wait but never which key caused it. Saying "this
+    username is throttled" would confirm the username exists, which is the one
+    thing the login route works to avoid telling anyone.
+    """
+    until = max((_locked_until(key) for key in keys), default=0.0)
+    if not until:
+        return None
+    retry_after = max(1, int(until - time.time()))
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+        content={
+            "detail": f"Too many attempts. Try again in {retry_after}s.",
+            "error": f"Too many attempts. Try again in {retry_after}s.",
+        },
+    )
 
 
 # ── Proxy identity ───────────────────────────────────────────────────
@@ -434,6 +690,12 @@ def identity_and_role(request: Request) -> Optional[Tuple[Optional[str], str]]:
             return None
         return (identity, _role_for_identity(identity))
 
+    if AUTH.mode == "accounts":
+        # Names a real person, so the audit trail this returns is worth
+        # something for the first time outside proxy mode — `updatedBy` on a
+        # policy save, and the line naming who ran a report.
+        return _valid_account(request.cookies.get(COOKIE_NAME, ""))
+
     role = _valid(request.cookies.get(COOKIE_NAME, ""))
     if not role:
         return None
@@ -467,7 +729,8 @@ def require_admin(request: Request) -> str:
         raise HTTPException(
             status_code=403,
             detail="This needs the admin role. In SSO mode that means being "
-                   "named in PISR_ADMIN_EMAILS; in passphrase mode it means "
+                   "named in PISR_ADMIN_EMAILS; in accounts mode it means an "
+                   "account whose role is admin; in passphrase mode it means "
                    "signing in with PISR_AUTH_ADMIN_PASSPHRASE.")
     return role
 
@@ -558,7 +821,7 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         gated = path.startswith(_GATED_PREFIXES) or path in _GATED_EXACT
-        if not gated or path in _PUBLIC_PATHS:
+        if not gated or path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
             return await call_next(request)
 
         resolved = identity_and_role(request)
@@ -674,10 +937,26 @@ router = APIRouter(tags=["Auth"])
 
 
 class LoginBody(BaseModel):
-    passphrase: str
+    # Optional so that one route serves both modes. Passphrase mode reads
+    # `passphrase`; accounts mode reads the other two. A body carrying the
+    # wrong pair for the mode is a 400 with the reason, not a 401 — the caller
+    # has half-migrated a config, not failed to authenticate.
+    passphrase: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
-def _set_session_cookie(response: Response, request: Request, role: str) -> None:
+class EnrollBody(BaseModel):
+    token: str
+    password: str
+
+
+class PasswordBody(BaseModel):
+    current: str
+    new: str
+
+
+def _write_session_cookie(response: Response, request: Request, token: str) -> None:
     # Secure is set whenever the request arrived over HTTPS, whatever the
     # config says; PISR_COOKIE_SECURE=1 forces it on for the case where a
     # deployment knows it is behind TLS that this process cannot see.
@@ -690,13 +969,18 @@ def _set_session_cookie(response: Response, request: Request, role: str) -> None
     secure = AUTH.cookie_secure or _request_is_https(request)
     response.set_cookie(
         COOKIE_NAME,
-        _mint(role),
+        token,
         max_age=AUTH.session_seconds,
         httponly=True,     # not reachable from JS, so an XSS cannot exfiltrate it
         samesite="lax",    # a cross-site POST cannot ride the session
         secure=secure,
         path="/",
     )
+
+
+def _set_session_cookie(response: Response, request: Request, role: str) -> None:
+    """Passphrase mode's cookie, where the role is the whole identity."""
+    _write_session_cookie(response, request, _mint(role))
 
 
 @router.get("/auth/status")
@@ -731,6 +1015,30 @@ async def auth_status(request: Request):
             "logoutUrl": AUTH.proxy_logout_url or None,
         }
 
+    if AUTH.mode == "accounts":
+        import accounts
+        return {
+            "mode": "accounts",
+            "required": True,
+            "authenticated": resolved is not None,
+            # A real name, in a mode that has one. This is what the sign-out
+            # chip shows and what the audit lines record.
+            "user": identity,
+            "role": role,
+            "logoutUrl": None,
+            # So the login form can say "no accounts exist yet, run the CLI"
+            # rather than letting somebody guess at a username on a fresh
+            # instance forever. Deliberately not a count — the number of
+            # accounts is not an unauthenticated caller's business, only
+            # whether the instance has been set up at all.
+            "setupNeeded": (not accounts.STORE.broken
+                            and not accounts.STORE.list()),
+            # Whether there is a break-glass door to offer. Not a secret: the
+            # form has to know whether to show a passphrase field, and its
+            # absence is inferable from the field's absence anyway.
+            "breakGlass": bool(AUTH.admin_passphrase),
+        }
+
     return {
         "mode": "passphrase",
         "required": True,
@@ -758,18 +1066,20 @@ async def login(body: LoginBody, request: Request):
         })
 
     ip = _client_ip(request)
-    until = _locked_until(ip)
-    if until:
-        retry_after = max(1, int(until - time.time()))
-        logger.warning("Login rejected: %s is locked out for another %ss", ip, retry_after)
-        return JSONResponse(
-            status_code=429,
-            headers={"Retry-After": str(retry_after)},
-            content={
-                "detail": f"Too many attempts. Try again in {retry_after}s.",
-                "error": f"Too many attempts. Try again in {retry_after}s.",
-            },
-        )
+
+    if AUTH.mode == "accounts":
+        return _login_with_account(body, request, ip)
+
+    if body.passphrase is None:
+        return JSONResponse(status_code=400, content={
+            "detail": "This instance signs in with a passphrase, not a username.",
+            "error": "This instance signs in with a passphrase, not a username.",
+        })
+
+    throttled = _throttled((f"ip:{ip}",))
+    if throttled is not None:
+        logger.warning("Login rejected: %s is locked out", ip)
+        return throttled
 
     # Both compares run unconditionally rather than short-circuiting on the
     # first match, so the time this takes does not say which passphrase was
@@ -781,7 +1091,7 @@ async def login(body: LoginBody, request: Request):
     is_user_pass = hmac.compare_digest(offered, AUTH.passphrase.encode())
 
     if not (is_admin_pass or is_user_pass):
-        _record_failure(ip)
+        _record_failure(f"ip:{ip}")
         logger.warning("Failed login from %s", ip)
         return JSONResponse(
             status_code=401,
@@ -793,7 +1103,7 @@ async def login(body: LoginBody, request: Request):
     # is a user and this second one is the admin.
     role = ROLE_ADMIN if (is_admin_pass or not AUTH.admin_passphrase) else ROLE_USER
 
-    _clear_failures(ip)
+    _clear_failures(f"ip:{ip}")
     logger.info("Signed in from %s as %s", ip, role)
 
     # Built here rather than mutating an injected `response`: returning a
@@ -802,6 +1112,252 @@ async def login(body: LoginBody, request: Request):
     signed_in = Response(status_code=204)
     _set_session_cookie(signed_in, request, role)
     return signed_in
+
+
+# The one message every failed account sign-in returns, whatever went wrong.
+#
+# "No such user", "wrong password", "never enrolled" and "disabled" are all
+# this string, because each of the others would confirm whether a username
+# exists — and the login page is now on the open internet. The log line says
+# which it was; the response does not.
+_SIGNIN_FAILED = ("Incorrect username or password.")
+
+
+def _login_with_account(body: LoginBody, request: Request, ip: str):
+    """
+    Accounts mode's sign-in. Also the break-glass passphrase's door.
+
+    Ordered so that every path costs about the same: the throttle is checked
+    first, then exactly one scrypt verification happens — against the real hash
+    if the account exists, against a dummy one if it does not. Returning early
+    on an unknown username would make this route an account enumerator that
+    anybody could read with a stopwatch.
+    """
+    import accounts  # local: config is validated before this module loads
+
+    # Break-glass, checked before the accounts file is consulted at all — the
+    # whole point of it is to work when that file is missing or unreadable.
+    if AUTH.admin_passphrase and body.passphrase:
+        throttled = _throttled((f"ip:{ip}",))
+        if throttled is not None:
+            return throttled
+        if hmac.compare_digest(body.passphrase.encode(),
+                               AUTH.admin_passphrase.encode()):
+            _clear_failures(f"ip:{ip}")
+            logger.warning(
+                "BREAK-GLASS sign-in from %s using PISR_AUTH_ADMIN_PASSPHRASE. "
+                "This bypasses the accounts file entirely. If this was not you, "
+                "rotate that passphrase now.", ip)
+            signed_in = Response(status_code=204)
+            _write_session_cookie(signed_in, request, _mint_breakglass())
+            return signed_in
+        _record_failure(f"ip:{ip}")
+        logger.warning("Failed break-glass login from %s", ip)
+        return JSONResponse(status_code=401,
+                            content={"detail": _SIGNIN_FAILED, "error": _SIGNIN_FAILED})
+
+    username = accounts.normalise_username(body.username or "")
+    password = body.password or ""
+    if not username or not password:
+        return JSONResponse(status_code=400, content={
+            "detail": "A username and password are required.",
+            "error": "A username and password are required.",
+        })
+
+    keys = (f"ip:{ip}", f"user:{username}")
+    throttled = _throttled(keys)
+    if throttled is not None:
+        logger.warning("Login rejected: %s / %r is backing off", ip, username)
+        return throttled
+
+    account = accounts.STORE.by_username(username)
+    if account is None or not account.can_sign_in:
+        # Spend the same time a real verification would. Without this the
+        # response for an unknown user comes back in microseconds and a real
+        # one takes ~60ms, which is a difference measurable over the internet.
+        accounts.burn_dummy_hash()
+        _record_failure(*keys)
+        logger.warning(
+            "Failed login from %s for %r (%s)", ip, username,
+            "no such account" if account is None
+            else "disabled" if account.disabled else "never enrolled")
+        return JSONResponse(status_code=401,
+                            content={"detail": _SIGNIN_FAILED, "error": _SIGNIN_FAILED})
+
+    if not accounts.verify_password(password, account.hash):
+        _record_failure(*keys)
+        logger.warning("Failed login from %s for %r (wrong password)", ip, username)
+        return JSONResponse(status_code=401,
+                            content={"detail": _SIGNIN_FAILED, "error": _SIGNIN_FAILED})
+
+    # The one moment the plaintext exists to rehash from. Best-effort inside,
+    # so a read-only volume costs an upgrade and not the sign-in.
+    if accounts.needs_rehash(account.hash):
+        accounts.STORE.upgrade_hash(account.id, password)
+        account = accounts.STORE.by_id(account.id) or account
+
+    _clear_failures(*keys)
+    logger.info("Signed in from %s as %s (%s)", ip, account.username, account.role)
+
+    signed_in = Response(status_code=204)
+    _write_session_cookie(signed_in, request, _mint_account(account))
+    return signed_in
+
+
+@router.get("/enroll/{token}")
+async def enroll_check(token: str, request: Request):
+    """
+    Public. Is this enrolment link good, and whose is it?
+
+    Returns the username so the form can show whose account is being set up —
+    somebody handed a link out of band deserves to see they were given the
+    right one. That is not a leak: holding the token already proves far more
+    than the username does.
+
+    THE THROTTLE STANDS IN FRONT OF FAILURES ONLY, and that ordering is the
+    whole point of it. A valid token is answered whatever anybody else has been
+    doing, because under rootless podman every caller shares one apparent
+    address — so a throttle checked BEFORE the lookup would let one person
+    clicking a stale link delay everybody else's enrolment, up to the cap,
+    indefinitely if they kept at it. That is exactly the "off switch for
+    strangers" the login throttle is written to avoid.
+
+    Throttling failures is still worth doing, but note how little it is
+    defending: the token is 256 random bits, so it cannot be guessed, and an
+    invalid one never reaches scrypt — `redeem_invite` refuses before it
+    hashes. This is abuse-limiting on an unauthenticated route, not a guard
+    against guessing.
+    """
+    if AUTH.mode != "accounts":
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    import accounts
+
+    ip = _client_ip(request)
+    account = accounts.STORE.find_by_invite(token)
+    if account is None or account.disabled:
+        throttled = _throttled((f"enroll:{ip}",))
+        if throttled is not None:
+            return throttled
+        _record_failure(f"enroll:{ip}")
+        raise HTTPException(
+            status_code=404,
+            detail="That enrolment link is not valid. Ask whoever sent it for "
+                   "a new one.")
+    if account.invite.expired:
+        raise HTTPException(
+            status_code=410,
+            detail="That enrolment link has expired. Ask whoever sent it for a "
+                   "new one.")
+
+    return {
+        "username": account.username,
+        "expiresAt": account.invite.expires_at,
+        "minPasswordLength": AUTH.min_password_length,
+        # True when this is a reset rather than a first enrolment, so the form
+        # can say "choose a new password" instead of "welcome".
+        "reset": account.enrolled,
+    }
+
+
+@router.post("/enroll", status_code=204)
+async def enroll(body: EnrollBody, request: Request):
+    """
+    Public. Redeem an enrolment link, set a password, and sign in.
+
+    Signing in on success is deliberate: the alternative bounces somebody who
+    has just chosen a password to a form asking for it, which reads as though
+    the enrolment failed. The invite is consumed in the same write.
+
+    Throttled on failure only, for the reason `enroll_check` sets out at
+    length — and here it matters more, because a rejection is often the
+    invitee's own password being too short. Making them wait longer each time
+    they get their OWN password wrong, on a shared address, would be a
+    self-inflicted lockout on the one flow they have to complete.
+    """
+    if AUTH.mode != "accounts":
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    import accounts
+
+    ip = _client_ip(request)
+
+    # Whether the TOKEN is good, asked separately from whether the password is,
+    # so the two failures can be told apart. A password below the floor is the
+    # invitee's own slip and must not count as abuse — throttling it would make
+    # somebody who mistyped their new password wait longer to fix it, on a
+    # shared address, during the one flow they cannot skip. Only a bad token is
+    # counted. (`redeem_invite` re-checks the token inside its own write, so
+    # this lookup is for classification, not for trust.)
+    known = accounts.STORE.find_by_invite(body.token)
+    token_is_good = known is not None and not known.disabled and not known.invite.expired
+
+    try:
+        account = accounts.STORE.redeem_invite(body.token, body.password)
+    except accounts.AccountsError as exc:
+        if not token_is_good:
+            throttled = _throttled((f"enroll:{ip}",))
+            if throttled is not None:
+                return throttled
+            _record_failure(f"enroll:{ip}")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _clear_failures(f"enroll:{ip}", f"user:{account.username}")
+    logger.info("Enrolled %s from %s", account.username, ip)
+
+    enrolled = Response(status_code=204)
+    _write_session_cookie(enrolled, request, _mint_account(account))
+    return enrolled
+
+
+@router.post("/account/password", status_code=204)
+async def change_password(body: PasswordBody, request: Request):
+    """
+    Behind the gate: change your own password.
+
+    Re-issues the cookie, because changing the password changes the signing key
+    — see `_account_key`. Without that the person who just changed it would be
+    signed out by their own action while every OTHER session of theirs also
+    ended, which is right for the others and baffling for this one.
+    """
+    if AUTH.mode != "accounts":
+        raise HTTPException(
+            status_code=400,
+            detail="This instance does not use per-person passwords.")
+
+    import accounts
+
+    identity = getattr(request.state, "pisr_user", None)
+    if identity == BREAKGLASS_NAME:
+        raise HTTPException(
+            status_code=400,
+            detail="The break-glass session has no account to change. It is "
+                   "PISR_AUTH_ADMIN_PASSPHRASE in the environment; change it "
+                   "there.")
+
+    account = accounts.STORE.by_username(identity or "")
+    if account is None:
+        raise HTTPException(status_code=404, detail="No such account.")
+
+    # The current password is required even though the session already proves
+    # who this is. A session is not a password: it may be an unlocked laptop,
+    # and the whole value of a password change is that it locks out whoever
+    # should not have been there.
+    if not accounts.verify_password(body.current, account.hash):
+        ip = _client_ip(request)
+        _record_failure(f"user:{account.username}")
+        logger.warning("Failed password change for %s from %s",
+                       account.username, ip)
+        raise HTTPException(status_code=401, detail="That is not your current password.")
+
+    try:
+        updated = accounts.STORE.set_password(account.id, body.new)
+    except accounts.AccountsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    changed = Response(status_code=204)
+    _write_session_cookie(changed, request, _mint_account(updated))
+    return changed
 
 
 @router.post("/logout", status_code=204)

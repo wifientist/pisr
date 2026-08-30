@@ -1,9 +1,10 @@
 import {
   createContext, useCallback, useContext, useEffect, useState, type ReactNode,
 } from "react";
-import { Lock, LogOut, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { Lock, LogOut, ShieldAlert, SlidersHorizontal, Users } from "lucide-react";
 import { UNAUTHENTICATED_EVENT } from "@/utils/api";
 import AdminVisibility from "@/pages/AdminVisibility";
+import AdminAccounts from "@/pages/AdminAccounts";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -36,10 +37,14 @@ export const useAuth = () => {
 };
 
 interface AuthStatus {
-  mode: "passphrase" | "proxy" | "disabled";
+  mode: "passphrase" | "proxy" | "accounts" | "disabled";
   required: boolean;
   authenticated: boolean;
   user: string | null;
+  /** accounts mode only: no accounts exist yet, so nobody can sign in. */
+  setupNeeded?: boolean;
+  /** accounts mode only: whether a break-glass passphrase is configured. */
+  breakGlass?: boolean;
   /**
    * "admin" or "user", or null when not signed in.
    *
@@ -54,22 +59,70 @@ interface AuthStatus {
   logoutUrl: string | null;
 }
 
+const FIELD =
+  "mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm " +
+  "focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500";
+
+const SUBMIT =
+  "mt-4 w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white " +
+  "hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300";
+
+/** The card every signed-out screen sits in. */
+function AuthCard({ children, onSubmit }: {
+  children: ReactNode;
+  onSubmit?: (e: React.FormEvent) => void;
+}) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-8">
+      <form
+        onSubmit={onSubmit}
+        className="w-full max-w-sm min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow-sm"
+      >
+        <div className="flex items-center gap-2 text-gray-900">
+          <Lock size={18} className="text-gray-400 shrink-0" />
+          <h1 className="font-semibold">PISR</h1>
+        </div>
+        <p className="mt-1 text-sm text-gray-500">
+          Property Install Status Report
+        </p>
+        {children}
+      </form>
+    </div>
+  );
+}
+
 /**
- * The passphrase prompt.
+ * The sign-in prompt, for both modes that have one.
  *
  * Deliberately says nothing about the tenant. An unauthenticated caller gets
  * the SPA bundle — it has to load in order to render this — and the bundle
  * contains no tenant data, so this screen is all they see. /api/config, which
  * does name the tenant, is behind the gate with everything else.
+ *
+ * In ACCOUNTS mode it asks for a username and password; in passphrase mode,
+ * one passphrase. The break-glass passphrase gets a link rather than a third
+ * field, because it is a recovery door and a form that offers it as an equal
+ * option invites people to use it as one — which throws away the audit trail
+ * and the revocation that accounts mode exists for.
  */
-function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
+function LoginScreen({ status, onSignedIn }: {
+  status: AuthStatus | null;
+  onSignedIn: () => void;
+}) {
+  const accounts = status?.mode === "accounts";
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [breakGlass, setBreakGlass] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const usingPassphrase = !accounts || breakGlass;
+  const ready = usingPassphrase ? Boolean(passphrase) : Boolean(username && password);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy || !passphrase) return;
+    if (busy || !ready) return;
     setBusy(true);
     setError(null);
     try {
@@ -77,10 +130,12 @@ function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ passphrase }),
+        body: JSON.stringify(
+          usingPassphrase ? { passphrase } : { username, password }),
       });
       if (res.ok) {
         setPassphrase("");
+        setPassword("");
         onSignedIn();
         return;
       }
@@ -94,52 +149,223 @@ function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-8">
-      <form
-        onSubmit={submit}
-        className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-6 shadow-sm"
-      >
-        <div className="flex items-center gap-2 text-gray-900">
-          <Lock size={18} className="text-gray-400" />
-          <h1 className="font-semibold">PISR</h1>
-        </div>
-        <p className="mt-1 text-sm text-gray-500">
-          Property Install Status Report
+    <AuthCard onSubmit={submit}>
+      {accounts && status?.setupNeeded && (
+        <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2
+                      text-xs text-amber-900">
+          <b>No accounts exist yet</b>, so nobody can sign in. Create the first
+          administrator on the box:
+          <code className="mt-1 block break-all text-[11px]">
+            docker compose run --rm pisr python scripts/pisr_admin.py add-user
+            &lt;name&gt; --admin
+          </code>
         </p>
+      )}
 
-        <label
-          htmlFor="pisr-passphrase"
-          className="mt-6 block text-sm font-medium text-gray-700"
-        >
-          Passphrase
-        </label>
-        <input
-          id="pisr-passphrase"
-          type="password"
-          autoFocus
-          autoComplete="current-password"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm
-                     focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-        />
+      {!usingPassphrase && (
+        <>
+          <label htmlFor="pisr-username"
+                 className="mt-6 block text-sm font-medium text-gray-700">
+            Username
+          </label>
+          <input id="pisr-username" autoFocus autoComplete="username"
+                 value={username}
+                 onChange={(e) => setUsername(e.target.value)}
+                 className={FIELD} />
 
-        {error && (
-          <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </p>
-        )}
+          <label htmlFor="pisr-password"
+                 className="mt-4 block text-sm font-medium text-gray-700">
+            Password
+          </label>
+          <input id="pisr-password" type="password" autoComplete="current-password"
+                 value={password}
+                 onChange={(e) => setPassword(e.target.value)}
+                 className={FIELD} />
+        </>
+      )}
 
+      {usingPassphrase && (
+        <>
+          <label htmlFor="pisr-passphrase"
+                 className="mt-6 block text-sm font-medium text-gray-700">
+            {breakGlass ? "Break-glass passphrase" : "Passphrase"}
+          </label>
+          <input id="pisr-passphrase" type="password" autoFocus
+                 autoComplete="current-password"
+                 value={passphrase}
+                 onChange={(e) => setPassphrase(e.target.value)}
+                 className={FIELD} />
+          {breakGlass && (
+            <p className="mt-2 text-xs text-gray-500">
+              This is the recovery door. It signs in as an administrator without
+              an account, so it leaves no name in the audit trail — use it to
+              get back in and fix things, not day to day.
+            </p>
+          )}
+        </>
+      )}
+
+      {error && (
+        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
+
+      <button type="submit" disabled={busy || !ready} className={SUBMIT}>
+        {busy ? "Signing in…" : "Sign in"}
+      </button>
+
+      {accounts && status?.breakGlass && (
         <button
-          type="submit"
-          disabled={busy || !passphrase}
-          className="mt-4 w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white
-                     hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          type="button"
+          onClick={() => { setBreakGlass(!breakGlass); setError(null); }}
+          className="mt-3 w-full text-center text-xs text-gray-500 hover:text-gray-800"
         >
-          {busy ? "Signing in…" : "Sign in"}
+          {breakGlass ? "Sign in with an account instead"
+                      : "Use the break-glass passphrase"}
         </button>
-      </form>
-    </div>
+      )}
+
+      {accounts && !breakGlass && (
+        <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-500">
+          Forgotten your password? Ask an administrator to send you a reset
+          link — PISR cannot email you one.
+        </p>
+      )}
+    </AuthCard>
+  );
+}
+
+/**
+ * Setting a password from an enrolment link.
+ *
+ * Reached as `/?enroll=<token>`, not a path: App.tsx has no router and adding
+ * one for a single screen is not worth it. The token in the query is the whole
+ * credential, which is why the link is delivered out of band and is single-use.
+ *
+ * The server signs the person in on success, so this hands straight over to
+ * the app rather than bouncing somebody who has just chosen a password to a
+ * form asking for it — which reads as though the enrolment failed.
+ */
+function EnrollScreen({ token, onDone, onGiveUp }: {
+  token: string;
+  onDone: () => void;
+  onGiveUp: () => void;
+}) {
+  const [info, setInfo] = useState<
+    { username: string; reset: boolean; minPasswordLength: number } | null>(null);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE_URL}/enroll/${encodeURIComponent(token)}`,
+          { credentials: "same-origin" })
+      .then(async (r) => {
+        const body = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(body?.detail || `HTTP ${r.status}`);
+        return body;
+      })
+      .then((body) => { if (!cancelled) setInfo(body); })
+      .catch((e: Error) => { if (!cancelled) setFatal(e.message); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const mismatch = Boolean(confirm) && password !== confirm;
+  const ready = Boolean(password) && password === confirm;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy || !ready) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/enroll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ token, password }),
+      });
+      if (res.ok) {
+        setPassword("");
+        setConfirm("");
+        onDone();
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      setError(body?.detail || `Could not set the password (HTTP ${res.status}).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not set the password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (fatal) {
+    return (
+      <AuthCard>
+        <p className="mt-6 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {fatal}
+        </p>
+        <button type="button" onClick={onGiveUp} className={SUBMIT}>
+          Go to the sign-in page
+        </button>
+      </AuthCard>
+    );
+  }
+
+  if (!info) {
+    return (
+      <AuthCard>
+        <p className="mt-6 text-sm text-gray-500">Checking that link…</p>
+      </AuthCard>
+    );
+  }
+
+  return (
+    <AuthCard onSubmit={submit}>
+      <p className="mt-6 text-sm text-gray-700">
+        {info.reset ? "Choose a new password for " : "Setting up "}
+        <b className="break-all">{info.username}</b>.
+      </p>
+
+      <label htmlFor="enroll-password"
+             className="mt-4 block text-sm font-medium text-gray-700">
+        New password
+      </label>
+      <input id="enroll-password" type="password" autoFocus
+             autoComplete="new-password"
+             value={password} onChange={(e) => setPassword(e.target.value)}
+             className={FIELD} />
+      <p className="mt-1 text-xs text-gray-500">
+        At least {info.minPasswordLength} characters. Length is the only rule —
+        a long ordinary phrase beats a short complicated one.
+      </p>
+
+      <label htmlFor="enroll-confirm"
+             className="mt-4 block text-sm font-medium text-gray-700">
+        Again
+      </label>
+      <input id="enroll-confirm" type="password" autoComplete="new-password"
+             value={confirm} onChange={(e) => setConfirm(e.target.value)}
+             className={FIELD} />
+      {mismatch && (
+        <p className="mt-1 text-xs text-red-600">Those do not match.</p>
+      )}
+
+      {error && (
+        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
+
+      <button type="submit" disabled={busy || !ready} className={SUBMIT}>
+        {busy ? "Saving…" : "Set password and sign in"}
+      </button>
+    </AuthCard>
   );
 }
 
@@ -196,6 +422,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [controller, setController] = useState<ControllerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [portalOpen, setPortalOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+
+  // UP HERE WITH THE OTHER HOOKS, DELIBERATELY. This component returns early
+  // three times below, and a useState added under one of those is called only
+  // on some renders — which React sees as the hook count changing mid-session
+  // ("rendered more hooks than during the previous render") and a blank page.
+  // CLAUDE.md documents the same trap in PISR.tsx.
+  //
+  // Read once from the URL rather than watched: the token arrives in the
+  // initial navigation and nothing else ever puts one there.
+  const [enrollToken, setEnrollToken] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("enroll"));
 
   const refresh = useCallback(() => {
     setError(null);
@@ -252,6 +490,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus(null);
   };
 
+  // Before the error screen and before the login form: somebody following an
+  // enrolment link is by definition not signed in, and has not asked for
+  // /api/config either.
+  if (enrollToken) {
+    const leave = () => {
+      // Take the token out of the address bar either way. It is single-use, so
+      // a spent one left in a bookmark or pasted into a chat is only ever
+      // confusing — and a live one has no business sitting in browser history
+      // longer than it must.
+      window.history.replaceState({}, "", window.location.pathname);
+      setEnrollToken(null);
+    };
+    return (
+      <EnrollScreen
+        token={enrollToken}
+        onDone={() => { leave(); refresh(); }}
+        onGiveUp={leave}
+      />
+    );
+  }
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center p-8">
@@ -280,7 +539,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (status && status.required && !status.authenticated) {
     return status.mode === "proxy"
       ? <ProxyDeadEnd />
-      : <LoginScreen onSignedIn={refresh} />;
+      : <LoginScreen status={status} onSignedIn={refresh} />;
   }
 
   // Gate rendering on the fetch. PISR.tsx shows a "pick a RUCKUS ONE
@@ -349,6 +608,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">Sections</span>
               </button>
             )}
+            {/* Offered only in the mode that has accounts to manage. In proxy
+                mode the identities live in the IDP and in passphrase mode
+                there are none, so a portal listing nothing would be a puzzle
+                rather than a feature. */}
+            {isAdmin && status?.mode === "accounts" && (
+              <button
+                onClick={() => setAccountsOpen(true)}
+                title="Add people, issue enrolment links, revoke access"
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <Users size={13} className="shrink-0" />
+                <span className="hidden sm:inline">People</span>
+              </button>
+            )}
             {status?.required && (canSignOut ? (
               <button
                 onClick={signOut}
@@ -377,6 +650,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         preview of the bundle, not of the server's answer.
       */}
       {portalOpen && <AdminVisibility onClose={() => setPortalOpen(false)} />}
+      {/*
+        Closing this one DOES have a consequence for the admin's own session —
+        they can demote or disable themselves — but the server re-checks the
+        role on every request, so the next call resolves it rather than this
+        component needing to guess. Deleting your own account signs you out at
+        the next request, which is the honest outcome.
+      */}
+      {accountsOpen && <AdminAccounts onClose={() => setAccountsOpen(false)} />}
     </AuthContext.Provider>
   );
 }
