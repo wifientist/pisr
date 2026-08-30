@@ -29,7 +29,9 @@ from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
 from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
-from routers import admin_router, config_router, msp_router, pisr_router  # noqa: E402
+from routers import (  # noqa: E402
+    accounts_router, admin_router, config_router, msp_router, pisr_router)
+import accounts  # noqa: E402
 import visibility  # noqa: E402
 
 app = FastAPI(
@@ -134,6 +136,51 @@ else:
                 "the section visibility portal is unreachable. That is the safe "
                 "default — an empty list is not 'everyone' — but if you meant to "
                 "name someone, this is why they cannot see it.")
+    elif AUTH.mode == "accounts":
+        # The whole state of the gate, on one line, because in this mode the
+        # answer to "why can nobody sign in" is almost always here: no file, an
+        # unreadable file, or a file with no admin left in it. All three look
+        # identical from a login form.
+        if accounts.STORE.broken:
+            logger.error(
+                "Accounts: %s exists but could not be read, so NOBODY CAN SIGN "
+                "IN. Repair or move it. %s", AUTH.accounts_file,
+                "Sign in with PISR_AUTH_ADMIN_PASSPHRASE meanwhile."
+                if AUTH.admin_passphrase else
+                "There is no PISR_AUTH_ADMIN_PASSPHRASE set, so there is no "
+                "way in at all until the file is fixed.")
+        else:
+            people = accounts.STORE.list()
+            admins = sum(1 for a in people if a.role == "admin" and a.can_sign_in)
+            logger.info(
+                "Accounts: %d account(s), %d admin(s) able to sign in, file %s%s",
+                len(people), admins, AUTH.accounts_file,
+                "" if accounts.STORE.writable else " (NOT WRITABLE)")
+            if not people:
+                logger.warning(
+                    "Accounts: none exist yet, so nobody can sign in. Create "
+                    "the first admin with:  docker compose run --rm pisr "
+                    "python scripts/pisr_admin.py add-user --admin <name>")
+            elif not admins:
+                logger.warning(
+                    "Accounts: no admin can sign in, so the portals are "
+                    "unreachable. Promote somebody with scripts/pisr_admin.py, "
+                    "or use PISR_AUTH_ADMIN_PASSPHRASE if it is set.")
+
+        if AUTH.admin_passphrase:
+            # WARNING, not INFO. It is a shared secret that bypasses the whole
+            # account system, and the point of printing it every start is that
+            # one left set by accident is otherwise invisible.
+            logger.warning(
+                "Accounts: PISR_AUTH_ADMIN_PASSPHRASE is set — a break-glass "
+                "admin that works even with no accounts file. It bypasses "
+                "per-person logins, the audit trail and revocation. Keep it "
+                "for recovery; do not use it day to day.")
+        else:
+            logger.info(
+                "Accounts: no PISR_AUTH_ADMIN_PASSPHRASE, so there is no "
+                "break-glass door. Losing %s means recovering it with "
+                "scripts/pisr_admin.py on the box.", AUTH.accounts_file)
     elif AUTH.admin_passphrase:
         logger.info(
             "Roles: PISR_AUTH_ADMIN_PASSPHRASE is set, so the ordinary "
@@ -201,6 +248,7 @@ async def status(request: Request):
 app.include_router(auth_router, prefix="/api")
 app.include_router(config_router.router, prefix="/api")
 app.include_router(admin_router.router, prefix="/api")
+app.include_router(accounts_router.router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
 

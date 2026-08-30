@@ -6,9 +6,10 @@ of those are demonstrably carrying traffic. Then it checks about thirty things
 about all of that and tells you which ones look wrong.
 
 Extracted from [rtools2](https://github.com/wifientist/rtools2) into a
-single-purpose tool: no user accounts, no database, no Redis, no scheduler.
-Credentials come from `.env`, and one shared passphrase stands in front of the
-whole thing.
+single-purpose tool: no database, no Redis, no scheduler. Credentials come from
+`.env`. In front of the whole thing stands one of three gates — a shared
+passphrase by default, an SSO proxy, or [local accounts](#local-accounts) when
+neither of those is available.
 
 ## Quick start
 
@@ -181,7 +182,58 @@ route — is behind the cookie.
 ran a report, and it cannot be revoked for one person without changing it for
 everyone. Rotating `PISR_AUTH_PASSPHRASE` or `PISR_SESSION_SECRET` invalidates
 every outstanding session immediately, which is the whole revocation story.
-When that stops being enough, see [SSO](#sso).
+When that stops being enough, see [Local accounts](#local-accounts) or
+[SSO](#sso).
+
+### Local accounts
+
+`PISR_AUTH_MODE=accounts` gives each person their own username and password,
+kept by PISR in `/data/accounts.json`.
+
+**Why it exists, rather than SSO.** It was written after Cloudflare Access
+stopped being usable: its one-time-PIN emails were silently discarded by two of
+three customer mail domains, with no bounce and no log row. Every email-based
+alternative inherits that failure — the problem is somebody else's mail policy,
+and a brand-new sending domain is a *worse* signal to a corporate filter than
+`cloudflare.com`, not a better one. So this mode never sends mail at all.
+
+**How somebody gets in.** An admin creates the account; PISR mints a single-use
+enrolment link; the admin delivers it **out of band** — Teams, SMS, in person,
+read out over the phone. The person opens it, sets a password, and is signed
+in. Nothing has to arrive by email at the moment they are trying to log in.
+
+The first admin is made on the box, because there is no self-registration and
+no default login:
+
+```bash
+docker compose run --rm pisr python scripts/pisr_admin.py add-user alice --admin
+```
+
+That prints an enrolment link. Everything after that happens in the **People**
+portal, top right. The same script is the recovery path — `list`, `invite`,
+`set-role`, `disable`, `delete` — and it works without a session, which is the
+point of it.
+
+**What it gives you that a passphrase does not.** Real names in the audit
+trail; per-person revocation that takes effect on the next request rather than
+at the next expiry; and a role you can change without editing `.env` and
+restarting. Passwords are stored as salted scrypt hashes and are never logged,
+returned, or settable by an admin — a reset issues a link rather than choosing
+somebody's password for them.
+
+**Two things to know before turning it on.**
+
+*The login page becomes your perimeter.* Behind Access there were two gates and
+this was the inner one. On its own it is the only one, so it needs TLS in front
+(see [TLS](#tls)) and it is why the throttle backs off exponentially on both
+the address and the username instead of locking out — a hard lockout on a login
+page anyone can reach is an off switch anyone can flip.
+
+*Keep a break-glass door.* `PISR_AUTH_ADMIN_PASSPHRASE` still signs in as an
+admin in this mode, and works even when the accounts file is missing or
+corrupt. It is optional and PISR warns about it at every startup, because it
+bypasses per-person logins entirely — but the accounts live on a volume, and
+losing that volume without it means recovering on the box.
 
 ### SSO
 

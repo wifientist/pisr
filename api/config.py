@@ -81,12 +81,20 @@ class AuthConfig:
     around SSO, which would defeat the audit trail and the revocation story
     that were the reasons to adopt SSO.
 
+    `accounts` — local per-person logins, for the deployment where an external
+    identity provider is not an option. It exists because Cloudflare Access's
+    one-time-PIN mail is silently eaten by corporate filters on two of three
+    customer domains, and every email-based scheme inherits that. An admin
+    creates an account and hands over a single-use enrolment link out of band;
+    nothing has to be delivered at the moment somebody signs in. See
+    api/accounts.py.
+
     `enabled=False` is reachable only by setting PISR_AUTH_DISABLED=1 on
     purpose. There is no accidental path to an open instance.
     """
 
     enabled: bool
-    mode: str  # "passphrase" | "proxy"
+    mode: str  # "passphrase" | "proxy" | "accounts"
 
     # passphrase mode
     passphrase: str
@@ -120,8 +128,8 @@ class AuthConfig:
     # turning on SSO does not silently promote the whole directory.
     admin_emails: frozenset
 
-    # Where the section visibility policy is stored. The one file PISR writes;
-    # see visibility.py for why that is not a contradiction of "stores
+    # Where the section visibility policy is stored. One of the two files PISR
+    # writes; see visibility.py for why that is not a contradiction of "stores
     # nothing". Empty means the admin portal is read-only.
     visibility_file: str
 
@@ -135,6 +143,15 @@ class AuthConfig:
     # nothing about whose it is.
     org_name: str
     org_baseline_file: str
+    # accounts mode. Where the local account file lives, how long an enrolment
+    # link stays good for, and the floor on a password.
+    #
+    # The file sits on the same volume as the visibility policy and holds
+    # usernames, roles and scrypt hashes — operator logins, never tenant data.
+    # See api/accounts.py, which makes that argument properly.
+    accounts_file: str
+    invite_days: int
+    min_password_length: int
 
     # Both modes. In proxy mode this list is the whole of the security — only
     # these peers may assert an identity. In passphrase mode it is narrower:
@@ -289,6 +306,18 @@ def _org_baseline_file() -> str:
     the visibility policy. Never committed — see config.org_name.
     """
     return _env("PISR_ORG_BASELINE_FILE") or "/data/org-baseline.json"
+def _accounts_file() -> str:
+    """
+    Where local accounts live, or "" for nowhere.
+
+    Defaulted onto the same volume as the visibility policy, for the same
+    reason: an operator should not have to know this exists to run PISR. Unlike
+    the policy, though, a path inside the image is NOT harmless here — the
+    accounts would vanish at the next deploy and nobody could sign in. The
+    compose file mounts a volume at /data so it does not come to that, and
+    main.py warns at startup if it finds this unwritable.
+    """
+    return _env("PISR_ACCOUNTS_FILE") or "/data/accounts.json"
 
 
 def _visibility_file() -> str:
@@ -324,12 +353,15 @@ def _load_auth() -> AuthConfig:
             # would hide sections from the only person who could unhide them.
             admin_emails=frozenset(), visibility_file=_visibility_file(),
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
+            accounts_file=_accounts_file(), invite_days=0,
+            min_password_length=0,
         )
 
     mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
-    if mode not in ("passphrase", "proxy"):
+    if mode not in ("passphrase", "proxy", "accounts"):
         raise RuntimeError(
-            f"PISR_AUTH_MODE must be 'passphrase' or 'proxy' — got {mode!r}.")
+            "PISR_AUTH_MODE must be 'passphrase', 'proxy' or 'accounts' — "
+            f"got {mode!r}.")
 
     # Resolved in both modes. Passphrase mode never acts on it, but reports
     # what proxy mode WOULD make of the request — see proxy_preview() — which
@@ -371,6 +403,71 @@ def _load_auth() -> AuthConfig:
             access_team=access_team, access_aud=access_aud,
             admin_emails=admin_emails, visibility_file=_visibility_file(),
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
+            accounts_file=_accounts_file(), invite_days=0,
+            min_password_length=0,
+        )
+
+    # Both remaining modes mint cookies, so both need a signing secret. No
+    # secret set means sessions do not survive a restart — a safe default whose
+    # cost is signing in again after `compose up`, and whose only alternative
+    # default would be a hardcoded key.
+    session_secret = _env("PISR_SESSION_SECRET") or _secrets.token_urlsafe(32)
+
+    # The break-glass admin, and the ordinary dev shim, are the same env var
+    # read in two modes — see auth.py, which explains why accounts mode keeps a
+    # door that proxy mode deliberately refuses.
+    admin_passphrase = _env("PISR_AUTH_ADMIN_PASSPHRASE")
+    if admin_passphrase and len(admin_passphrase) < MIN_PASSPHRASE_LENGTH:
+        raise RuntimeError(
+            f"PISR_AUTH_ADMIN_PASSPHRASE must be at least "
+            f"{MIN_PASSPHRASE_LENGTH} characters.")
+
+    if mode == "accounts":
+        invite_days = _int("PISR_INVITE_DAYS", 7)
+        if invite_days < 1:
+            raise RuntimeError(
+                f"PISR_INVITE_DAYS must be at least 1 — got {invite_days}. An "
+                "enrolment link nobody can redeem is not a security setting.")
+
+        # Higher than MIN_PASSPHRASE_LENGTH on purpose. That floor is low
+        # because a shared passphrase is protected by a lockout and is typed by
+        # an operator who chose it; this one is chosen by whoever is enrolling,
+        # on a login page that is now directly internet-facing.
+        min_password = _int("PISR_ACCOUNTS_MIN_PASSWORD", 12)
+        if min_password < MIN_PASSPHRASE_LENGTH:
+            raise RuntimeError(
+                f"PISR_ACCOUNTS_MIN_PASSWORD must be at least "
+                f"{MIN_PASSPHRASE_LENGTH} — got {min_password}.")
+
+        accounts_file = _accounts_file()
+        if not accounts_file:
+            raise RuntimeError(
+                "PISR_AUTH_MODE=accounts needs PISR_ACCOUNTS_FILE to point "
+                "somewhere writable — there is nowhere to keep the accounts "
+                "otherwise, and nobody could sign in.")
+
+        return AuthConfig(
+            enabled=True,
+            mode="accounts",
+            # No shared passphrase in this mode: a password per person is the
+            # whole point, and a shared one alongside it would be the way
+            # around the audit trail and the revocation this mode exists for.
+            # The ADMIN passphrase survives as break-glass — see auth.py.
+            passphrase="",
+            session_secret=session_secret,
+            session_seconds=_int("PISR_SESSION_HOURS", 12) * 3600,
+            cookie_secure=_flag("PISR_COOKIE_SECURE", False),
+            max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
+            lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
+            admin_passphrase=admin_passphrase,
+            proxy_header=header, proxy_logout_url="",
+            trusted_proxies=_trusted_proxies(required=False),
+            client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+            access_team=access_team, access_aud=access_aud,
+            admin_emails=admin_emails, visibility_file=_visibility_file(),
+            accounts_file=accounts_file, invite_days=invite_days,
+            min_password_length=min_password,
+            org_name=_org_name(), org_baseline_file=_org_baseline_file(),
         )
 
     passphrase = _env("PISR_AUTH_PASSPHRASE")
@@ -386,29 +483,19 @@ def _load_auth() -> AuthConfig:
             "characters. It is the only thing between the network and the "
             "report.")
 
-    # The optional admin passphrase. Held to the same floor — it is a second
-    # door into the same building, and the one that also opens the portal.
-    admin_passphrase = _env("PISR_AUTH_ADMIN_PASSPHRASE")
-    if admin_passphrase:
-        if len(admin_passphrase) < MIN_PASSPHRASE_LENGTH:
-            raise RuntimeError(
-                f"PISR_AUTH_ADMIN_PASSPHRASE must be at least "
-                f"{MIN_PASSPHRASE_LENGTH} characters, like PISR_AUTH_PASSPHRASE.")
-        if hmac.compare_digest(admin_passphrase.encode(), passphrase.encode()):
-            # Not a harmless duplicate. auth.py tells the two roles apart by
-            # which passphrase's derived key signed the cookie, so identical
-            # passphrases derive one key, and which role you get would depend
-            # on the order the keys happen to be tried. Refuse rather than
-            # resolve it arbitrarily.
-            raise RuntimeError(
-                "PISR_AUTH_ADMIN_PASSPHRASE is the same as PISR_AUTH_PASSPHRASE. "
-                "The two roles are distinguished by which one you signed in "
-                "with, so they have to differ.")
-
-    # No secret set means sessions do not survive a restart. That is a safe
-    # default — the cost is re-entering the passphrase after `compose up`, and
-    # the alternative default (a hardcoded key) is not a real alternative.
-    session_secret = _env("PISR_SESSION_SECRET") or _secrets.token_urlsafe(32)
+    # The optional admin passphrase is read and length-checked above, since
+    # accounts mode uses the same variable for break-glass. This check is
+    # passphrase mode's alone: there, the two roles ARE the two passphrases.
+    if admin_passphrase and hmac.compare_digest(
+            admin_passphrase.encode(), passphrase.encode()):
+        # Not a harmless duplicate. auth.py tells the two roles apart by which
+        # passphrase's derived key signed the cookie, so identical passphrases
+        # derive one key, and which role you get would depend on the order the
+        # keys happen to be tried. Refuse rather than resolve it arbitrarily.
+        raise RuntimeError(
+            "PISR_AUTH_ADMIN_PASSPHRASE is the same as PISR_AUTH_PASSPHRASE. "
+            "The two roles are distinguished by which one you signed in "
+            "with, so they have to differ.")
 
     return AuthConfig(
         enabled=True,
@@ -426,6 +513,8 @@ def _load_auth() -> AuthConfig:
         access_team=access_team, access_aud=access_aud,
         admin_emails=admin_emails, visibility_file=_visibility_file(),
         org_name=_org_name(), org_baseline_file=_org_baseline_file(),
+        accounts_file=_accounts_file(), invite_days=0,
+        min_password_length=0,
     )
 
 
@@ -434,8 +523,11 @@ AUTH: AuthConfig = _load_auth()
 
 # Whether PISR_SESSION_SECRET was supplied rather than generated. main.py logs
 # this once at startup so "everyone got logged out again" has a visible cause.
+# True in both cookie-minting modes: accounts mode has the same property and a
+# worse consequence, since being logged out means typing a password rather than
+# a passphrase everyone already shares.
 SESSION_SECRET_IS_EPHEMERAL: bool = (
-    AUTH.mode == "passphrase" and not _env("PISR_SESSION_SECRET"))
+    AUTH.mode in ("passphrase", "accounts") and not _env("PISR_SESSION_SECRET"))
 
 
 def public_config() -> dict:
