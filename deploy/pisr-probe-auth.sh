@@ -304,6 +304,7 @@ else
     c="$(code "$BASE/api/enroll/$t")"
     case "$c" in
       404|410|422|429|405) ok "junk enrolment token -> $c" ;;
+      401) ok "junk enrolment token -> 401 (empty/degenerate token, gated — not a way in)" ;;
       307) ok "junk enrolment token -> 307 (trailing-slash redirect, not a way in)" ;;
       *) bad "junk enrolment token -> $c" ;;
     esac

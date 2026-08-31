@@ -60,7 +60,16 @@ async def get_msp_ecs(request: Request, controller_id: int):
     if isinstance(rows, list):
         return allowed.filter_ecs(rows)
     if isinstance(rows, dict) and isinstance(rows.get("data"), list):
-        return {**rows, "data": allowed.filter_ecs(rows["data"])}
+        filtered = allowed.filter_ecs(rows["data"])
+        # Recompute the count and reset pagination. Spreading `rows` unchanged
+        # left `totalCount` describing the WHOLE customer list — so a user
+        # scoped to one EC still learned the MSP has eight, which is the kind
+        # of cross-customer fact this filter exists to withhold. `page`/`size`
+        # describe an unfiltered page that no longer exists, so they go too.
+        out = {**rows, "data": filtered, "totalCount": len(filtered)}
+        for stale in ("page", "size", "totalPages", "hasMore"):
+            out.pop(stale, None)
+        return out
 
     logger.error(
         "scope: the MSP-EC list came back as %s, which this cannot filter, so "

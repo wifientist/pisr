@@ -160,13 +160,23 @@ _PUBLIC_PATHS = {"/api/login", "/api/logout", "/api/auth/status", "/api/enroll"}
 # session yet — that is what they are here to obtain. The token in the URL is
 # the credential.
 #
-# A PREFIX, because the token is a path segment. Kept deliberately short and
-# specific: this is the only place in the file where a prefix opens a hole, and
-# a wider one ("/api/enrol", say, or a trailing-slash-less "/api/enroll" that
-# also matched "/api/enrollments") would open more than it means to. The routes
-# behind it are the only unauthenticated write path in PISR and they carry
-# their own throttle.
-_PUBLIC_PREFIXES = ("/api/enroll/",)
+# NOT a bare startswith. `path.startswith("/api/enroll/")` also matches
+# `/api/enroll/../admin/accounts`, which opened the gate for that request —
+# Starlette then 404s it because it does not normalise `..`, so nothing leaks
+# today, but the gate should not be relying on the router's routing table to
+# stay shut. `_is_public_enroll` instead requires exactly ONE more path
+# segment — the token — with no slash and no dot-segment, which is precisely
+# the shape of `GET /api/enroll/{token}` and cannot name a sibling route.
+# Tokens are secrets.token_urlsafe (`[A-Za-z0-9_-]`), so a real one never
+# contains a slash to be caught out by this.
+_ENROLL_PREFIX = "/api/enroll/"
+
+
+def _is_public_enroll(path: str) -> bool:
+    if not path.startswith(_ENROLL_PREFIX):
+        return False
+    rest = path[len(_ENROLL_PREFIX):]
+    return bool(rest) and "/" not in rest and rest not in ("..", ".")
 
 
 # ── Session token ────────────────────────────────────────────────────
@@ -821,7 +831,7 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         gated = path.startswith(_GATED_PREFIXES) or path in _GATED_EXACT
-        if not gated or path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+        if not gated or path in _PUBLIC_PATHS or _is_public_enroll(path):
             return await call_next(request)
 
         resolved = identity_and_role(request)

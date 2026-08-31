@@ -583,6 +583,41 @@ def test_an_unknown_user_costs_the_same_as_a_wrong_password():
         f"{real * 1000:.1f}ms for a real verification — it is not burning a hash")
 
 
+
+def test_public_enroll_matches_only_a_single_token_segment():
+    """
+    The enrolment routes are the only unauthenticated surface, so the gate's
+    decision about what counts as "an enrolment request" must be tight. A bare
+    `path.startswith("/api/enroll/")` also matched `/api/enroll/../admin/
+    accounts`, which opened the gate for that request — Starlette 404s it today
+    because it does not normalise `..`, but the gate should not lean on the
+    routing table to stay shut.
+
+    Public iff exactly one more segment follows — the token — with no slash and
+    no dot-segment. Tokens are secrets.token_urlsafe, so a real one is always a
+    single [A-Za-z0-9_-] segment.
+    """
+    ok = [
+        "/api/enroll/abc123",
+        "/api/enroll/" + "x" * 200,
+        "/api/enroll/LoKXHiO9-_KyEXCPhB",
+    ]
+    bad = [
+        "/api/enroll/",                      # no token
+        "/api/enroll/..",                    # dot-segment
+        "/api/enroll/.",
+        "/api/enroll/../admin/accounts",     # the attack
+        "/api/enroll/a/b",                   # two segments
+        "/api/enroll/token/",                # trailing slash → empty 2nd segment
+        "/api/enrollments/x",                # different route entirely
+        "/api/enroll",                       # the POST path, handled elsewhere
+        "/api/admin/accounts",
+    ]
+    for path in ok:
+        assert auth._is_public_enroll(path), f"should be public: {path}"
+    for path in bad:
+        assert not auth._is_public_enroll(path), f"must NOT be public: {path}"
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
