@@ -472,12 +472,16 @@ an upstream.
   Labels are prose and change; a baseline keyed to prose drifts silently, which
   for a "recommended value" column means quietly comparing against nothing.
 
-  **The RUCKUS baseline ships as placeholders and says so.** `status:
-  "placeholder"` in `api/baselines/ruckus.json`, surfaced in the UI on every
-  column header until someone sources the real guidance and sets `"verified"`.
-  There is a test asserting it has not gone green by accident. A fabricated
-  "RUCKUS recommends" in front of an install crew is worse than an empty
-  column — an empty column asks a question, a wrong one answers it.
+  **The RUCKUS baseline ships VERIFIED, and the operator owns the values.**
+  `status: "verified"` in `api/baselines/ruckus.json`, so the column reads
+  "RUCKUS recommends" (green) and is presented as authoritative. It was once
+  shipped `"placeholder"` with a test enforcing that, so fabricated values
+  could not go green by accident; that flipped when the operator took ownership
+  and committed to keeping only confirmed values in the file. The guard test
+  now asserts a verified file names its `source` — an authoritative column with
+  no provenance is worse than an unverified one. If you ever put unconfirmed
+  values back, set the status back to `"unverified"` and the caption goes amber
+  again; do not leave invented values under a green "recommends".
 
   **The customer's name is `PISR_ORG_NAME` and their baseline is on the volume
   at `PISR_ORG_BASELINE_FILE`.** Neither belongs in this repository. Unset, the

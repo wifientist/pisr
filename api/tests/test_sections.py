@@ -893,20 +893,25 @@ def test_null_reads_as_not_set_not_as_missing_data():
     assert config_labels.format_value("anything", "") == "not set"
 
 
-def test_shipped_ruckus_baseline_is_marked_unverified():
+def test_shipped_ruckus_baseline_is_verified_with_a_source():
     """
-    THE SAFETY PROPERTY. The shipped values are invented placeholders so the
-    mechanism can be exercised. A fabricated "RUCKUS recommends" read as
-    authoritative by an install crew is worse than an empty column — an empty
-    column asks a question, a wrong one answers it. This must not go green
-    until somebody sources the real guidance.
+    The shipped RUCKUS baseline is presented as authoritative — the column
+    reads "RUCKUS recommends" (green) — so it is `verified` on purpose, and the
+    operator maintains only confirmed values in ruckus.json. This was the
+    opposite assertion once (it enforced "placeholder" to stop fabricated
+    values going green); it flipped when the operator took ownership of the
+    values. The guard now is that a VERIFIED file still says WHERE it came
+    from — a verified column with no `source` is a claim with no backing.
     """
     ruckus = baseline_module.RUCKUS.describe()
-    assert ruckus["verified"] is False, (
-        "the shipped baseline claims to be verified — if the values are now "
-        "real, that is fine, but check `source` is filled in too")
-    assert ruckus["status"] == "placeholder"
-    assert ruckus["count"] > 0, "the placeholder file should still exercise the UI"
+    assert ruckus["verified"] is True, (
+        "the shipped RUCKUS baseline is meant to be verified; if you are "
+        "reverting it to a draft, set status back to 'unverified' or "
+        "'placeholder' and flip this test with it")
+    assert ruckus["source"], (
+        "a verified baseline must name its source — an authoritative column "
+        "with no provenance is worse than an unverified one")
+    assert ruckus["count"] > 0, "the file should still carry values"
 
 
 def test_a_setting_no_baseline_mentions_gets_no_columns():

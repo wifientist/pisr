@@ -1815,6 +1815,24 @@ function ConfigGroup({ group, baselines, depth = 0 }: {
   );
 }
 
+/**
+ * The little caption under a recommendation column header, one truth claim in
+ * three states:
+ *   verified  -> "recommends", green. The values are confirmed, presented as
+ *                authoritative. RUCKUS gets this once ruckus.json is verified;
+ *                the {company} column gets it when the admin marks it so.
+ *   empty     -> "not set", grey. The column exists but nobody has filled it.
+ *   otherwise -> "unverified", amber. Values are present but a draft — a
+ *                reader is warned not to treat them as final.
+ */
+function baselineCaption(base: any, isEmpty: boolean) {
+  if (base?.verified)
+    return <span className="ml-1 text-[10px] font-normal text-green-700">recommends</span>;
+  if (isEmpty)
+    return <span className="ml-1 text-[10px] font-normal text-gray-400">not set</span>;
+  return <span className="ml-1 text-[10px] font-normal text-amber-700">unverified</span>;
+}
+
 function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
   rows: any[]; baselines: any; presentCount?: number; totalCount?: number;
   groups?: any[] | null;
@@ -1899,34 +1917,13 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
               {hasOrg && (
                 <th className="py-1.5 pr-3 font-medium text-gray-600 whitespace-nowrap">
                   {baselines?.org?.name || "Org"}
-                  {/* Empty baseline: say so on the header, so the column reads
-                      as "your recommendations can go here" rather than as a
-                      column of settings with no recommendation. */}
-                  {orgEmpty ? (
-                    <span className="ml-1 text-[10px] font-normal text-gray-400">
-                      not set
-                    </span>
-                  ) : !baselines?.org?.verified && (
-                    /* An unverified baseline is captioned every time it is
-                       shown. A fabricated "recommended" value read as
-                       authoritative by an install crew is worse than an empty
-                       column: an empty column asks a question, a wrong one
-                       answers it. */
-                    <span className="ml-1 text-[10px] font-normal text-amber-700">
-                      unverified
-                    </span>
-                  )}
+                  {baselineCaption(baselines?.org, orgEmpty)}
                 </th>
               )}
               {hasRuckus && (
                 <th className="py-1.5 pr-3 font-medium text-gray-600 whitespace-nowrap">
                   RUCKUS
-                  {!baselines?.ruckus?.verified && (
-                    <span className="ml-1 text-[10px] font-normal text-amber-700">
-                      {baselines?.ruckus?.status === "placeholder"
-                        ? "placeholder" : "unverified"}
-                    </span>
-                  )}
+                  {baselineCaption(baselines?.ruckus, false)}
                 </th>
               )}
             </tr>

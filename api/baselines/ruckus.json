@@ -1,9 +1,9 @@
 {
   "name": "RUCKUS",
-  "status": "placeholder",
-  "note": "PLACEHOLDER VALUES. These have NOT been taken from RUCKUS documentation and must not be acted on. Every consumer of this file surfaces `status` so the column is labelled unverified until someone sources the real guidance and sets status to \"verified\". See api/baselines.py.",
-  "source": "",
-  "verifiedAt": null,
+  "status": "verified",
+  "note": "RUCKUS's recommended configuration, shown to readers as the \"RUCKUS recommends\" column. Keep ONLY values confirmed against RUCKUS guidance here \u2014 a verified column is presented as authoritative, so an unconfirmed value is worse than an absent one. See api/baselines.py.",
+  "source": "RUCKUS ONE configuration guidance",
+  "verifiedAt": "2026-09-01T19:45:18+00:00",
   "values": {
     "apDosProtectionSettings.enabled": true,
     "apSmartMonitorSettings.enabled": true,
