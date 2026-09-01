@@ -313,6 +313,135 @@ def test_redact_ignores_unknown_ids():
     assert out["visibility"]["redacted"] is True
 
 
+# ── element-level: individual checks and columns ─────────────────────
+
+def test_column_ids_are_unique_and_name_a_real_path():
+    """
+    A column names a list path and the per-row field it blanks. Its id must be
+    unique across every element (section, check, column) or a hide of one hides
+    two, and its path must be a genuine dotted list-owning path so `_blank_column`
+    has something to walk. The field is only checkable against a live report, so
+    the round-trip test below carries that half.
+    """
+    ids = [col.id for s in catalogue.SECTIONS for col in s.columns]
+    assert len(ids) == len(set(ids)), f"duplicate column id(s): {ids}"
+    assert set(ids) == set(catalogue.ALL_COLUMN_IDS), "COLUMNS_BY_ID index drifted"
+    for s in catalogue.SECTIONS:
+        for col in s.columns:
+            assert catalogue.is_known_id(col.id), f"column id {col.id} not recognised"
+            assert col.path, f"column {col.id} names no path"
+            assert col.field, f"column {col.id} names no field"
+
+
+def test_hiding_a_column_blanks_only_its_field():
+    """
+    The column primitive: empty `vlans` in every SSID row, leave the rest of the
+    row — and every other path — untouched. Type-preserving, so a renderer that
+    indexes `vlans` finds a list of the right shape rather than a hole.
+    """
+    report = _sample_report()
+    report["wireless"] = {"rows": [
+        {"ssid": "A", "vlans": ["10"], "security": "wpa2"},
+        {"ssid": "B", "vlans": ["20", "30"], "security": "open"},
+    ]}
+    out = redact.redact(report, ["wireless.ssids.col.vlan"])
+    rows = out["wireless"]["rows"]
+    assert [r["vlans"] for r in rows] == [[], []], "VLAN column not blanked in every row"
+    assert isinstance(rows[0]["vlans"], list), "blanked to the wrong type"
+    assert [r["ssid"] for r in rows] == ["A", "B"], "a field the column does not own was touched"
+    assert [r["security"] for r in rows] == ["wpa2", "open"], "sibling field touched"
+
+
+def test_hiding_a_column_does_not_hide_the_table():
+    report = _sample_report()
+    report["wireless"] = {"rows": [{"ssid": "A", "vlans": ["10"]}]}
+    out = redact.redact(report, ["wireless.ssids.col.vlan"])
+    assert out["wireless"]["rows"], "hiding a column emptied the whole table"
+
+
+def test_hiding_a_check_individually_drops_its_finding_and_retallies():
+    """
+    A check hidden on its own — by its finding id, not its section — drops
+    exactly like a section-hidden one, through the same filter and tally
+    recompute. This is the per-check granularity the portal tree exposes.
+    """
+    out = redact.redact(_sample_report(), ["poe-budget"])
+    ids = {f["id"] for f in out["verification"]["findings"]}
+    assert "poe-budget" not in ids, "individually-hidden check survived"
+    assert out["poe"]["switches"], (
+        "hiding the check emptied the section's data — a check id is not a path")
+    assert out["verification"]["counts"]["warning"] == 0, "counts not recomputed"
+    assert out["verification"]["score"]["ran"] == 2, "score not recomputed"
+
+
+def test_a_check_id_is_a_known_element():
+    for s in catalogue.SECTIONS:
+        for check in s.checks:
+            assert catalogue.is_known_id(check), f"check id {check} not recognised"
+
+
+def test_catalogue_emits_checks_and_columns_for_the_tree():
+    """
+    The portal tree renders per-check and per-column toggles straight from the
+    catalogue, so each section entry must carry its checks and columns as
+    {id, label} — no second endpoint, no second source of ids to drift.
+    """
+    by_id = {s["id"]: s for s in catalogue.catalogue()}
+    ssids = by_id["wireless.ssids"]
+    check_ids = {c["id"] for c in ssids["checks"]}
+    assert "ssids-activated" in check_ids, "catalogue lost a check for the tree"
+    assert all(c.get("label") for c in ssids["checks"]), "a check has no label"
+    col_ids = {c["id"] for c in ssids["columns"]}
+    assert "wireless.ssids.col.vlan" in col_ids, "catalogue lost the VLAN column"
+    assert all(c.get("label") for c in ssids["columns"]), "a column has no label"
+
+
+def test_groups_name_only_real_elements():
+    """
+    A group is a convenience over the flat hidden list — a single switch for a
+    concept that spans sections. Every id it names must be a real section,
+    check, or column, or the switch gestures at nothing and quietly hides less
+    than the admin believes.
+    """
+    assert catalogue.GROUPS, "expected at least the VLAN group"
+    for group in catalogue.GROUPS:
+        assert group.ids, f"group {group.id} names no elements"
+        for eid in group.ids:
+            assert catalogue.is_known_id(eid), (
+                f"group {group.id} names unknown element {eid}")
+
+
+def test_vlan_group_covers_every_vlan_element():
+    """
+    The whole point of the VLAN group is that an admin does not have to find the
+    VLAN table, the SSID VLAN column and the raw config category separately. If
+    a new VLAN element is added and not put in the group, the single switch
+    silently stops meaning "all VLAN information".
+    """
+    vlan = {g.id: g for g in catalogue.GROUPS}["vlan"]
+    assert "wireless.ssids.col.vlan" in vlan.ids, "VLAN column missing from the group"
+    assert "wired.vlans" in vlan.ids, "the VLAN table section missing from the group"
+
+
+def test_hiding_a_group_hides_all_its_ids():
+    """The group is applied through the same hidden list, so hiding its ids
+    withholds the data exactly as hiding them one by one would."""
+    report = _sample_report()
+    report["wireless"] = {"rows": [{"ssid": "A", "vlans": ["10"]}]}
+    report["vlans"] = {"rows": [{"vlan": 10}]}
+    vlan = {g.id: g for g in catalogue.GROUPS}["vlan"]
+    out = redact.redact(report, list(vlan.ids))
+    assert out["wireless"]["rows"][0]["vlans"] == [], "VLAN column not blanked"
+    assert out["vlans"] == {} or out["vlans"] == {"rows": []}, "VLAN table not emptied"
+
+
+def test_groups_emit_json_safe_for_the_portal():
+    payload = catalogue.groups()
+    assert payload and all(
+        set(g) == {"id", "label", "hint", "ids"} and isinstance(g["ids"], list)
+        for g in payload), "group payload shape drifted"
+
+
 def test_template_helpers_fail_open():
     helpers = redact.template_helpers(["poe.budget"])
     assert helpers["visible"]("poe.budget") is False

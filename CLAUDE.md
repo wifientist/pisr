@@ -86,11 +86,28 @@ upstream copy. It is not.
 
 Read them in this order; each explains the next.
 
-- `api/sections.py` — the catalogue of hideable report sections. Each names the
-  report paths it OWNS and the check ids its findings come from.
-- `api/redact.py` — empties those paths and drops those findings. **The single
-  enforcement point for section visibility**, applied at `build_report`'s
-  boundary so the JSON route and the PDF route cannot disagree.
+- `api/sections.py` — the catalogue of hideable report elements. Each section
+  names the report paths it OWNS, the check ids its findings come from, and
+  (optionally) `columns` — a `Column(id, label, path, field)` for a single
+  table column an admin may hide on its own. Hiding is element-level: a whole
+  section, one individual check (by its finding id), or one column. `is_known_id`
+  answers for all three; `catalogue()` emits each section's checks and columns
+  as `{id, label}` so the portal tree renders the finer toggles with no second
+  endpoint. `GROUPS` bundles element ids that span sections into one admin
+  switch (VLANs are a table, a column and a config category in three tabs); a
+  group holds NO stored state and is not a policy id — it is a convenience that
+  writes the same flat `hidden` list, so it reads "on" exactly when all its ids
+  are hidden and can never disagree with the per-element toggles. The Checks tab
+  in the portal is the same idea for checks: a flat cross-cutting view of the
+  same ids the tree nests.
+- `api/redact.py` — empties those paths, drops those findings, and blanks those
+  columns. **The single enforcement point for element visibility**, applied at
+  `build_report`'s boundary so the JSON route and the PDF route cannot disagree.
+  Three primitives: `_blank_path` (a section's dotted paths), `_filter_findings`
+  (checks, fed the union of section-owned and individually-hidden check ids), and
+  `_blank_column` (one field in every row of a list — the SSID table's VLAN is
+  the worked example). Section-hiding still fails OPEN; the column and check
+  levels ride the same fail-open resolution.
 - `api/scope.py` — which MSP-ECs and venues a role may reach. A different kind
   of control with different rules; see the trap below.
 - `api/visibility.py` — the file on disk, holding both halves.
@@ -745,6 +762,18 @@ an upstream.
   `api/reports/pisr.py` untouched; it is worth keeping anyway, because the
   guards are a rendering concern and the context builder has no other reason
   to know a policy exists.
+
+  **A hideable COLUMN is guarded on both renderers, and the PDF does it
+  server-side.** `redact._blank_column` empties the field in every row, so a
+  missed guard leaks an empty column, not values — same guarantee as the
+  section guards. On screen (`PISR.tsx`) the column reads `useVisible('<column
+  id>')` and drops both the `<th>` and the `<td>`. The PDF cannot: `pisr.py`
+  builds `wireless_table` as POSITIONAL column/row lists, so `_wireless_table`
+  takes `show_vlan` (read off the redacted report's `visibility.hidden` stamp)
+  and omits the VLAN column from both the header list and every row. The column
+  id `wireless.ssids.col.vlan` therefore never appears as a `visible(...)` guard
+  in the template — do not add one and expect `test_template_guards_are_known`
+  to accept it; that test only knows section ids.
 
 - **`break-words` on the `Finding` body** — a finding can carry an unbreakable
   token in its title *and* in its summary; an R1 alarm names its device in

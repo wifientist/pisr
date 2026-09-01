@@ -1372,6 +1372,10 @@ function Overview({ report, findings, allFindings, showPasses, onTogglePasses }:
 function SsidTable({ report, rows }: { report: any; rows: any[] }) {
   const [query, setQuery] = useState("");
   const [darkOnly, setDarkOnly] = useState(false);
+  // The VLAN column can be hidden on its own — the data is already blanked by
+  // redact, this drops the column so it reads as "not shown" rather than a
+  // column of "untagged". Hook above the early return, like every other.
+  const showVlan = useVisible("wireless.ssids.col.vlan");
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -1430,12 +1434,17 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 sticky top-0 z-10 shadow-[inset_0_-1px_0_#e5e7eb]">
             <tr>
-              {["SSID", "Type", "Security", "VLAN", "Radios", "AP groups",
-                "On air", "Clients", "Flags"].map((header, i) => (
-                <th key={header}
+              {[
+                { h: "SSID" }, { h: "Type" }, { h: "Security" },
+                ...(showVlan ? [{ h: "VLAN" }] : []),
+                { h: "Radios" }, { h: "AP groups" },
+                { h: "On air", right: true }, { h: "Clients", right: true },
+                { h: "Flags" },
+              ].map(({ h, right }) => (
+                <th key={h}
                     className={`text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap ${
-                      i >= 6 && i <= 7 ? "text-right" : ""}`}>
-                  {header}
+                      right ? "text-right" : ""}`}>
+                  {h}
                 </th>
               ))}
             </tr>
@@ -1476,10 +1485,12 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
                       </Pill>
                     : <span className="text-gray-300">—</span>}
                 </td>
+                {showVlan && (
                 <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
                   {row.vlans?.length ? row.vlans.join(", ")
                                      : <span className="text-gray-400">untagged</span>}
                 </td>
+                )}
                 <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
                   {row.radios?.length ? row.radios.join(", ")
                                       : <span className="text-gray-300">—</span>}

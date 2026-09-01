@@ -97,6 +97,7 @@ async def get_visibility():
     """
     return {
         "sections": section_catalogue.catalogue(),
+        "groups": section_catalogue.groups(),
         "tabs": [{"id": tab, "label": label} for tab, label in section_catalogue.TABS],
         "roles": list(visibility.MANAGED_ROLES),
         "policy": visibility.STORE.policy(),

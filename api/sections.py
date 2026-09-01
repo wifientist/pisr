@@ -54,6 +54,51 @@ from typing import Dict, List, Tuple
 
 
 @dataclass(frozen=True)
+class Column:
+    """
+    A single COLUMN inside a table, hideable on its own.
+
+    The finest grain of the visibility model: hide a column WITHIN a table the
+    reader otherwise sees — the VLAN column of the SSID table, say — rather than
+    the whole table. `path` names the list in the report payload and `field` the
+    per-row key to blank; `redact._blank_column` empties that field in every row
+    while leaving the rest of the table intact.
+
+    `id` is `<section>.col.<name>`, so it never collides with a section id or a
+    check finding id, and the one `hidden` list can hold all three kinds.
+    """
+
+    id: str
+    label: str
+    path: str      # dotted path to the list of rows
+    field: str     # the per-row key to blank when this column is hidden
+
+
+@dataclass(frozen=True)
+class Group:
+    """
+    A named bundle of element ids an admin thinks of as ONE switch.
+
+    Some concepts are not one section: VLANs show up as a whole table on the
+    Wired tab, as a column of the SSID table, and as a raw config category —
+    three ids in three tabs. An admin who wants "no VLAN information for users"
+    should not have to hunt down all three. A group's single toggle hides or
+    shows every id it names.
+
+    A group holds NO state of its own and is NOT an id the policy stores — it is
+    a convenience over the same flat `hidden` list, so the per-element toggles
+    and the group toggle are always consistent (the group is "on" exactly when
+    all its ids are hidden). Every id it names is a real section, check, or
+    column id; a test enforces that so a group can never gesture at nothing.
+    """
+
+    id: str
+    label: str
+    hint: str = ""
+    ids: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Section:
     """
     One hideable piece of the report.
@@ -76,6 +121,9 @@ class Section:
     hint: str = ""
     paths: Tuple[str, ...] = ()
     checks: Tuple[str, ...] = ()
+    # Columns inside this section's table(s) that can be hidden on their own,
+    # without hiding the table. Empty for most sections.
+    columns: Tuple["Column", ...] = ()
 
 
 # Tab order matches the tab bar in PISR.tsx. The admin portal groups by this,
@@ -351,6 +399,12 @@ SECTIONS: Tuple[Section, ...] = (
         paths=("wireless.rows",),
         checks=("ssids-activated", "ssids-carrying", "ssids-broadcasting",
                 "ssid-scope", "ssid-vlan-carried"),
+        # The VLAN each SSID carries, hideable on its own — VLANs are a subset
+        # of this table, and an admin may want the SSID list without exposing
+        # the VLAN layout. Hiding it blanks `vlans` in every row; the VLAN
+        # table on its own tab is a separate section to hide.
+        columns=(Column("wireless.ssids.col.vlan", "VLAN",
+                        "wireless.rows", "vlans"),),
     ),
     Section(
         id="wireless.clients-by-band",
@@ -598,6 +652,69 @@ SECTIONS: Tuple[Section, ...] = (
 BY_ID: Dict[str, Section] = {section.id: section for section in SECTIONS}
 IDS: Tuple[str, ...] = tuple(section.id for section in SECTIONS)
 
+# Every finding id any section owns, and every column id any section declares.
+# The visibility policy accepts an id if it is a section, a check, or a column —
+# one flat `hidden` list, three kinds of thing, no collisions (sections are
+# `<tab>.<thing>`, columns are `<section>.col.<name>`, checks are kebab finding
+# ids with no dot).
+ALL_CHECK_IDS: frozenset = frozenset(c for s in SECTIONS for c in s.checks)
+COLUMNS_BY_ID: Dict[str, Column] = {
+    col.id: col for s in SECTIONS for col in s.columns}
+ALL_COLUMN_IDS: frozenset = frozenset(COLUMNS_BY_ID)
+
+# A small acronym set so a kebab check id reads as a label — "aps-online" ->
+# "APs online", not "Aps online". Anything not here is title-cased.
+_ACRONYMS = {"ap": "AP", "aps": "APs", "poe": "PoE", "dpsk": "DPSK",
+             "ssid": "SSID", "ssids": "SSIDs", "vlan": "VLAN", "vlans": "VLANs",
+             "dhcp": "DHCP", "ip": "IP", "radius": "RADIUS", "id": "ID",
+             "24ghz": "2.4 GHz", "rf": "RF"}
+
+
+def _check_label(check_id: str) -> str:
+    words = check_id.split("-")
+    return " ".join(_ACRONYMS.get(w, w.capitalize()) for w in words)
+
+
+def is_known_id(vid: str) -> bool:
+    """A section, check, or column id the policy may legitimately carry."""
+    return vid in BY_ID or vid in ALL_CHECK_IDS or vid in ALL_COLUMN_IDS
+
+
+# ── Cross-cutting groups ─────────────────────────────────────────────
+#
+# See the Group docstring. Currently one — VLANs — because that is the concept
+# that genuinely spans tabs. Add another only when an admin would reasonably
+# expect a single switch for it; a group per section would just be the tree
+# again with more clicks.
+GROUPS: Tuple[Group, ...] = (
+    Group(
+        id="vlan",
+        label="VLAN information",
+        hint="Every place a VLAN id appears: the VLAN table, the SSID table's "
+             "VLAN column, and the raw AP management-VLAN config category.",
+        ids=("wired.vlans", "wireless.ssids.col.vlan", "config.mgmt-vlan"),
+    ),
+)
+
+
+def groups() -> List[Dict[str, object]]:
+    """The cross-cutting group switches, JSON-safe for the portal."""
+    return [{"id": g.id, "label": g.label, "hint": g.hint, "ids": list(g.ids)}
+            for g in GROUPS]
+
+
+def columns_for(hidden_ids) -> Tuple[Column, ...]:
+    """The columns to blank: those whose own id is hidden. A column is NOT
+    implied by hiding its section — hiding the section empties the section's
+    own paths; a column is the case where the table stays but a field goes."""
+    return tuple(col for vid in hidden_ids
+                 if (col := COLUMNS_BY_ID.get(vid)))
+
+
+def loose_checks_for(hidden_ids) -> frozenset:
+    """Check finding ids hidden INDIVIDUALLY (not via their section)."""
+    return frozenset(vid for vid in hidden_ids if vid in ALL_CHECK_IDS)
+
 
 def catalogue() -> List[Dict[str, object]]:
     """
@@ -621,7 +738,11 @@ def catalogue() -> List[Dict[str, object]]:
         # rather than trusting a label. "Markup only" is a real answer here and
         # worth saying out loud — those sections are hidden but not withheld.
         "paths": list(section.paths),
-        "checks": list(section.checks),
+        # Checks and columns as their own toggleable elements, so the portal
+        # renders a tree: hide the whole section, or expand it and hide one
+        # check or one column. Each carries a label so the tree is readable.
+        "checks": [{"id": c, "label": _check_label(c)} for c in section.checks],
+        "columns": [{"id": col.id, "label": col.label} for col in section.columns],
     } for section in rows]
 
 

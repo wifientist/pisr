@@ -94,6 +94,32 @@ def _blank_path(tree: Dict[str, Any], dotted: str) -> bool:
     return True
 
 
+def _blank_column(tree: Dict[str, Any], path: str, field: str) -> int:
+    """
+    Blank one FIELD in every row of the list at `path`. Returns rows touched.
+
+    The column-level primitive: hide the VLAN column of the SSID table without
+    hiding the table, by emptying `vlan` in each row while the rest of the row
+    stays. Type-preserving like `_blank_path`, so a renderer indexing the field
+    still finds a key of the same shape rather than a hole. A path that does not
+    resolve to a list, or rows without the field, are left alone — the same
+    fail-quiet as `_blank_path`, and the drift test is what catches a rename.
+    """
+    node: Any = tree
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return 0
+        node = node[part]
+    if not isinstance(node, list):
+        return 0
+    touched = 0
+    for row in node:
+        if isinstance(row, dict) and field in row:
+            row[field] = _blank_like(row[field])
+            touched += 1
+    return touched
+
+
 def _filter_findings(verification: Dict[str, Any], hidden_checks) -> None:
     """
     Drop findings owned by hidden sections and recompute both tallies in place.
@@ -189,13 +215,13 @@ def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
     if not hidden:
         return redacted
 
-    unknown = [sid for sid in hidden if sid not in section_catalogue.BY_ID]
+    unknown = [vid for vid in hidden if not section_catalogue.is_known_id(vid)]
     if unknown:
-        # Left over from a section that was renamed or removed. Ignored rather
-        # than refused: a stale id in the policy file must not take the report
-        # down, and the alternative — treating it as a wildcard — would hide
-        # more than the admin asked for.
-        logger.warning("visibility: policy names %d unknown section(s), ignored: %s",
+        # Left over from an element (section, check or column) that was renamed
+        # or removed. Ignored rather than refused: a stale id in the policy file
+        # must not take the report down, and the alternative — treating it as a
+        # wildcard — would hide more than the admin asked for.
+        logger.warning("visibility: policy names %d unknown element(s), ignored: %s",
                        len(unknown), ", ".join(unknown))
 
     for path in section_catalogue.paths_for(hidden):
@@ -213,9 +239,20 @@ def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
             category for category in config["categories"]
             if f"config.{category.get('slug')}" not in set(hidden)]
 
-    hidden_checks = section_catalogue.checks_for(hidden)
+    # Findings dropped by id, from BOTH sources: a check owned by a hidden
+    # section, and a check hidden INDIVIDUALLY in the portal tree. Same filter,
+    # same tally recompute — the finding id is all `_filter_findings` needs.
+    hidden_checks = (section_catalogue.checks_for(hidden)
+                     | section_catalogue.loose_checks_for(hidden))
     if hidden_checks and isinstance(redacted.get("verification"), dict):
         _filter_findings(redacted["verification"], hidden_checks)
+
+    # Column-level: blank a field in every row of a table, for a column hidden
+    # on its own (the SSID table's VLAN, say). This withholds the data — the
+    # column is emptied in the payload, not merely un-drawn — so the JSON route
+    # and the PDF cannot disagree, and a `user` cannot read it back.
+    for column in section_catalogue.columns_for(hidden):
+        _blank_column(redacted, column.path, column.field)
 
     # The punch list is a re-cut of `verification` and `incidents`, so it is
     # REBUILT from the redacted copies rather than filtered alongside them.

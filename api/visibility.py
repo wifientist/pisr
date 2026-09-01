@@ -240,11 +240,13 @@ class PolicyStore:
     @staticmethod
     def _clean(hidden) -> Dict[str, List[str]]:
         """
-        Keep only known roles and known section ids.
+        Keep only known roles and known ELEMENT ids — a section, a check, or a
+        column. The `hidden` list holds all three kinds; `is_known_id` accepts
+        any of them.
 
         Unknown ids are dropped here rather than at render time so that the
         portal shows an admin the policy that is actually in force, not the one
-        they wrote before a section was renamed.
+        they wrote before something was renamed.
         """
         if not isinstance(hidden, dict):
             return {}
@@ -261,11 +263,12 @@ class PolicyStore:
                     "visibility: migrated %d renamed section id(s) for role %r. "
                     "The next save from the portal writes the new ids.",
                     renamed, role)
-            known = sorted({sid for sid in migrated if sid in section_catalogue.BY_ID})
+            known = sorted({sid for sid in migrated
+                            if section_catalogue.is_known_id(sid)})
             dropped = len(migrated) - len(known)
             if dropped > 0:
                 logger.warning(
-                    "visibility: dropped %d unknown section id(s) for role %r. "
+                    "visibility: dropped %d unknown element id(s) for role %r. "
                     "They were probably renamed; re-save from the portal to "
                     "tidy the file.", dropped, role)
             if known:

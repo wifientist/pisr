@@ -384,15 +384,21 @@ def _switch_tables(switches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── the rest of the sections ─────────────────────────────────
 
-def _wireless_table(wireless: Dict[str, Any]) -> Dict[str, Any]:
+def _wireless_table(wireless: Dict[str, Any], show_vlan: bool = True) -> Dict[str, Any]:
+    # The VLAN column is a hideable element (`wireless.ssids.col.vlan`). `redact`
+    # has already blanked `vlans` in every row when it is hidden; dropping the
+    # column here is the PDF's cosmetic guard, so the download shows the same
+    # picture as the screen rather than an empty "VLAN" column.
+    vlan_col = (["VLAN"] if show_vlan else [])
     return _table(
-        ["SSID", "Type", "Security", "VLAN", "Radios", "AP groups", "On air", "Clients"],
+        ["SSID", "Type", "Security"] + vlan_col + ["Radios", "AP groups", "On air", "Clients"],
         [[_dash(row.get("ssid")) if row.get("resolved", True)
           else f"(no definition) {row.get('networkId')}",
-          _dash(row.get("type")), _dash(row.get("security")), _dash(row.get("vlans")),
-          _dash(row.get("radios")),
-          _dash([s.get("group") for s in row.get("scopes") or []], cap=6),
-          _dash(row.get("apsBroadcasting")), _dash(row.get("clientsNow"))]
+          _dash(row.get("type")), _dash(row.get("security"))]
+         + ([_dash(row.get("vlans"))] if show_vlan else [])
+         + [_dash(row.get("radios")),
+            _dash([s.get("group") for s in row.get("scopes") or []], cap=6),
+            _dash(row.get("apsBroadcasting")), _dash(row.get("clientsNow"))]
          for row in wireless.get("rows") or []])
 
 
@@ -573,7 +579,10 @@ def build_context(report: Dict[str, Any], controller_name: str,
         "clients_by_health": _bars((report.get("clients") or {}).get("byHealth"), 4),
         "top_aps": _bars((report.get("clients") or {}).get("topAps"), 8),
 
-        "wireless_table": _wireless_table(report.get("wireless") or {}),
+        "wireless_table": _wireless_table(
+            report.get("wireless") or {},
+            show_vlan="wireless.ssids.col.vlan" not in set(
+                (report.get("visibility") or {}).get("hidden") or [])),
         "vlan_table": _vlan_table(report.get("vlans") or {}),
         "ap_subnet_table": _subnet_table((report.get("addressing") or {}).get("apSubnets"), "APs"),
         "switch_subnet_table": _subnet_table(
