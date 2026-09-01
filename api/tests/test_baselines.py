@@ -51,7 +51,7 @@ def test_three_states_round_trip():
     _fresh()
     baselines.save_org(
         {"ep.value": True, "ep.num": 1800},
-        ["ep.na"], "verified", "internal doc", "tester")
+        ["ep.na"], "verified", "internal doc", True, "tester")
 
     assert baselines.lookup("ep.value") == {"org": True}
     assert baselines.lookup("ep.num") == {"org": 1800}
@@ -61,7 +61,7 @@ def test_three_states_round_trip():
 
 def test_na_is_distinct_from_missing_and_from_a_value():
     _fresh()
-    baselines.save_org({"ep.v": 5}, ["ep.na"], "unverified", "", "t")
+    baselines.save_org({"ep.v": 5}, ["ep.na"], "unverified", "", True, "t")
     assert baselines.ORG.is_na("ep.na")
     assert not baselines.ORG.is_na("ep.v")
     assert not baselines.ORG.is_na("ep.absent")
@@ -72,7 +72,7 @@ def test_na_is_distinct_from_missing_and_from_a_value():
 def test_value_wins_when_a_key_is_both_value_and_na():
     """A field either has a recommendation or explicitly has none — not both."""
     _fresh()
-    baselines.save_org({"ep.x": 9}, ["ep.x", "ep.y"], "unverified", "", "t")
+    baselines.save_org({"ep.x": 9}, ["ep.x", "ep.y"], "unverified", "", True, "t")
     full = baselines.ORG.full()
     assert "ep.x" in full["values"]
     assert "ep.x" not in full["notApplicable"], "the value must win"
@@ -87,7 +87,7 @@ def test_config_row_renders_each_state():
     """
     _fresh()
     # endpoint "ep", path "flag" -> baseline key "ep.flag"
-    baselines.save_org({"ep.flag": True}, ["ep.other"], "unverified", "", "t")
+    baselines.save_org({"ep.flag": True}, ["ep.other"], "unverified", "", True, "t")
 
     valued = shape._config_row("ep", ("flag",), "flag", False)
     assert valued["org"] == {"value": True, "text": "Enabled", "matches": False}
@@ -102,21 +102,21 @@ def test_config_row_renders_each_state():
 
 def test_verified_gets_a_timestamp_unverified_does_not():
     _fresh()
-    baselines.save_org({}, [], "verified", "", "t")
+    baselines.save_org({}, [], "verified", "", True, "t")
     assert baselines.ORG.full()["verifiedAt"], "verified must be dated"
-    baselines.save_org({}, [], "unverified", "", "t")
+    baselines.save_org({}, [], "unverified", "", True, "t")
     assert baselines.ORG.full()["verifiedAt"] is None, "unverified has nothing to date"
 
 
 def test_bad_status_falls_back_to_unverified():
     _fresh()
-    baselines.save_org({}, [], "totally-made-up", "", "t")
+    baselines.save_org({}, [], "totally-made-up", "", True, "t")
     assert baselines.ORG.full()["status"] == "unverified"
 
 
 def test_save_is_atomic_and_leaves_no_litter():
     path = _fresh()
-    baselines.save_org({"ep.a": 1, "ep.b": 2}, ["ep.c"], "verified", "src", "t")
+    baselines.save_org({"ep.a": 1, "ep.b": 2}, ["ep.c"], "verified", "src", True, "t")
     assert path.exists()
     litter = list(path.parent.glob(".baseline-*.tmp"))
     assert not litter, f"left temp files: {litter}"
@@ -126,7 +126,7 @@ def test_no_path_configured_refuses_rather_than_crashes():
     baselines.ORG.path = None
     baselines.ORG._loaded = False
     try:
-        baselines.save_org({"ep.a": 1}, [], "verified", "", "t")
+        baselines.save_org({"ep.a": 1}, [], "verified", "", True, "t")
     except RuntimeError as exc:
         assert "nowhere to save" in str(exc)
     else:

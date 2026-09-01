@@ -46,6 +46,7 @@ interface Loaded {
   notApplicable: string[];
   status: string;
   source: string;
+  show: boolean;
   writable: boolean;
   path: string | null;
 }
@@ -79,6 +80,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   // Editable meta.
   const [status, setStatus] = useState("unverified");
   const [source, setSource] = useState("");
+  const [show, setShow] = useState(true);
 
   // The field catalogue for one venue, and edits overlaid on the stored file.
   const [ecs, setEcs] = useState<{ id: string; name: string }[] | null>(null);
@@ -103,6 +105,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
         setStatuses(d.statuses || ["verified", "placeholder", "unverified"]);
         setStatus(d.org.status || "unverified");
         setSource(d.org.source || "");
+        setShow(d.org.show !== false);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -194,7 +197,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
         method: "PUT",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values, notApplicable: [...na], status, source }),
+        body: JSON.stringify({ values, notApplicable: [...na], status, source, show }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) { setError(body?.detail || `Save failed (HTTP ${res.status}).`); return; }
@@ -282,7 +285,8 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
 
   const readOnly = Boolean(loaded && !loaded.writable);
   const dirty = Object.keys(edits).length > 0 || (loaded &&
-    (status !== (loaded.status || "unverified") || source !== (loaded.source || "")));
+    (status !== (loaded.status || "unverified") || source !== (loaded.source || "")
+     || show !== (loaded.show !== false)));
 
   const seg = (active: boolean) =>
     `px-2 py-0.5 text-[11px] rounded ${active ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"}`;
@@ -328,8 +332,22 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
 
         {loaded && (
           <div className="max-h-[70vh] overflow-y-auto p-4 space-y-4">
+            {/* The master switch, first: whether recommendations appear in
+                reports at all. Off keeps the values but shows neither column. */}
+            <label className="flex items-start gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 cursor-pointer">
+              <input type="checkbox" className="mt-1 shrink-0" checked={show}
+                     disabled={readOnly} onChange={(e) => setShow(e.target.checked)} />
+              <span className="min-w-0 text-sm">
+                <span className="font-medium text-gray-900">Show recommendations in reports</span>
+                <span className="block text-xs text-gray-500">
+                  When off, neither the {orgName} nor the RUCKUS column appears
+                  on any report — the values below are kept, just not shown.
+                </span>
+              </span>
+            </label>
+
             {/* Meta: how trustworthy, and where the values came from. */}
-            <div className="flex flex-wrap items-end gap-3 rounded-md border border-gray-200 p-3">
+            <div className={`flex flex-wrap items-end gap-3 rounded-md border border-gray-200 p-3 ${show ? "" : "opacity-50"}`}>
               <label className="text-xs text-gray-700">
                 <span className="block font-medium">Trust</span>
                 <select value={status} disabled={readOnly}

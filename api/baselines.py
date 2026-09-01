@@ -127,6 +127,12 @@ class Baseline:
         self._na = {k for k in na if isinstance(k, str)} if isinstance(na, list) else set()
         self._meta = {k: raw.get(k) for k in ("name", "status", "note", "source",
                                               "verifiedAt")}
+        # The global "show recommendations at all" switch. Default ON when the
+        # key is absent — an old file, or a deployment that never touched it,
+        # keeps showing the columns. The admin turns it OFF to suppress both
+        # columns everywhere without deleting the values.
+        show = raw.get("show")
+        self._meta["show"] = show if isinstance(show, bool) else True
         self._stamp, self._loaded = stamp, True
 
     def get(self, key: str) -> Any:
@@ -186,6 +192,13 @@ class Baseline:
         except OSError:
             return False
 
+    @property
+    def show(self) -> bool:
+        """The global show-recommendations switch. Default ON."""
+        with self._lock:
+            self._load()
+            return bool(self._meta.get("show", True))
+
     def full(self) -> Dict[str, Any]:
         """The whole baseline, for the admin editor to render and round-trip."""
         with self._lock:
@@ -197,12 +210,13 @@ class Baseline:
                 "source": self._meta.get("source") or "",
                 "note": self._meta.get("note") or "",
                 "verifiedAt": self._meta.get("verifiedAt"),
+                "show": bool(self._meta.get("show", True)),
                 "writable": self.writable,
                 "path": str(self.path) if self.path else None,
             }
 
     def save(self, values: Dict[str, Any], not_applicable: List[str],
-             status: str, source: str, actor: Optional[str]) -> Dict[str, Any]:
+             status: str, source: str, show: bool, actor: Optional[str]) -> Dict[str, Any]:
         """
         Replace the baseline. Raises RuntimeError if there is nowhere to write.
 
@@ -238,6 +252,7 @@ class Baseline:
             # nothing to date. This is what the header caption reads.
             "verifiedAt": (datetime.now(timezone.utc).isoformat(timespec="seconds")
                            if status == "verified" else None),
+            "show": bool(show),
             "values": clean_values,
             **({"notApplicable": clean_na} if clean_na else {}),
             "updatedBy": actor or "unknown",
@@ -269,7 +284,7 @@ class Baseline:
             self._values = clean_values
             self._na = set(clean_na)
             self._meta = {k: payload.get(k) for k in
-                          ("name", "status", "note", "source", "verifiedAt")}
+                          ("name", "status", "note", "source", "verifiedAt", "show")}
             self._stamp = self._stat()
             self._loaded = True
 
@@ -285,12 +300,15 @@ ORG = Baseline(Path(AUTH.org_baseline_file) if AUTH.org_baseline_file else None,
 
 
 def describe() -> Dict[str, Any]:
-    """Both column headers, for the Config tab."""
+    """Both column headers plus the global show switch, for the Config tab."""
     org = ORG.describe()
     # The org column is named from the environment, never from the file, so a
     # baseline copied between deployments cannot mislabel itself.
     org["name"] = AUTH.org_name
-    return {"org": org, "ruckus": RUCKUS.describe()}
+    # The single flag the reader keys the whole recommendation feature off:
+    # both columns appear only when this is on. Lives with the org baseline
+    # because that is the file an admin edits from the recommendations portal.
+    return {"org": org, "ruckus": RUCKUS.describe(), "show": ORG.show}
 
 
 def lookup(key: str) -> Dict[str, Any]:
@@ -324,8 +342,9 @@ def org_full() -> Dict[str, Any]:
 
 
 def save_org(values: Dict[str, Any], not_applicable: List[str],
-             status: str, source: str, actor: Optional[str]) -> Dict[str, Any]:
-    return ORG.save(values, not_applicable, status, source, actor)
+             status: str, source: str, show: bool,
+             actor: Optional[str]) -> Dict[str, Any]:
+    return ORG.save(values, not_applicable, status, source, show, actor)
 
 
 def ruckus_values() -> Dict[str, Any]:

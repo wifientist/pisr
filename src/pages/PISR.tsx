@@ -1841,15 +1841,20 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
     (r) => r.org?.matches === false || r.ruckus?.matches === false);
   const shown = onlyDiffs ? differing : rows;
 
-  // Global, not per-category. `rows.some(r => r.org)` made the columns appear
-  // for a category with a recommendation and vanish for one without, so the
-  // layout blinked in and out between settings. Driven by whether the baseline
-  // has ANY content (config.baselines.*.active), the columns are present for
-  // every setting — with "—" where this field has no recommendation — or
-  // absent entirely when the baseline is empty. That is the whole point: a
-  // stable slot per setting for each recommendation source.
-  const hasOrg = !!baselines?.org?.active;
-  const hasRuckus = !!baselines?.ruckus?.active;
+  // Both columns are gated on ONE global switch — `config.baselines.show`, the
+  // admin's "show recommendations?" toggle. When it is on, the columns are
+  // present for EVERY setting (with "—" where this field has no recommendation),
+  // so the layout is stable rather than blinking per-category. When off, neither
+  // column appears anywhere and the values are simply not shown.
+  //
+  // The org column shows even when the admin has set NOTHING yet — an empty
+  // column with a "not set" caption on the header, so a reader can see the
+  // {company} recommendations are a thing this deployment can fill in rather
+  // than a thing that does not exist.
+  const showRec = baselines?.show ?? true;
+  const hasOrg = showRec;
+  const hasRuckus = showRec;
+  const orgEmpty = !baselines?.org?.active;
 
   const cell = (rec: any) => {
     if (!rec) return <span className="text-gray-300">—</span>;
@@ -1891,12 +1896,19 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
               {hasOrg && (
                 <th className="py-1.5 pr-3 font-medium text-gray-600 whitespace-nowrap">
                   {baselines?.org?.name || "Org"}
-                  {/* An unverified baseline is captioned every time it is
-                      shown. A fabricated "recommended" value read as
-                      authoritative by an install crew is worse than an empty
-                      column: an empty column asks a question, a wrong one
-                      answers it. */}
-                  {!baselines?.org?.verified && (
+                  {/* Empty baseline: say so on the header, so the column reads
+                      as "your recommendations can go here" rather than as a
+                      column of settings with no recommendation. */}
+                  {orgEmpty ? (
+                    <span className="ml-1 text-[10px] font-normal text-gray-400">
+                      not set
+                    </span>
+                  ) : !baselines?.org?.verified && (
+                    /* An unverified baseline is captioned every time it is
+                       shown. A fabricated "recommended" value read as
+                       authoritative by an install crew is worse than an empty
+                       column: an empty column asks a question, a wrong one
+                       answers it. */
                     <span className="ml-1 text-[10px] font-normal text-amber-700">
                       unverified
                     </span>

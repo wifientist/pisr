@@ -74,6 +74,11 @@ class BaselineBody(BaseModel):
     source: str = Field(
         default="",
         description="Where the values came from, shown in the column header.")
+    show: bool = Field(
+        default=True,
+        description="The global switch: when false, neither recommendation "
+                    "column appears in any report. The values are kept, just "
+                    "not shown.")
 
 
 def _actor(request: Request) -> str:
@@ -120,7 +125,7 @@ async def put_baseline(body: BaselineBody, request: Request):
     try:
         return baselines.save_org(
             body.values, body.notApplicable, body.status, body.source,
-            _actor(request))
+            body.show, _actor(request))
     except RuntimeError as exc:
         logger.error("baselines: save failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
