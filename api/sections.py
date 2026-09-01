@@ -488,7 +488,8 @@ SECTIONS: Tuple[Section, ...] = (
         label="Link speeds",
         tab="wired",
         hint="What the up ports actually negotiated.",
-        paths=("ports.bySpeed",),
+        paths=("ports.bySpeed", "ports.slowLinks"),
+        checks=("port-link-speed",),
     ),
     Section(
         id="wired.port-errors",

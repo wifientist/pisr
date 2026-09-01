@@ -78,6 +78,7 @@ CHECK_CATEGORY: Dict[str, str] = {
     # Cabling & uplinks
     "port-errors": "cabling",
     "ap-uplink-speed": "cabling",
+    "port-link-speed": "cabling",
     "ap-mesh-fallback": "cabling",
     # Power
     "poe-budget": "power",

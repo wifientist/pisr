@@ -484,6 +484,45 @@ def check_port_errors(report: Dict[str, Any]) -> Dict[str, Any]:
                     f"None of the {ports['up']} up ports are counting errors.")
 
 
+def check_port_link_speed(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    A switch port that negotiated below a gigabit. On an infrastructure link
+    (switch-to-switch) or an AP uplink it is the classic bad-patch-lead fault
+    and a warning; on an access port to an endpoint it may just be a slow device,
+    so it is reported as info to confirm rather than as a fault. `shape.port_card`
+    does the classification through LLDP — this check only reads the split.
+
+    Distinct from `ap-uplink-speed`, which reads the AP's own PoE port status:
+    this is the switch-side view and catches a slow link even when the AP is
+    offline or does not report its speed. Overlap on a live AP link is expected.
+    """
+    ports = report["ports"]
+    if not ports["total"]:
+        return _finding("port-link-speed", "Links negotiated at full speed", "skipped",
+                        "No switch ports were read.")
+    slow = ports.get("slowLinks") or []
+    if not slow:
+        return _finding("port-link-speed", "Links negotiated at full speed", "ok",
+                        f"All {ports['up']} up ports negotiated at 1 Gbps or better.")
+
+    infra = [row for row in slow if row["kind"] in ("ap", "switch")]
+    # Warning when any infrastructure or AP link is slow; otherwise the slow
+    # ports are all endpoints and this is an info-level "confirm these".
+    if infra:
+        return _finding("port-link-speed", "Links negotiated at full speed", "warning",
+                        f"{len(infra)} infrastructure or AP link(s) negotiated below "
+                        f"1 Gbps — suspect a patch lead"
+                        + (f"; {len(slow) - len(infra)} endpoint port(s) are also below "
+                           "a gigabit." if len(slow) > len(infra) else "."),
+                        slow,
+                        headline=f"{len(infra)} uplink(s) below 1 Gbps")
+    return _finding("port-link-speed", "Links negotiated at full speed", "info",
+                    f"{len(slow)} access port(s) negotiated below 1 Gbps — confirm the "
+                    "attached devices are meant to run at that speed.",
+                    slow,
+                    headline=f"{len(slow)} access port(s) below 1 Gbps")
+
+
 # ── wireless ─────────────────────────────────────────────────
 
 def check_ssids_activated(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -1206,6 +1245,7 @@ CHECKS: List[Callable[[Dict[str, Any]], Dict[str, Any]]] = [
     check_poe_budget,
     check_ap_uplink_speed,
     check_port_errors,
+    check_port_link_speed,
     check_ap_firmware,
     check_switch_firmware,
     check_switch_config_sync,

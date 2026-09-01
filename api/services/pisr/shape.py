@@ -63,6 +63,27 @@ def _is_transitional(value: Optional[str]) -> bool:
 
 SPEED_RE = re.compile(r"(\d+)\s*mbps", re.I)
 
+# A switch port's `portSpeed` is a short label, not the "Up 1000Mbps full"
+# string _link_speed parses: "1G", "100M", "2.5G", "10G", sometimes a bare
+# "1000". A gigabit unit is thousands of Mbps; a bare number is taken as Mbps.
+_PORT_SPEED_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([gm])", re.I)
+
+
+def _port_speed_mbps(label: Optional[str]) -> Optional[int]:
+    """Mbps out of a `portSpeed` label. None when it is absent or unparseable
+    ('auto', 'unknown') — a port with no readable speed is not a slow port."""
+    if not label:
+        return None
+    text = str(label).strip().lower()
+    if text in ("auto", "unknown", "n/a", "-", ""):
+        return None
+    match = _PORT_SPEED_RE.search(text)
+    if match:
+        value = float(match.group(1))
+        return int(value * 1000) if match.group(2).lower() == "g" else int(value)
+    bare = re.search(r"\d+", text)
+    return int(bare.group(0)) if bare else None
+
 # meshRole values that mean "this AP is NOT meshing". Observed live: "DISABLED"
 # on a venue with mesh off, and null. The rest are inferred from the vocabulary
 # R1 uses elsewhere, which is why `_is_meshing` treats an UNRECOGNISED value as
@@ -1171,10 +1192,50 @@ def poe_card(switches: List[Dict[str, Any]], ports: List[Dict[str, Any]],
 
 # ── ports / cabling ──────────────────────────────────────────
 
-def port_card(ports: List[Dict[str, Any]]) -> Dict[str, Any]:
+def port_card(ports: List[Dict[str, Any]],
+              aps: Optional[List[Dict[str, Any]]] = None,
+              switches: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Link health for the ports that are actually up — install QA, not monitoring."""
     up = [p for p in ports if _port_up(p)]
     speeds = Counter(p.get("portSpeed") or "unknown" for p in up)
+
+    # Ports that came up below a gigabit, split by what is on the other end.
+    # An infrastructure link (switch-to-switch) or an AP link at 100 Mbps is a
+    # bad patch lead and a warning; an access port to an endpoint may simply be
+    # a slow device, so it is reported as info to confirm rather than as a fault.
+    # AP links are matched the same way poe_card matches them — through LLDP.
+    ap_by_mac = {_mac(ap.get("mac")): ap for ap in (aps or []) if ap.get("mac")}
+    ap_by_name = {_norm(ap.get("name")): ap for ap in (aps or []) if ap.get("name")}
+    switch_macs = {_mac(sw.get("switchMac") or sw.get("id"))
+                   for sw in (switches or []) if (sw.get("switchMac") or sw.get("id"))}
+    switch_names = {_norm(sw.get("name")) for sw in (switches or []) if sw.get("name")}
+
+    def link_kind(port: Dict[str, Any]) -> str:
+        name = _norm(port.get("neighborName"))
+        mac = _mac(port.get("neighborMacAddress"))
+        if (mac and mac in ap_by_mac) or ap_by_name.get(name) \
+                or ap_by_name.get(name.rsplit(".", 1)[0]):
+            return "ap"
+        if (mac and mac in switch_macs) or (name and name in switch_names):
+            return "switch"
+        return "endpoint"
+
+    slow_links = []
+    for port in up:
+        mbps = _port_speed_mbps(port.get("portSpeed"))
+        if mbps is None or mbps >= 1000:
+            continue
+        slow_links.append({
+            "switch": port.get("switchName"),
+            "port": port.get("portIdentifierFormatted") or port.get("portIdentifier"),
+            "name": port.get("name"),
+            "speed": port.get("portSpeed"),
+            "speedMbps": mbps,
+            "neighbor": port.get("neighborName"),
+            # "ap" / "switch" are infrastructure (warning); "endpoint" is info.
+            "kind": link_kind(port),
+        })
+    slow_links.sort(key=lambda row: (row["kind"] == "endpoint", row["speedMbps"]))
 
     errored = []
     for port in up:
@@ -1199,6 +1260,9 @@ def port_card(ports: List[Dict[str, Any]]) -> Dict[str, Any]:
         "up": len(up),
         "down": len(ports) - len(up),
         "bySpeed": [{"label": str(label), "count": n} for label, n in speeds.most_common()],
+        "slowLinks": slow_links[:25],
+        "slowCount": len(slow_links),
+        "slowInfra": sum(1 for row in slow_links if row["kind"] in ("ap", "switch")),
         "errored": errored[:25],
         "erroredCount": len(errored),
         "errDisabled": [{

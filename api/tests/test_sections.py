@@ -766,6 +766,55 @@ def test_categories_referenced_are_declared():
         assert category in declared, f"{check} names unknown category {category!r}"
 
 
+# ── port link speed: infra is a warning, endpoints are info ──────────
+
+from services.pisr import shape as shape_mod                  # noqa: E402
+
+
+def _up(port_id, speed, neighbor="", neighbor_mac=""):
+    return {"status": "Up", "portSpeed": speed, "switchName": "core",
+            "portIdentifier": port_id, "neighborName": neighbor,
+            "neighborMacAddress": neighbor_mac}
+
+
+def test_port_speed_label_parses_to_mbps():
+    p = shape_mod._port_speed_mbps
+    assert p("1G") == 1000 and p("10G") == 10000 and p("2.5G") == 2500
+    assert p("100M") == 100 and p("1000Mbps") == 1000 and p("1000") == 1000
+    assert p("auto") is None and p(None) is None, "an unreadable speed is not slow"
+
+
+def test_slow_infra_link_is_a_warning_slow_endpoint_is_info():
+    aps = [{"mac": "aa:bb:cc:00:00:01", "name": "ap-1", "serial": "S1"}]
+    switches = [{"name": "idf-2", "switchMac": "aa:bb:cc:00:00:02",
+                 "id": "aa:bb:cc:00:00:02"}]
+    # switch-to-switch at 100M, AP link at 100M, endpoint at 100M, one clean gig.
+    ports = [_up("g48", "100M", "idf-2", "aa:bb:cc:00:00:02"),
+             _up("g5", "100M", "ap-1", "aa:bb:cc:00:00:01"),
+             _up("g9", "100M", "printer"),
+             _up("g1", "1G", "server")]
+    card = shape_mod.port_card(ports, aps, switches)
+    assert card["slowCount"] == 3 and card["slowInfra"] == 2, "classification wrong"
+    finding = check_registry.check_port_link_speed({"ports": card})
+    assert finding["severity"] == "warning", "a slow infra/AP link must warn"
+    assert len(finding["evidence"]) == 3, "every slow port should be listed"
+
+
+def test_only_slow_endpoints_is_info_not_warning():
+    ports = [_up("g5", "100M", "printer"), _up("g1", "1G")]
+    card = shape_mod.port_card(ports, [], [])
+    finding = check_registry.check_port_link_speed({"ports": card})
+    assert finding["severity"] == "info", (
+        "a slow access port to an endpoint is a confirm, not a fault")
+
+
+def test_all_gigabit_is_a_pass_and_no_ports_is_skipped():
+    fast = shape_mod.port_card([_up("g1", "1G")], [], [])
+    assert check_registry.check_port_link_speed({"ports": fast})["severity"] == "ok"
+    none = shape_mod.port_card([], [], [])
+    assert check_registry.check_port_link_speed({"ports": none})["severity"] == "skipped"
+
+
 def _verification(*findings):
     return {"findings": list(findings)}
 
