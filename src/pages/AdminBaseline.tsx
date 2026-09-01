@@ -342,33 +342,36 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               </span>
             </label>
 
-            {/* Meta. */}
-            <div className={`flex flex-wrap items-end gap-3 rounded-md border border-gray-200 p-3 ${show ? "" : "opacity-50"}`}>
-              <label className="flex items-center gap-2 pb-1 text-xs text-gray-700 cursor-pointer">
+            {/* Meta. Source/note runs the main row; Verified sits below it so
+                neither is cramped. */}
+            <div className={`space-y-2 rounded-md border border-gray-200 p-3 ${show ? "" : "opacity-50"}`}>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="min-w-0 flex-1 text-xs text-gray-700">
+                  <span className="block font-medium">Source / note</span>
+                  <input value={source} disabled={readOnly}
+                         onChange={(e) => setSource(e.target.value)}
+                         placeholder="where these came from, e.g. Acme WiFi standard v3"
+                         className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100" />
+                </label>
+                <p className="pb-1 text-xs text-gray-500">{counts.values} value(s) · {counts.na} n/a</p>
+                <div className="flex items-center gap-2 pb-0.5">
+                  <button onClick={downloadTemplate}
+                          className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                    <Download size={13} /> Starter
+                  </button>
+                  <button onClick={() => fileRef.current?.click()} disabled={readOnly}
+                          className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                    <Upload size={13} /> Import
+                  </button>
+                  <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+                         onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
                 <input type="checkbox" disabled={readOnly} checked={status === "verified"}
                        onChange={(e) => setStatus(e.target.checked ? "verified" : "unverified")} />
                 <span><span className="font-medium">Verified</span> — our confirmed standard (else the column reads “draft”)</span>
               </label>
-              <label className="min-w-0 flex-1 text-xs text-gray-700">
-                <span className="block font-medium">Source / note</span>
-                <input value={source} disabled={readOnly}
-                       onChange={(e) => setSource(e.target.value)}
-                       placeholder="where these came from, e.g. Acme WiFi standard v3"
-                       className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100" />
-              </label>
-              <p className="pb-1 text-xs text-gray-500">{counts.values} value(s) · {counts.na} n/a</p>
-              <div className="ml-auto flex items-center gap-2 pb-0.5">
-                <button onClick={downloadTemplate}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
-                  <Download size={13} /> Starter
-                </button>
-                <button onClick={() => fileRef.current?.click()} disabled={readOnly}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                  <Upload size={13} /> Import
-                </button>
-                <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
-                       onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
-              </div>
             </div>
 
             {/* Filters. */}
