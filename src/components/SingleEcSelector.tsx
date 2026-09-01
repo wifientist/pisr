@@ -30,10 +30,6 @@ export default function SingleEcSelector({ controllerId, onEcSelect, selectedEcI
       header: 'Type',
       cell: info => info.getValue() || 'N/A'
     }),
-    columnHelper.accessor('id', {
-      header: 'ID',
-      cell: info => info.getValue()
-    }),
     columnHelper.display({
       id: 'select',
       header: 'Action',
