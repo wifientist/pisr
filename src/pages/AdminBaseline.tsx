@@ -223,24 +223,31 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
 
   const downloadTemplate = () => {
     if (!cats) return;
+    // The CURATED starter, not every field. A venue exposes thousands of config
+    // rows, most of them data (channel lists, floor plans, addresses) nobody
+    // recommends a value for. The settings worth a global recommendation are
+    // the ones RUCKUS already flags — so the template is the fields this venue
+    // has that also appear in the RUCKUS reference. A short, editable file.
     const fields: Record<string, unknown> = {};
     for (const cat of cats) {
       for (const row of cat.rows) {
+        if (!(row.baselineKey in ruckus)) continue;   // key settings only
         const cur = currentOf(row.baselineKey);
         fields[row.baselineKey] = {
           label: row.label,
           current: row.value,                               // reference only
-          ruckus: row.baselineKey in ruckus ? ruckus[row.baselineKey] : null,
+          ruckus: ruckus[row.baselineKey],
           value: cur.mode === "value" ? parseValue(cur.value) : null,
           na: cur.mode === "na",
         };
       }
     }
     const template = {
-      _help: "Set `value` for a field to recommend it. Leave it null to skip " +
-             "(a blank field is left unchanged on import). Set `na` true to " +
-             "mark a field not-applicable. `current` and `ruckus` are reference " +
-             "only and are ignored on import.",
+      _help: "The key settings worth a recommendation. Set `value` for a field " +
+             "to recommend it; leave it null to skip (a blank field is left " +
+             "unchanged on import). Set `na` true to mark not-applicable. " +
+             "`current` and `ruckus` are reference only and ignored on import. " +
+             "Add more keys by hand if you want settings beyond these.",
       orgName, status, source, fields,
     };
     const blob = new Blob([JSON.stringify(template, null, 2)], { type: "application/json" });
@@ -346,21 +353,28 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               </span>
             </label>
 
-            {/* Meta: how trustworthy, and where the values came from. */}
+            {/* Meta: whether the values are final, and where they came from. */}
             <div className={`flex flex-wrap items-end gap-3 rounded-md border border-gray-200 p-3 ${show ? "" : "opacity-50"}`}>
-              <label className="text-xs text-gray-700">
-                <span className="block font-medium">Trust</span>
-                <select value={status} disabled={readOnly}
-                        onChange={(e) => setStatus(e.target.value)}
-                        className="mt-1 rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100">
-                  {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+              {/* One checkbox, not a three-way "Trust" dropdown. The column
+                  header on a report is captioned "unverified" until this is
+                  ticked — so a reader knows whether they are looking at a
+                  confirmed standard or a work-in-progress draft. ("placeholder"
+                  is a RUCKUS-only state for the invented values it ships with;
+                  it does not apply to your own baseline.) */}
+              <label className="flex items-center gap-2 pb-1 text-xs text-gray-700 cursor-pointer">
+                <input type="checkbox" disabled={readOnly}
+                       checked={status === "verified"}
+                       onChange={(e) => setStatus(e.target.checked ? "verified" : "unverified")} />
+                <span>
+                  <span className="font-medium">Verified</span> — these are our
+                  confirmed standard (otherwise the column is captioned “draft”)
+                </span>
               </label>
               <label className="min-w-0 flex-1 text-xs text-gray-700">
-                <span className="block font-medium">Source</span>
+                <span className="block font-medium">Source / note</span>
                 <input value={source} disabled={readOnly}
                        onChange={(e) => setSource(e.target.value)}
-                       placeholder="e.g. Acme WiFi standard v3"
+                       placeholder="where these came from, e.g. Acme WiFi standard v3"
                        className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100" />
               </label>
               <p className="pb-1 text-xs text-gray-500">
@@ -368,12 +382,12 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               </p>
               <div className="ml-auto flex items-center gap-2 pb-0.5">
                 <button onClick={downloadTemplate} disabled={!cats}
-                        title={cats ? "Download every field this venue exposes as a JSON template"
+                        title={cats ? "Download the key settings as a small JSON to fill in and re-import"
                                     : "Load a venue's fields first"}
                         className="inline-flex items-center gap-1 rounded-md border border-gray-300
                                    px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50
                                    disabled:cursor-not-allowed disabled:opacity-50">
-                  <Download size={13} /> Template
+                  <Download size={13} /> Starter
                 </button>
                 <button onClick={() => fileRef.current?.click()} disabled={readOnly}
                         title="Import a filled-in template — only its non-blank values take effect"
