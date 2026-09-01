@@ -1840,8 +1840,15 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
     (r) => r.org?.matches === false || r.ruckus?.matches === false);
   const shown = onlyDiffs ? differing : rows;
 
-  const hasOrg = rows.some((r) => r.org);
-  const hasRuckus = rows.some((r) => r.ruckus);
+  // Global, not per-category. `rows.some(r => r.org)` made the columns appear
+  // for a category with a recommendation and vanish for one without, so the
+  // layout blinked in and out between settings. Driven by whether the baseline
+  // has ANY content (config.baselines.*.active), the columns are present for
+  // every setting — with "—" where this field has no recommendation — or
+  // absent entirely when the baseline is empty. That is the whole point: a
+  // stable slot per setting for each recommendation source.
+  const hasOrg = !!baselines?.org?.active;
+  const hasRuckus = !!baselines?.ruckus?.active;
 
   const cell = (rec: any) => {
     if (!rec) return <span className="text-gray-300">—</span>;

@@ -156,6 +156,15 @@ class Baseline:
                 "note": self._meta.get("note") or "",
                 "source": self._meta.get("source") or "",
                 "count": len(self._values),
+                # Whether this baseline gets a COLUMN in the Config tab, and the
+                # reason the reader shows it consistently rather than per-
+                # category. `some(row has a rec)` per category made the column
+                # blink in and out between settings; keyed on whether the
+                # baseline has any content at all, the column is present for
+                # every setting (with "—" where this field has no rec) or absent
+                # entirely. Values OR not-applicable count — an admin who marked
+                # a field N.A. has an opinion worth a column.
+                "active": bool(self._values) or bool(self._na),
             }
 
     # ── writing (org baseline only) ──────────────────────────────────
