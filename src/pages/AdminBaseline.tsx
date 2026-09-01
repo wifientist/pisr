@@ -9,37 +9,33 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 /**
  * The recommendation editor: what the {company} column recommends, per setting.
  *
- * THREE STATES PER FIELD, and the third is the reason this exists: a
- * recommended VALUE, explicitly NOT APPLICABLE (shown as "—", never a
- * mismatch), or NOT REVIEWED (no column). "Not applicable" and "not reviewed"
- * look the same to a reader but are different to the admin maintaining the
- * baseline — one is "we looked and there is nothing to recommend", the other is
- * "we have not looked". See api/baselines.py.
+ * THE FIELD LIST IS STATIC, from the committed catalogue (api/baselines/
+ * field_catalogue.json, built from the OpenAPI spec). So the editor shows every
+ * settable field immediately — no venue to load first. Loading a venue is
+ * OPTIONAL and only adds a "now: <value>" column so you can see current state
+ * beside the recommendation.
  *
- * THE FIELD LIST COMES FROM A REAL VENUE, not a hardcoded catalogue. R1's field
- * set is whatever it returns for a venue, so the editor loads one venue's config
- * and lets the admin annotate the fields it exposes. Picking a different venue
- * surfaces different fields; the editor says so rather than pretending to be
- * exhaustive.
+ * THREE STATES PER FIELD: a recommended VALUE, explicitly NOT APPLICABLE (shown
+ * "—", never a mismatch), or NOT REVIEWED (no column). N.A. and not-reviewed
+ * look the same to a reader but are different to the admin. See api/baselines.py.
  *
- * RUCKUS IS READ-ONLY REFERENCE. Its values are shown beside the editable
- * column and never sent back — vendor guidance lives in the repo.
+ * TYPE-AWARE INPUTS from the catalogue: boolean -> a true/false choice, enum ->
+ * a dropdown of the spec's values, integer/number -> a number field, else text.
  *
- * OFF-CATALOGUE ENTRIES ARE PRESERVED. The save is a whole-document replace, so
- * the working copy starts from the ENTIRE stored baseline and overlays only the
- * fields this venue exposed — otherwise saving from one venue would delete
- * recommendations set from another.
+ * RUCKUS IS READ-ONLY REFERENCE, shown beside the editable column, never sent
+ * back. The save is a whole-document replace, so the working copy starts from
+ * the entire stored baseline and overlays only the edits — nothing is dropped.
  */
 
 type Mode = "value" | "na" | "none";
 
-interface Row {
-  baselineKey: string;
+interface CatField {
+  type: string;
   label: string;
-  valueText: string;
-  value: unknown;
+  curated: boolean;
+  enum?: string[];
 }
-interface Category { key: string; slug: string; label?: string; rows: Row[] }
+interface CatEndpoint { label: string; fields: Record<string, CatField> }
 
 interface Loaded {
   values: Record<string, unknown>;
@@ -52,8 +48,11 @@ interface Loaded {
 }
 
 /** Coerce a typed-in recommendation to bool/number/string, like R1's values. */
-function parseValue(text: string): unknown {
+function parseValue(text: string, type?: string): unknown {
   const t = text.trim();
+  if (type === "boolean") return t === "true";
+  if ((type === "integer" || type === "number") && t !== "" && !Number.isNaN(Number(t)))
+    return Number(t);
   if (t === "true") return true;
   if (t === "false") return false;
   if (t !== "" && !Number.isNaN(Number(t)) && /^-?\d+(\.\d+)?$/.test(t)) return Number(t);
@@ -72,7 +71,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [orgName, setOrgName] = useState("Org");
   const [ruckus, setRuckus] = useState<Record<string, unknown>>({});
-  const [statuses, setStatuses] = useState<string[]>([]);
+  const [catalogue, setCatalogue] = useState<Record<string, CatEndpoint>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -82,23 +81,25 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   const [source, setSource] = useState("");
   const [show, setShow] = useState(true);
 
-  // The field catalogue for one venue, and edits overlaid on the stored file.
+  // View controls.
+  const [search, setSearch] = useState("");
+  const [showAll, setShowAll] = useState(false);   // curated vs every field
+  const [setOnly, setSetOnly] = useState(false);   // review: only fields I've set
+  const [open, setOpen] = useState<Set<string>>(new Set());
+
+  // Optional venue overlay: baselineKey -> current value text.
   const [ecs, setEcs] = useState<{ id: string; name: string }[] | null>(null);
   const [ec, setEc] = useState<string>("");
   const [venues, setVenues] = useState<{ id: string; name: string }[] | null>(null);
   const [venue, setVenue] = useState<string>("");
-  const [cats, setCats] = useState<Category[] | null>(null);
-  const [loadingCat, setLoadingCat] = useState(false);
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  // "Show only fields I've set" — the review view. Off shows the whole
-  // catalogue; on shows only fields that carry a value or an N.A., which is
-  // how an admin sees what the current baseline actually says.
-  const [setOnly, setSetOnly] = useState(false);
-  // baselineKey -> the admin's choice for it. Only CHANGED fields live here;
-  // the stored baseline is the base and this is the overlay.
+  const [current, setCurrent] = useState<Record<string, string> | null>(null);
+  const [loadingVenue, setLoadingVenue] = useState(false);
+
+  // baselineKey -> the admin's choice. Only CHANGED fields; the stored baseline
+  // is the base and this overlays it.
   const [edits, setEdits] = useState<Record<string, { mode: Mode; value: string }>>({});
 
-  // ── load the baseline itself ──────────────────────────────────────
+  // ── load baseline + catalogue ─────────────────────────────────────
   useEffect(() => {
     fetch(`${API_BASE_URL}/admin/baseline`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -106,7 +107,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
         setLoaded(d.org);
         setOrgName(d.orgName || "Org");
         setRuckus(d.ruckus || {});
-        setStatuses(d.statuses || ["verified", "placeholder", "unverified"]);
+        setCatalogue(d.catalogue?.levels?.venue?.endpoints || {});
         setStatus(d.org.status || "unverified");
         setSource(d.org.source || "");
         setShow(d.org.show !== false);
@@ -114,19 +115,16 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
       .catch((e: Error) => setError(e.message));
   }, []);
 
-  // ── EC list (MSP only) ────────────────────────────────────────────
+  // ── optional EC/venue pickers (current-value overlay only) ────────
   useEffect(() => {
     if (!isMsp || activeControllerId === null) return;
     fetch(`${API_BASE_URL}/r1/${activeControllerId}/msp/mspEcs`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((body) => {
-        const rows = Array.isArray(body) ? body : body.data || [];
-        setEcs(rows.map((e: any) => ({ id: e.id, name: e.name || e.id })));
-      })
+      .then((body) => setEcs((Array.isArray(body) ? body : body.data || [])
+        .map((e: any) => ({ id: e.id, name: e.name || e.id }))))
       .catch(() => setEcs([]));
   }, [isMsp, activeControllerId]);
 
-  // ── venues for the chosen EC (or the sole tenant) ─────────────────
   useEffect(() => {
     if (activeControllerId === null) return;
     if (isMsp && !ec) { setVenues(null); return; }
@@ -138,29 +136,24 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
       .catch(() => setVenues([]));
   }, [activeControllerId, isMsp, ec]);
 
-  const loadFields = useCallback(() => {
+  const loadCurrent = useCallback(() => {
     if (activeControllerId === null || !venue) return;
-    setLoadingCat(true); setError(null); setCats(null);
+    setLoadingVenue(true); setError(null);
     const q = new URLSearchParams({ venue_id: venue });
     if (isMsp && ec) q.set("tenant_id", ec);
     fetch(`${API_BASE_URL}/pisr/${activeControllerId}/report?${q}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((report) => {
-        const categories: Category[] = (report.config?.categories || [])
-          .map((c: any) => ({
-            key: c.key, slug: c.slug,
-            label: c.label || c.slug,
-            rows: (c.rows || []).filter((r: Row) => r.baselineKey),
-          }))
-          .filter((c: Category) => c.rows.length);
-        setCats(categories);
+        const map: Record<string, string> = {};
+        for (const c of report.config?.categories || [])
+          for (const row of c.rows || [])
+            if (row.baselineKey) map[row.baselineKey] = row.valueText ?? valueToText(row.value);
+        setCurrent(map);
       })
-      .catch((e: Error) => setError(`Could not load that venue's config: ${e.message}`))
-      .finally(() => setLoadingCat(false));
+      .catch((e: Error) => setError(`Could not load current values: ${e.message}`))
+      .finally(() => setLoadingVenue(false));
   }, [activeControllerId, isMsp, ec, venue]);
 
-  // The current mode/value for a field: an edit if one exists, else the stored
-  // baseline, else "not reviewed".
   const currentOf = useCallback((key: string): { mode: Mode; value: string } => {
     if (edits[key]) return edits[key];
     if (loaded && key in loaded.values) return { mode: "value", value: valueToText(loaded.values[key]) };
@@ -171,8 +164,26 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   const setField = (key: string, mode: Mode, value?: string) =>
     setEdits((e) => ({ ...e, [key]: { mode, value: value ?? e[key]?.value ?? "" } }));
 
+  // The endpoints/fields to show, after curated/search/review filters.
+  const groups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const out: { endpoint: string; label: string;
+                 rows: { key: string; field: CatField }[] }[] = [];
+    for (const [endpoint, ep] of Object.entries(catalogue)) {
+      const rows: { key: string; field: CatField }[] = [];
+      for (const [path, field] of Object.entries(ep.fields)) {
+        if (!showAll && !field.curated) continue;
+        const key = `${endpoint}.${path}`;
+        if (setOnly && currentOf(key).mode === "none") continue;
+        if (q && !field.label.toLowerCase().includes(q) && !key.toLowerCase().includes(q)) continue;
+        rows.push({ key, field });
+      }
+      if (rows.length) out.push({ endpoint, label: ep.label, rows });
+    }
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+  }, [catalogue, showAll, setOnly, search, currentOf]);
+
   const counts = useMemo(() => {
-    // Effective final state = stored baseline overlaid with edits.
     if (!loaded) return { values: 0, na: 0 };
     const val = new Set(Object.keys(loaded.values));
     const na = new Set(loaded.notApplicable);
@@ -184,74 +195,34 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
     return { values: val.size, na: na.size };
   }, [loaded, edits]);
 
-  const save = async () => {
-    if (!loaded) return;
-    setBusy(true); setError(null); setSaved(false);
-    // Start from the WHOLE stored baseline so off-catalogue entries survive.
-    const values: Record<string, unknown> = { ...loaded.values };
-    const na = new Set(loaded.notApplicable);
-    for (const [k, e] of Object.entries(edits)) {
-      delete values[k]; na.delete(k);
-      if (e.mode === "value") values[k] = parseValue(e.value);
-      else if (e.mode === "na") na.add(k);
-      // "none" leaves it removed from both.
-    }
-    try {
-      const res = await fetch(`${API_BASE_URL}/admin/baseline`, {
-        method: "PUT",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values, notApplicable: [...na], status, source, show }),
-      });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) { setError(body?.detail || `Save failed (HTTP ${res.status}).`); return; }
-      setLoaded(body); setEdits({}); setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const dirty = Object.keys(edits).length > 0 || (loaded &&
+    (status !== (loaded.status || "unverified") || source !== (loaded.source || "")
+     || show !== (loaded.show !== false)));
+  const readOnly = Boolean(loaded && !loaded.writable);
 
-  // ── download a template / import a filled one ─────────────────────
-  //
-  // The template is every field the loaded venue exposes — R1's field set is
-  // dynamic, so this is the only place "all possible values" comes from. Each
-  // entry carries the venue's current value and the RUCKUS reference for
-  // context, and an editable `value`/`na`. On import, ONLY entries with a
-  // filled `value` (or `na: true`) take effect; a blank one is skipped and
-  // leaves whatever is already set untouched — so a half-filled template adds
-  // to the baseline rather than wiping it.
+  // ── download / import ─────────────────────────────────────────────
   const fileRef = useRef<HTMLInputElement>(null);
 
   const downloadTemplate = () => {
-    if (!cats) return;
-    // The CURATED starter, not every field. A venue exposes thousands of config
-    // rows, most of them data (channel lists, floor plans, addresses) nobody
-    // recommends a value for. The settings worth a global recommendation are
-    // the ones RUCKUS already flags — so the template is the fields this venue
-    // has that also appear in the RUCKUS reference. A short, editable file.
+    // The curated key settings across the whole catalogue — short and editable.
     const fields: Record<string, unknown> = {};
-    for (const cat of cats) {
-      for (const row of cat.rows) {
-        if (!(row.baselineKey in ruckus)) continue;   // key settings only
-        const cur = currentOf(row.baselineKey);
-        fields[row.baselineKey] = {
-          label: row.label,
-          current: row.value,                               // reference only
-          ruckus: ruckus[row.baselineKey],
-          value: cur.mode === "value" ? parseValue(cur.value) : null,
+    for (const [endpoint, ep] of Object.entries(catalogue))
+      for (const [path, field] of Object.entries(ep.fields)) {
+        if (!field.curated) continue;
+        const key = `${endpoint}.${path}`;
+        const cur = currentOf(key);
+        fields[key] = {
+          label: field.label, type: field.type,
+          ...(field.enum ? { options: field.enum } : {}),
+          ruckus: key in ruckus ? ruckus[key] : null,
+          value: cur.mode === "value" ? parseValue(cur.value, field.type) : null,
           na: cur.mode === "na",
         };
       }
-    }
     const template = {
-      _help: "The key settings worth a recommendation. Set `value` for a field " +
-             "to recommend it; leave it null to skip (a blank field is left " +
-             "unchanged on import). Set `na` true to mark not-applicable. " +
-             "`current` and `ruckus` are reference only and ignored on import. " +
-             "Add more keys by hand if you want settings beyond these.",
+      _help: "Set `value` for a field to recommend it; leave null to skip " +
+             "(blank is unchanged on import). Set `na` true to mark " +
+             "not-applicable. `type`, `options` and `ruckus` are reference only.",
       orgName, status, source, fields,
     };
     const blob = new Blob([JSON.stringify(template, null, 2)], { type: "application/json" });
@@ -274,18 +245,14 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
         setError("No `fields` object in that file — download a template first.");
         return;
       }
-      const next: Record<string, { mode: Mode; value: string }> = { ...edits };
+      const next = { ...edits };
       let applied = 0;
       for (const [key, raw] of Object.entries<any>(fields)) {
-        // Accept either the template's object shape or a bare value, so a
-        // hand-authored `{"fields": {"key": true}}` works too.
         const entry = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : { value: raw };
-        const v = entry.value;
         if (entry.na === true) { next[key] = { mode: "na", value: "" }; applied++; }
-        else if (v !== null && v !== undefined && v !== "") {
-          next[key] = { mode: "value", value: valueToText(v) }; applied++;
+        else if (entry.value !== null && entry.value !== undefined && entry.value !== "") {
+          next[key] = { mode: "value", value: valueToText(entry.value) }; applied++;
         }
-        // else: blank → skipped, leaving whatever is already set.
       }
       setEdits(next);
       if (typeof doc.status === "string") setStatus(doc.status);
@@ -294,10 +261,34 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
     });
   };
 
-  const readOnly = Boolean(loaded && !loaded.writable);
-  const dirty = Object.keys(edits).length > 0 || (loaded &&
-    (status !== (loaded.status || "unverified") || source !== (loaded.source || "")
-     || show !== (loaded.show !== false)));
+  const save = async () => {
+    if (!loaded) return;
+    setBusy(true); setError(null); setSaved(false);
+    const values: Record<string, unknown> = { ...loaded.values };
+    const na = new Set(loaded.notApplicable);
+    for (const [k, e] of Object.entries(edits)) {
+      delete values[k]; na.delete(k);
+      const type = catalogueTypeOf(catalogue, k);
+      if (e.mode === "value") values[k] = parseValue(e.value, type);
+      else if (e.mode === "na") na.add(k);
+    }
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/baseline`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values, notApplicable: [...na], status, source, show }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) { setError(body?.detail || `Save failed (HTTP ${res.status}).`); return; }
+      setLoaded(body); setEdits({}); setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const seg = (active: boolean) =>
     `px-2 py-0.5 text-[11px] rounded ${active ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"}`;
@@ -305,7 +296,6 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto
                     bg-gray-900/40 p-4 sm:p-8">
-      {/* min-w-0 throughout: baseline keys are long unbreakable dotted tokens. */}
       <div className="w-full max-w-4xl min-w-0 rounded-lg border border-gray-200 bg-white shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-gray-200 p-4">
           <div className="min-w-0">
@@ -314,8 +304,8 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               {orgName} recommendations
             </h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              What the {orgName} column recommends for each setting. RUCKUS values
-              are shown for reference and are not edited here.
+              What the {orgName} column recommends for each venue setting. RUCKUS
+              values are shown for reference and are not edited here.
             </p>
           </div>
           <button onClick={onClose} aria-label="Close"
@@ -324,55 +314,40 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {error && (
-          <p className="m-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-        )}
+        {error && <p className="m-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         {readOnly && (
           <p className="m-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <b>Read-only.</b> {loaded?.path} is not writable by the container, so
-            recommendations cannot be saved. Mount a writable volume at its
-            directory — without one an edit is lost at the next deploy.
+            recommendations cannot be saved. Mount a writable volume at its directory.
           </p>
         )}
-
         {!loaded && !error && (
           <p className="flex items-center gap-2 p-8 text-sm text-gray-500">
-            <Loader2 size={15} className="animate-spin" /> Loading the baseline…
+            <Loader2 size={15} className="animate-spin" /> Loading…
           </p>
         )}
 
         {loaded && (
           <div className="max-h-[70vh] overflow-y-auto p-4 space-y-4">
-            {/* The master switch, first: whether recommendations appear in
-                reports at all. Off keeps the values but shows neither column. */}
+            {/* Master switch. */}
             <label className="flex items-start gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 cursor-pointer">
               <input type="checkbox" className="mt-1 shrink-0" checked={show}
                      disabled={readOnly} onChange={(e) => setShow(e.target.checked)} />
               <span className="min-w-0 text-sm">
                 <span className="font-medium text-gray-900">Show recommendations in reports</span>
                 <span className="block text-xs text-gray-500">
-                  When off, neither the {orgName} nor the RUCKUS column appears
-                  on any report — the values below are kept, just not shown.
+                  When off, neither the {orgName} nor the RUCKUS column appears on
+                  any report — the values below are kept, just not shown.
                 </span>
               </span>
             </label>
 
-            {/* Meta: whether the values are final, and where they came from. */}
+            {/* Meta. */}
             <div className={`flex flex-wrap items-end gap-3 rounded-md border border-gray-200 p-3 ${show ? "" : "opacity-50"}`}>
-              {/* One checkbox, not a three-way "Trust" dropdown. The column
-                  header on a report is captioned "unverified" until this is
-                  ticked — so a reader knows whether they are looking at a
-                  confirmed standard or a work-in-progress draft. ("placeholder"
-                  is a RUCKUS-only state for the invented values it ships with;
-                  it does not apply to your own baseline.) */}
               <label className="flex items-center gap-2 pb-1 text-xs text-gray-700 cursor-pointer">
-                <input type="checkbox" disabled={readOnly}
-                       checked={status === "verified"}
+                <input type="checkbox" disabled={readOnly} checked={status === "verified"}
                        onChange={(e) => setStatus(e.target.checked ? "verified" : "unverified")} />
-                <span>
-                  <span className="font-medium">Verified</span> — these are our
-                  confirmed standard (otherwise the column is captioned “draft”)
-                </span>
+                <span><span className="font-medium">Verified</span> — our confirmed standard (else the column reads “draft”)</span>
               </label>
               <label className="min-w-0 flex-1 text-xs text-gray-700">
                 <span className="block font-medium">Source / note</span>
@@ -381,126 +356,98 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
                        placeholder="where these came from, e.g. Acme WiFi standard v3"
                        className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100" />
               </label>
-              <p className="pb-1 text-xs text-gray-500">
-                {counts.values} value(s) · {counts.na} not-applicable
-              </p>
+              <p className="pb-1 text-xs text-gray-500">{counts.values} value(s) · {counts.na} n/a</p>
               <div className="ml-auto flex items-center gap-2 pb-0.5">
-                <button onClick={downloadTemplate} disabled={!cats}
-                        title={cats ? "Download the key settings as a small JSON to fill in and re-import"
-                                    : "Load a venue's fields first"}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300
-                                   px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50
-                                   disabled:cursor-not-allowed disabled:opacity-50">
+                <button onClick={downloadTemplate}
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
                   <Download size={13} /> Starter
                 </button>
                 <button onClick={() => fileRef.current?.click()} disabled={readOnly}
-                        title="Import a filled-in template — only its non-blank values take effect"
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300
-                                   px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50
-                                   disabled:cursor-not-allowed disabled:opacity-50">
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                   <Upload size={13} /> Import
                 </button>
                 <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
-                       onChange={(e) => {
-                         const f = e.target.files?.[0];
-                         if (f) importFile(f);
-                         e.target.value = "";   // allow re-importing the same file
-                       }} />
+                       onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
               </div>
             </div>
 
-            {/* Venue picker — sources the field list. */}
-            <div className="flex flex-wrap items-end gap-2 rounded-md border border-gray-200 p-3">
-              {isMsp && (
-                <label className="text-xs text-gray-700">
-                  <span className="block font-medium">Customer</span>
-                  <select value={ec} onChange={(e) => setEc(e.target.value)}
-                          className="mt-1 rounded-md border border-gray-300 px-2 py-1 text-sm">
-                    <option value="">Choose…</option>
-                    {(ecs || []).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-                  </select>
-                </label>
-              )}
-              <label className="text-xs text-gray-700">
-                <span className="block font-medium">Venue</span>
-                <select value={venue} disabled={!venues} onChange={(e) => setVenue(e.target.value)}
-                        className="mt-1 rounded-md border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-100">
-                  <option value="">{venues ? "Choose…" : "…"}</option>
-                  {(venues || []).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                </select>
+            {/* Filters. */}
+            <div className="flex flex-wrap items-center gap-3">
+              <input value={search} onChange={(e) => setSearch(e.target.value)}
+                     placeholder="Search settings…"
+                     className="min-w-0 flex-1 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm
+                                focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                <input type="checkbox" checked={setOnly} onChange={(e) => setSetOnly(e.target.checked)} />
+                Only set ({counts.values + counts.na})
               </label>
-              <button onClick={loadFields} disabled={!venue || loadingCat}
-                      className="mb-0.5 rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white
-                                 hover:bg-gray-900 disabled:cursor-not-allowed disabled:bg-gray-300">
-                {loadingCat ? "Loading…" : "Load this venue's fields"}
-              </button>
-              <p className="w-full text-[11px] text-gray-500">
-                The list below is only what this venue exposes — pick another
-                venue to surface fields it doesn't have.
-              </p>
+              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+                All fields
+              </label>
             </div>
 
-            {/* Review filter: see what the baseline currently says, without
-                hunting through collapsed categories. */}
-            {cats && (
-              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
-                <input type="checkbox" checked={setOnly}
-                       onChange={(e) => setSetOnly(e.target.checked)} />
-                Show only the fields I've set ({counts.values + counts.na})
-                <span className="text-gray-400">— from this venue's catalogue</span>
-              </label>
-            )}
+            {/* Optional venue overlay. */}
+            <div className="flex flex-wrap items-end gap-2 text-xs text-gray-600">
+              <span className="pb-1">Current values (optional):</span>
+              {isMsp && (
+                <select value={ec} onChange={(e) => setEc(e.target.value)}
+                        className="rounded-md border border-gray-300 px-2 py-1">
+                  <option value="">customer…</option>
+                  {(ecs || []).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+              )}
+              <select value={venue} disabled={!venues} onChange={(e) => setVenue(e.target.value)}
+                      className="rounded-md border border-gray-300 px-2 py-1 disabled:bg-gray-100">
+                <option value="">{venues ? "venue…" : "…"}</option>
+                {(venues || []).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              <button onClick={loadCurrent} disabled={!venue || loadingVenue}
+                      className="rounded-md border border-gray-300 px-2 py-1 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                {loadingVenue ? "Loading…" : current ? "Reload" : "Show current"}
+              </button>
+            </div>
 
-            {/* The editable grid. */}
-            {cats && cats.map((cat) => {
-              // In review mode, keep only rows that carry a recommendation, and
-              // drop a category that then has none.
-              const rows = setOnly
-                ? cat.rows.filter((r) => currentOf(r.baselineKey).mode !== "none")
-                : cat.rows;
-              if (setOnly && !rows.length) return null;
-              const isOpen = setOnly || open.has(cat.slug);   // auto-open in review
+            {/* The grid, from the static catalogue. */}
+            {groups.map((g) => {
+              const isOpen = setOnly || !!search || open.has(g.endpoint);
               return (
-                <div key={cat.slug} className="min-w-0 rounded-md border border-gray-200">
+                <div key={g.endpoint} className="min-w-0 rounded-md border border-gray-200">
                   <button onClick={() => setOpen((o) => {
-                            const n = new Set(o); n.has(cat.slug) ? n.delete(cat.slug) : n.add(cat.slug); return n;
+                            const n = new Set(o); n.has(g.endpoint) ? n.delete(g.endpoint) : n.add(g.endpoint); return n;
                           })}
-                          disabled={setOnly}
+                          disabled={setOnly || !!search}
                           className="flex w-full items-center gap-2 px-3 py-2 text-left disabled:cursor-default">
                     <ChevronRight size={14} className={`shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                    <span className="text-sm font-medium text-gray-900">{cat.label}</span>
-                    <span className="text-xs text-gray-400">{rows.length}</span>
+                    <span className="text-sm font-medium text-gray-900">{g.label}</span>
+                    <span className="text-xs text-gray-400">{g.rows.length}</span>
                   </button>
                   {isOpen && (
                     <div className="border-t border-gray-100 p-2 space-y-1">
-                      {rows.map((row) => {
-                        const cur = currentOf(row.baselineKey);
-                        const ref = ruckus[row.baselineKey];
+                      {g.rows.map(({ key, field }) => {
+                        const cur = currentOf(key);
+                        const ref = key in ruckus ? ruckus[key] : undefined;
+                        const nowVal = current?.[key];
                         return (
-                          <div key={row.baselineKey}
-                               className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded px-2 py-1.5 hover:bg-gray-50">
+                          <div key={key} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded px-2 py-1.5 hover:bg-gray-50">
                             <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm text-gray-800">{row.label}</div>
+                              <div className="truncate text-sm text-gray-800">{field.label}</div>
                               <div className="truncate text-[11px] text-gray-400">
-                                now: {row.valueText || "—"}
-                                {ref !== undefined && <> · RUCKUS: {valueToText(ref)}</>}
+                                {nowVal !== undefined && <>now: {nowVal || "—"} · </>}
+                                {ref !== undefined ? <>RUCKUS: {valueToText(ref)}</> : <span className="font-mono">{key}</span>}
                               </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-1 rounded border border-gray-200 p-0.5">
                               <button disabled={readOnly} className={seg(cur.mode === "value")}
-                                      onClick={() => setField(row.baselineKey, "value",
-                                        cur.value || row.valueText)}>Value</button>
+                                      onClick={() => setField(key, "value", cur.value || (nowVal ?? ""))}>Value</button>
                               <button disabled={readOnly} className={seg(cur.mode === "na")}
-                                      onClick={() => setField(row.baselineKey, "na", "")}>N/A</button>
+                                      onClick={() => setField(key, "na", "")}>N/A</button>
                               <button disabled={readOnly} className={seg(cur.mode === "none")}
-                                      onClick={() => setField(row.baselineKey, "none", "")}
-                                      title="Not reviewed — no recommendation shown">—</button>
+                                      onClick={() => setField(key, "none", "")} title="Not reviewed">—</button>
                             </div>
                             {cur.mode === "value" && (
-                              <input value={cur.value} disabled={readOnly}
-                                     onChange={(e) => setField(row.baselineKey, "value", e.target.value)}
-                                     placeholder={row.valueText}
-                                     className="w-28 shrink-0 rounded border border-gray-300 px-2 py-1 text-xs disabled:bg-gray-100" />
+                              <ValueInput field={field} value={cur.value} disabled={readOnly}
+                                          onChange={(v) => setField(key, "value", v)} placeholder={nowVal} />
                             )}
                           </div>
                         );
@@ -510,25 +457,24 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
                 </div>
               );
             })}
-            {cats && !cats.length && (
-              <p className="text-sm text-gray-500">This venue's config has no comparable settings.</p>
+            {!groups.length && (
+              <p className="text-sm text-gray-500">
+                {Object.keys(catalogue).length
+                  ? "No settings match."
+                  : "No field catalogue built — run scripts/build_field_catalogue.py."}
+              </p>
             )}
           </div>
         )}
 
         {loaded && (
           <div className="flex items-center justify-between gap-3 border-t border-gray-200 p-4">
-            <p className="text-xs text-gray-500">
-              {saved ? "Saved." : dirty ? "Unsaved changes." : "No changes."}
-            </p>
+            <p className="text-xs text-gray-500">{saved ? "Saved." : dirty ? "Unsaved changes." : "No changes."}</p>
             <div className="flex items-center gap-2">
               <button onClick={onClose}
-                      className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                Close
-              </button>
+                      className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Close</button>
               <button onClick={save} disabled={busy || readOnly || !dirty}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm
-                                 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300">
+                      className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300">
                 <Save size={14} /> {busy ? "Saving…" : "Save"}
               </button>
             </div>
@@ -537,4 +483,40 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+/** The value input for a field in Value mode — typed by the catalogue. */
+function ValueInput({ field, value, disabled, onChange, placeholder }: {
+  field: CatField; value: string; disabled?: boolean;
+  onChange: (v: string) => void; placeholder?: string;
+}) {
+  const cls = "w-32 shrink-0 rounded border border-gray-300 px-2 py-1 text-xs disabled:bg-gray-100";
+  if (field.type === "boolean")
+    return (
+      <select value={value || "true"} disabled={disabled} onChange={(e) => onChange(e.target.value)} className={cls}>
+        <option value="true">true</option>
+        <option value="false">false</option>
+      </select>
+    );
+  if (field.enum?.length)
+    return (
+      <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} className={cls}>
+        <option value="">choose…</option>
+        {field.enum.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
+  return (
+    <input value={value} disabled={disabled}
+           type={field.type === "integer" || field.type === "number" ? "number" : "text"}
+           onChange={(e) => onChange(e.target.value)} placeholder={placeholder || field.type}
+           className={cls} />
+  );
+}
+
+/** The catalogue type for a baseline key, for coercion on save. */
+function catalogueTypeOf(catalogue: Record<string, CatEndpoint>, key: string): string | undefined {
+  const dot = key.indexOf(".");
+  if (dot < 0) return undefined;
+  const ep = catalogue[key.slice(0, dot)];
+  return ep?.fields?.[key.slice(dot + 1)]?.type;
 }

@@ -102,6 +102,10 @@ async def get_baseline():
         "ruckus": baselines.ruckus_values(),
         "ruckusVerified": baselines.RUCKUS.describe().get("verified", False),
         "statuses": list(baselines.STATUSES),
+        # The static field catalogue: every settable field, so the editor can
+        # browse them without an admin loading a live venue first. Empty if the
+        # catalogue has not been built (the editor then falls back to a venue).
+        "catalogue": baselines.field_catalogue(),
     }
 
 

@@ -140,6 +140,33 @@ def test_ruckus_is_read_only_reference():
     assert not baselines.RUCKUS.is_na("anything")
 
 
+
+def test_field_catalogue_covers_endpoints_and_typed():
+    """
+    The static catalogue the editor browses. It must cover the venue-config
+    endpoints, carry usable types (so the editor picks the right input), and be
+    a superset of the RUCKUS keys — a recommendation can never key on a field
+    the catalogue does not know about. Regenerate it with
+    scripts/build_field_catalogue.py when the spec is reshipped.
+    """
+    cat = baselines.field_catalogue()
+    endpoints = (cat.get("levels", {}).get("venue", {}).get("endpoints", {}))
+    assert endpoints, "no catalogue built — run build_field_catalogue.py"
+
+    def field(ep, path):
+        return endpoints.get(ep, {}).get("fields", {}).get(path)
+
+    assert field("rogueApSettings", "enabled")["type"] == "boolean"
+    steering = field("apLoadBalancingSettings", "steeringMode")
+    assert steering["type"] == "string" and "BASIC" in steering.get("enum", [])
+    assert field("apRebootTimeoutSettings", "gatewayLossTimeout")["type"] == "integer"
+
+    # Every RUCKUS key must exist in the catalogue.
+    known = {f"{ep}.{path}"
+             for ep, e in endpoints.items() for path in e["fields"]}
+    for key in baselines.ruckus_values():
+        assert key in known, f"RUCKUS recommends {key!r} but the catalogue lacks it"
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

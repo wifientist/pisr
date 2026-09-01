@@ -65,6 +65,12 @@ logger = logging.getLogger(__name__)
 
 _RUCKUS_FILE = Path(__file__).resolve().parent / "baselines" / "ruckus.json"
 
+# The static field catalogue the editor browses — every settable field, keyed
+# like the baseline, with type/enum/label. Built from the OpenAPI spec by
+# scripts/build_field_catalogue.py and committed; the editor no longer has to
+# poll a live venue to discover fields. See that script's docstring.
+_CATALOGUE_FILE = Path(__file__).resolve().parent / "baselines" / "field_catalogue.json"
+
 # Sentinel for "this baseline says nothing about this setting", which is
 # different from "it recommends null".
 MISSING = object()
@@ -345,6 +351,29 @@ def save_org(values: Dict[str, Any], not_applicable: List[str],
              status: str, source: str, show: bool,
              actor: Optional[str]) -> Dict[str, Any]:
     return ORG.save(values, not_applicable, status, source, show, actor)
+
+
+_catalogue_cache: Optional[Dict[str, Any]] = None
+
+
+def field_catalogue() -> Dict[str, Any]:
+    """
+    The static field catalogue, loaded once and cached for the process.
+
+    A missing or unreadable file yields an empty catalogue rather than an
+    error: the editor falls back to loading a venue's fields, so an unbuilt
+    catalogue degrades to the old behaviour instead of breaking. Rebuild it
+    with scripts/build_field_catalogue.py when the spec is reshipped.
+    """
+    global _catalogue_cache
+    if _catalogue_cache is None:
+        try:
+            _catalogue_cache = json.loads(_CATALOGUE_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("baselines: no field catalogue (%s); the editor will "
+                           "fall back to loading a venue's fields.", exc)
+            _catalogue_cache = {}
+    return _catalogue_cache
 
 
 def ruckus_values() -> Dict[str, Any]:
