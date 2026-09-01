@@ -63,7 +63,7 @@ upstream copy. It is not.
   something needs to happen repeatedly, a person clicks the button.
 - **PISR stores nothing — of the tenant.** No snapshot files, no cache, no
   database, no report that outlives the response carrying it. It writes exactly
-  TWO files, both on the `pisr-config` volume, and neither holds anything
+  THREE files, all on the `pisr-config` volume, and none holds anything
   belonging to the customer whose network is being reported on:
 
   - the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`) — a
@@ -72,11 +72,15 @@ upstream copy. It is not.
   - local accounts at `PISR_ACCOUNTS_FILE` (`/data/accounts.json`), in
     `accounts` mode only — usernames, roles and scrypt hashes for the OPERATORS
     of the tool. See `api/accounts.py`.
+  - the org config baseline at `PISR_ORG_BASELINE_FILE`
+    (`/data/org-baseline.json`) — recommended values keyed by R1 path, edited by
+    an admin. No venue data: it is the customer's *agreed configuration*, not a
+    reading from their network. See `api/baselines.py`.
 
-  Guard the distinction rather than the file count. Both of these are
-  configuration with a portal in front of it; a customer's *report* is the
-  thing that must not be persisted, and if something later wants to keep one
-  there it is a different feature that has to make its own case.
+  Guard the distinction rather than the file count. All three are configuration
+  with a portal in front of them; a customer's *report* is the thing that must
+  not be persisted, and if something later wants to keep one there it is a
+  different feature that has to make its own case.
 
 ## The role policy, in four files
 
@@ -475,8 +479,35 @@ an upstream.
   "RUCKUS recommends" in front of an install crew is worse than an empty
   column — an empty column asks a question, a wrong one answers it.
 
-  **The customer's name is `PISR_ORG_NAME` and their baseline is a mounted
-  file.** Neither belongs in this repository. Unset, the column reads "Org".
+  **The customer's name is `PISR_ORG_NAME` and their baseline is on the volume
+  at `PISR_ORG_BASELINE_FILE`.** Neither belongs in this repository. Unset, the
+  column reads "Org".
+
+  **The org baseline has THREE states per field, and PISR writes it now.**
+  `api/baselines.py` + `api/routers/baseline_router.py` + the admin editor
+  (`src/pages/AdminBaseline.tsx`, the "Baselines" chip). A field is in `values`
+  (a recommended value, compared, may mismatch), in `notApplicable` (reviewed,
+  deliberately no recommendation — shown "—", NEVER a mismatch), or in neither
+  (unreviewed, no column). N.A. and unreviewed look identical to a reader but
+  are different to the admin maintaining the baseline, which is the whole reason
+  the third state exists — do not collapse them. `lookup` returns
+  `baselines.NOT_APPLICABLE` for the N.A. case and `shape._config_row` turns
+  that into a cell with `notApplicable: True` and NO `matches` key. The screen
+  renderer keys a mismatch off `matches === false` for exactly this reason — a
+  cell with no `matches` (N.A. or absent) must never count as differing. RUCKUS
+  has no N.A. concept and is never written: it is read-only reference from the
+  repo. The editor's field CATALOGUE comes from a live venue's `config
+  .categories`, not a hardcoded list, because R1's field set is dynamic (the
+  de-camelCase fallback in `config_labels` exists for the same reason). The save
+  is a whole-document replace, so the frontend seeds the working copy from the
+  ENTIRE stored baseline and overlays only the venue's visible fields —
+  otherwise saving from one venue would delete recommendations set from another.
+
+  **The config comparison table (org/RUCKUS columns) is screen-only.** The PDF
+  renders `config.venue-summary` but not `config.categories`, so the
+  `notApplicable` cell shape never reaches the template. If the PDF ever grows
+  the comparison table, it has to handle an org cell with `notApplicable` and no
+  `matches`.
 
 - **R1 returns live credentials in ordinary config responses.** Observed on a
   live tenant, unmarked and with no opt-out:

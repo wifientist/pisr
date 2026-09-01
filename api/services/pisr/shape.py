@@ -1555,6 +1555,13 @@ def _config_row(endpoint: str, parts: Tuple[str, ...], key: str,
         if who not in recommendations:
             continue
         expected = recommendations[who]
+        if expected is baselines.NOT_APPLICABLE:
+            # Reviewed, deliberately no recommendation (org only). A "—" cell
+            # with NO `matches` key, so the row is shown as intentionally blank
+            # and the mismatch tallies skip it — different from a value that
+            # happens to equal "—".
+            row[who] = {"notApplicable": True, "text": "—"}
+            continue
         row[who] = {
             "value": expected,
             "text": config_labels.format_value(key, expected),

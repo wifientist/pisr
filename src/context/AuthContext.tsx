@@ -1,10 +1,11 @@
 import {
   createContext, useCallback, useContext, useEffect, useState, type ReactNode,
 } from "react";
-import { Lock, LogOut, ShieldAlert, SlidersHorizontal, Users } from "lucide-react";
+import { Lock, LogOut, ShieldAlert, SlidersHorizontal, Target, Users } from "lucide-react";
 import { UNAUTHENTICATED_EVENT } from "@/utils/api";
 import AdminVisibility from "@/pages/AdminVisibility";
 import AdminAccounts from "@/pages/AdminAccounts";
+import AdminBaseline from "@/pages/AdminBaseline";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -423,6 +424,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [portalOpen, setPortalOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [baselineOpen, setBaselineOpen] = useState(false);
 
   // UP HERE WITH THE OTHER HOOKS, DELIBERATELY. This component returns early
   // three times below, and a useState added under one of those is called only
@@ -622,6 +624,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">People</span>
               </button>
             )}
+            {isAdmin && (
+              <button
+                onClick={() => setBaselineOpen(true)}
+                title="Edit the recommended configuration values"
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <Target size={13} className="shrink-0" />
+                <span className="hidden sm:inline">Baselines</span>
+              </button>
+            )}
             {status?.required && (canSignOut ? (
               <button
                 onClick={signOut}
@@ -658,6 +670,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         the next request, which is the honest outcome.
       */}
       {accountsOpen && <AdminAccounts onClose={() => setAccountsOpen(false)} />}
+      {baselineOpen && <AdminBaseline onClose={() => setBaselineOpen(false)} />}
     </AuthContext.Provider>
   );
 }

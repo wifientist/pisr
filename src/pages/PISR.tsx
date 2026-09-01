@@ -1782,7 +1782,7 @@ function ConfigGroup({ group, baselines, depth = 0 }: {
   const [open, setOpen] = useState(false);
   const rows: any[] = group.rows || [];
   const differing = rows.filter(
-    (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+    (r) => r.org?.matches === false || r.ruckus?.matches === false);
 
   return (
     <div className={`min-w-0 rounded border border-gray-200 ${depth ? "ml-3" : ""}`}>
@@ -1837,7 +1837,7 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
 
   const compared = rows.filter((r) => r.org || r.ruckus);
   const differing = compared.filter(
-    (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+    (r) => r.org?.matches === false || r.ruckus?.matches === false);
   const shown = onlyDiffs ? differing : rows;
 
   const hasOrg = rows.some((r) => r.org);
@@ -1845,6 +1845,10 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
 
   const cell = (rec: any) => {
     if (!rec) return <span className="text-gray-300">—</span>;
+    // Reviewed, deliberately no recommendation: a muted dash, not the amber of
+    // a mismatch. `matches` is absent here, so without this it would fall to
+    // the amber branch and read as a difference.
+    if (rec.notApplicable) return <span className="text-gray-400" title="Reviewed — no recommendation">—</span>;
     return (
       <span className={rec.matches ? "text-green-700" : "text-amber-800 font-medium"}>
         {rec.text}
@@ -1983,7 +1987,7 @@ function Config({ report, base, qs }: {
 
   const differingSlugs = slugsWhere((cat) =>
     (cat.rows || []).some((r: any) =>
-      (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches)));
+      r.org?.matches === false || r.ruckus?.matches === false));
 
   return (
     <div className="space-y-4">
@@ -2009,7 +2013,7 @@ function Config({ report, base, qs }: {
         const rows: any[] = cat.rows || [];
         const compared = rows.filter((r) => r.org || r.ruckus);
         const differing = compared.filter(
-          (r) => (r.org && !r.org.matches) || (r.ruckus && !r.ruckus.matches));
+          (r) => r.org?.matches === false || r.ruckus?.matches === false);
         return (
         <Card key={cat.slug} id={`config.${cat.slug}`} title={cat.label}
               hint={cat.hint || undefined}

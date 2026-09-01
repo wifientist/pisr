@@ -30,7 +30,8 @@ from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
 from routers import (  # noqa: E402
-    accounts_router, admin_router, config_router, msp_router, pisr_router)
+    accounts_router, admin_router, baseline_router, config_router, msp_router,
+    pisr_router)
 import accounts  # noqa: E402
 import visibility  # noqa: E402
 
@@ -203,6 +204,17 @@ if visibility.STORE.configured and not visibility.STORE.writable:
         "Mount a writable volume at its directory — see docker-compose.yml.",
         AUTH.visibility_file)
 
+import baselines  # noqa: E402
+if AUTH.org_baseline_file and not baselines.ORG.writable:
+    # Same failure mode as the visibility warning above, and worth its own line
+    # because the baseline editor now writes here too. Read-only means an admin
+    # can edit the recommendations and lose them at the next deploy.
+    logger.warning(
+        "Baseline: %s is not writable, so the recommendation editor is "
+        "read-only. Mount a writable volume at its directory, or leave "
+        "PISR_ORG_BASELINE_FILE unset to hide the column.",
+        AUTH.org_baseline_file)
+
 
 @app.get("/healthz")
 async def healthz():
@@ -249,6 +261,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(config_router.router, prefix="/api")
 app.include_router(admin_router.router, prefix="/api")
 app.include_router(accounts_router.router, prefix="/api")
+app.include_router(baseline_router.router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
 
