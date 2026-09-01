@@ -202,9 +202,10 @@ const pctText = (p: number | null | undefined) => (p === null || p === undefined
  * api/redact.py — see src/context/VisibilityContext.tsx. This removes the
  * container, not the contents.
  */
-function Card({ id, title, hint, right, icon, children, className = "",
+function Card({ id, title, titleBadge, hint, right, icon, children, className = "",
                 collapsible, open, onToggle }: {
-  id?: string; title?: string; hint?: string; right?: React.ReactNode;
+  id?: string; title?: string; titleBadge?: React.ReactNode; hint?: string;
+  right?: React.ReactNode;
   icon?: React.ReactNode; children: React.ReactNode; className?: string;
   /*
    * A collapsible card keeps its HEADER when closed — collapsed is a summary,
@@ -224,7 +225,7 @@ function Card({ id, title, hint, right, icon, children, className = "",
           : <ChevronRight size={15} className="mt-1 shrink-0 text-gray-400" />)}
         <div className="min-w-0">
           <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-            {icon}{title}
+            {icon}{title}{titleBadge}
           </h3>
           {hint && <p className="text-xs text-gray-500 mt-0.5">{hint}</p>}
         </div>
@@ -1879,9 +1880,6 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
               : `Show only the ${differing.length} that differ`}
           </button>
         )}
-        {!differing.length && !!compared.length && (
-          <Pill tone="green">all {compared.length} compared settings match</Pill>
-        )}
       </div>
 
       <div className="overflow-auto">
@@ -2024,18 +2022,17 @@ function Config({ report, base, qs }: {
         return (
         <Card key={cat.slug} id={`config.${cat.slug}`} title={cat.label}
               hint={cat.hint || undefined}
+              /* The amber "N differ" sits beside the title — it is the thing a
+                 reader scans a collapsed list for, so it belongs on the name,
+                 not lost at the far right. No "all match" badge: silence means
+                 match, and a row of green reassurance on every category is
+                 noise that makes the amber harder to spot. */
+              titleBadge={!!differing.length &&
+                <Pill tone="amber">{differing.length} differ</Pill>}
               collapsible open={openCats.has(cat.slug)}
               onToggle={() => toggleCat(cat.slug)}
               right={
-                /* The badges ARE the checklist when everything is closed:
-                   scan for amber, open only those. */
                 <span className="flex shrink-0 items-center gap-2">
-                  {!!differing.length && (
-                    <Pill tone="amber">{differing.length} differ</Pill>
-                  )}
-                  {!differing.length && !!compared.length && (
-                    <Pill tone="green">all match</Pill>
-                  )}
                   <span className="text-xs text-gray-400">{rows.length}</span>
                   <span className="hidden text-[11px] font-mono text-gray-400 break-all sm:inline">
                     {cat.source}
