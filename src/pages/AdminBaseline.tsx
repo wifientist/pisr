@@ -90,6 +90,10 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
   const [cats, setCats] = useState<Category[] | null>(null);
   const [loadingCat, setLoadingCat] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // "Show only fields I've set" — the review view. Off shows the whole
+  // catalogue; on shows only fields that carry a value or an N.A., which is
+  // how an admin sees what the current baseline actually says.
+  const [setOnly, setSetOnly] = useState(false);
   // baselineKey -> the admin's choice for it. Only CHANGED fields live here;
   // the stored baseline is the base and this is the overlay.
   const [edits, setEdits] = useState<Record<string, { mode: Mode; value: string }>>({});
@@ -436,22 +440,40 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               </p>
             </div>
 
+            {/* Review filter: see what the baseline currently says, without
+                hunting through collapsed categories. */}
+            {cats && (
+              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input type="checkbox" checked={setOnly}
+                       onChange={(e) => setSetOnly(e.target.checked)} />
+                Show only the fields I've set ({counts.values + counts.na})
+                <span className="text-gray-400">— from this venue's catalogue</span>
+              </label>
+            )}
+
             {/* The editable grid. */}
             {cats && cats.map((cat) => {
-              const isOpen = open.has(cat.slug);
+              // In review mode, keep only rows that carry a recommendation, and
+              // drop a category that then has none.
+              const rows = setOnly
+                ? cat.rows.filter((r) => currentOf(r.baselineKey).mode !== "none")
+                : cat.rows;
+              if (setOnly && !rows.length) return null;
+              const isOpen = setOnly || open.has(cat.slug);   // auto-open in review
               return (
                 <div key={cat.slug} className="min-w-0 rounded-md border border-gray-200">
                   <button onClick={() => setOpen((o) => {
                             const n = new Set(o); n.has(cat.slug) ? n.delete(cat.slug) : n.add(cat.slug); return n;
                           })}
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left">
+                          disabled={setOnly}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left disabled:cursor-default">
                     <ChevronRight size={14} className={`shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-90" : ""}`} />
                     <span className="text-sm font-medium text-gray-900">{cat.label}</span>
-                    <span className="text-xs text-gray-400">{cat.rows.length}</span>
+                    <span className="text-xs text-gray-400">{rows.length}</span>
                   </button>
                   {isOpen && (
                     <div className="border-t border-gray-100 p-2 space-y-1">
-                      {cat.rows.map((row) => {
+                      {rows.map((row) => {
                         const cur = currentOf(row.baselineKey);
                         const ref = ruckus[row.baselineKey];
                         return (
