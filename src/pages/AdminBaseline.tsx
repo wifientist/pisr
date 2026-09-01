@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, Loader2, Save, SlidersHorizontal, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronRight, Download, Loader2, Save, SlidersHorizontal, Upload, X,
+} from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -205,6 +207,79 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // ── download a template / import a filled one ─────────────────────
+  //
+  // The template is every field the loaded venue exposes — R1's field set is
+  // dynamic, so this is the only place "all possible values" comes from. Each
+  // entry carries the venue's current value and the RUCKUS reference for
+  // context, and an editable `value`/`na`. On import, ONLY entries with a
+  // filled `value` (or `na: true`) take effect; a blank one is skipped and
+  // leaves whatever is already set untouched — so a half-filled template adds
+  // to the baseline rather than wiping it.
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const downloadTemplate = () => {
+    if (!cats) return;
+    const fields: Record<string, unknown> = {};
+    for (const cat of cats) {
+      for (const row of cat.rows) {
+        const cur = currentOf(row.baselineKey);
+        fields[row.baselineKey] = {
+          label: row.label,
+          current: row.value,                               // reference only
+          ruckus: row.baselineKey in ruckus ? ruckus[row.baselineKey] : null,
+          value: cur.mode === "value" ? parseValue(cur.value) : null,
+          na: cur.mode === "na",
+        };
+      }
+    }
+    const template = {
+      _help: "Set `value` for a field to recommend it. Leave it null to skip " +
+             "(a blank field is left unchanged on import). Set `na` true to " +
+             "mark a field not-applicable. `current` and `ruckus` are reference " +
+             "only and are ignored on import.",
+      orgName, status, source, fields,
+    };
+    const blob = new Blob([JSON.stringify(template, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(orgName || "org").toLowerCase().replace(/\s+/g, "-")}-baseline-template.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importFile = (file: File) => {
+    setError(null);
+    file.text().then((text) => {
+      let doc: any;
+      try { doc = JSON.parse(text); }
+      catch { setError("That file is not valid JSON."); return; }
+      const fields = doc?.fields;
+      if (!fields || typeof fields !== "object") {
+        setError("No `fields` object in that file — download a template first.");
+        return;
+      }
+      const next: Record<string, { mode: Mode; value: string }> = { ...edits };
+      let applied = 0;
+      for (const [key, raw] of Object.entries<any>(fields)) {
+        // Accept either the template's object shape or a bare value, so a
+        // hand-authored `{"fields": {"key": true}}` works too.
+        const entry = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : { value: raw };
+        const v = entry.value;
+        if (entry.na === true) { next[key] = { mode: "na", value: "" }; applied++; }
+        else if (v !== null && v !== undefined && v !== "") {
+          next[key] = { mode: "value", value: valueToText(v) }; applied++;
+        }
+        // else: blank → skipped, leaving whatever is already set.
+      }
+      setEdits(next);
+      if (typeof doc.status === "string") setStatus(doc.status);
+      if (typeof doc.source === "string") setSource(doc.source);
+      setError(applied ? null : "Nothing to import — every field's `value` was blank.");
+    });
+  };
+
   const readOnly = Boolean(loaded && !loaded.writable);
   const dirty = Object.keys(edits).length > 0 || (loaded &&
     (status !== (loaded.status || "unverified") || source !== (loaded.source || "")));
@@ -273,6 +348,29 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
               <p className="pb-1 text-xs text-gray-500">
                 {counts.values} value(s) · {counts.na} not-applicable
               </p>
+              <div className="ml-auto flex items-center gap-2 pb-0.5">
+                <button onClick={downloadTemplate} disabled={!cats}
+                        title={cats ? "Download every field this venue exposes as a JSON template"
+                                    : "Load a venue's fields first"}
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300
+                                   px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50
+                                   disabled:cursor-not-allowed disabled:opacity-50">
+                  <Download size={13} /> Template
+                </button>
+                <button onClick={() => fileRef.current?.click()} disabled={readOnly}
+                        title="Import a filled-in template — only its non-blank values take effect"
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300
+                                   px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50
+                                   disabled:cursor-not-allowed disabled:opacity-50">
+                  <Upload size={13} /> Import
+                </button>
+                <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+                       onChange={(e) => {
+                         const f = e.target.files?.[0];
+                         if (f) importFile(f);
+                         e.target.value = "";   // allow re-importing the same file
+                       }} />
+              </div>
             </div>
 
             {/* Venue picker — sources the field list. */}
