@@ -3,28 +3,15 @@
   "status": "verified",
   "note": "RUCKUS's recommended configuration, shown to readers as the \"RUCKUS recommends\" column. Keep ONLY values confirmed against RUCKUS guidance here \u2014 a verified column is presented as authoritative, so an unconfirmed value is worse than an absent one. See api/baselines.py.",
   "source": "RUCKUS ONE configuration guidance",
-  "verifiedAt": "2026-09-01T19:45:18+00:00",
+  "verifiedAt": "2026-09-01T19:56:09+00:00",
   "values": {
-    "apDosProtectionSettings.enabled": true,
-    "apSmartMonitorSettings.enabled": true,
+    "apRadioSettings.radioParams24G.allowedChannels": [
+      "1",
+      "6",
+      "11"
+    ],
     "rogueApSettings.enabled": true,
-    "roguePolicySettings.networkProtection": true,
-    "apBssColoringSettings.bssColoringEnabled": true,
-    "syslogSettings.enabled": true,
-    "snmpAgentSettings.enableApSnmp": false,
-    "apTlsKeyEnhancedSettings.tlsKeyEnhancedModeEnabled": true,
-    "apMulticastDnsFencingSettings.enabled": false,
-    "apLoadBalancingSettings.enabled": true,
-    "apLoadBalancingSettings.bandBalancingEnabled": true,
-    "apLoadBalancingSettings.steeringMode": "BASIC",
-    "apClientAdmissionControlSettings.enable24G": false,
-    "apClientAdmissionControlSettings.enable50G": false,
     "apRebootTimeoutSettings.gatewayLossTimeout": 1800,
-    "apRebootTimeoutSettings.serverLossTimeout": 7200,
-    "apDirectedMulticastSettings.wiredEnabled": true,
-    "apDirectedMulticastSettings.wirelessEnabled": true,
-    "apDirectedMulticastSettings.networkEnabled": true,
-    "apRadioSettings.method": "CHANNELFLY",
-    "ledSettings.ledEnabled": true
+    "apRebootTimeoutSettings.serverLossTimeout": 7200
   }
 }
