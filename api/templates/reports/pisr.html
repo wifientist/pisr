@@ -296,21 +296,26 @@
 {% endif %}
 
 {% if visible('overview.verification') %}
-{% if punchlist_shown %}
-<h2>Checks that passed</h2>
-<p class="note">Everything asking for action is in the punch list above; this is
-  the other half of the record — what was examined and found correct. A review
-  is only evidence if it says what it looked at, not just what was wrong.</p>
-{% else %}
+{#  Findings kept OFF the punch list (floor plans) are shown here even when the
+    punch list has collapsed the rest of the Overview findings — so a
+    documentation notice is not lost between the two. Everything else actionable
+    is in the punch list. #}
+{% set overview_only = findings_actionable | selectattr("id", "in", punchlist.overviewOnly) | list %}
+{% set shown_findings = overview_only if punchlist_shown else findings_actionable %}
+
+{% if not punchlist_shown %}
 <h2>Findings</h2>
 <p class="note">Every check that ran, most serious first. Findings that ask something of
   you come first with their full evidence; the checks that came back clean are listed
   after them, so the report records what was examined as well as what was wrong.</p>
+{% elif overview_only %}
+<h2>Also noted</h2>
+<p class="note">Documentation items flagged for the record — not a crew visit. The
+  actionable work is in the punch list above.</p>
 {% endif %}
 
-{% if not punchlist_shown %}
-{% if findings_actionable %}
-{% for f in findings_actionable %}
+{% if shown_findings %}
+{% for f in shown_findings %}
 <div class="finding {{ f.severity }}">
   <div class="t"><span class="pill {{ f.severity }}">{{ f.severity }}</span> {{ f.title }}</div>
   {% if f.check and f.check != f.title %}<div class="c">check: {{ f.check }}</div>{% endif %}
@@ -334,12 +339,11 @@
   {% endif %}
 </div>
 {% endfor %}
-{% else %}
+{% elif not punchlist_shown %}
 <div class="finding ok">
   <div class="t"><span class="pill ok">ok</span> Nothing to act on</div>
   <div class="d">No check returned a critical, warning or informational finding.</div>
 </div>
-{% endif %}
 {% endif %}
 
 {#  With the punch list above, the skipped checks are already listed there
@@ -347,7 +351,12 @@
 {% set clear_shown = findings_clear | selectattr("severity", "equalto", "ok") | list
                      if punchlist_shown else findings_clear %}
 {% if clear_shown %}
-{% if not punchlist_shown %}
+{% if punchlist_shown %}
+<h2>Checks that passed</h2>
+<p class="note">Everything asking for action is in the punch list above; this is
+  the other half of the record — what was examined and found correct. A review
+  is only evidence if it says what it looked at, not just what was wrong.</p>
+{% else %}
 <h3 class="sub">Checks that came back clean
   <span style="font-weight:400;color:#6b7280;font-size:10px">
     — {{ counts.ok or 0 }} passed{% if counts.skipped %}, {{ counts.skipped }} not applicable{% endif %}</span></h3>
@@ -363,9 +372,9 @@
 {% endif %}
 {% endif %}
 
-{#  Dropped when the punch list ran: every alarm is already a task in its
-    "RUCKUS ONE alarms" group, with the same device and timestamp. #}
-{% if visible('overview.incidents') and incidents.total and not punchlist_shown %}
+{#  Always shown now: alarms are no longer re-cut into the punch list, so this
+    table is the only place they appear and never duplicates it. #}
+{% if visible('overview.incidents') and incidents.total %}
 <h2>RUCKUS ONE alarms</h2>
 <p class="note">Raised by RUCKUS ONE itself, not by the checks above — the
   platform's view of whether this venue is healthy right now, as opposed to

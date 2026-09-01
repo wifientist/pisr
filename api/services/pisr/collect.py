@@ -303,7 +303,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
     # Built last, because it is a re-cut of the two sections above rather than
     # a source of anything: findings grouped by trade instead of by subsystem,
     # for the crew finishing the site rather than the engineer reading it.
-    report["punchlist"] = punchlist.build(report["verification"], report["incidents"])
+    report["punchlist"] = punchlist.build(report["verification"])
 
     report["meta"] = {
         "venueId": venue_id,

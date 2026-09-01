@@ -230,6 +230,6 @@ def redact(report: Dict[str, Any], hidden_ids: Iterable[str]) -> Dict[str, Any]:
                            for path in section_catalogue.paths_for(hidden))
     if not punchlist_hidden and isinstance(redacted.get("punchlist"), dict):
         redacted["punchlist"] = punchlist_builder.build(
-            redacted.get("verification") or {}, redacted.get("incidents") or {})
+            redacted.get("verification") or {})
 
     return redacted

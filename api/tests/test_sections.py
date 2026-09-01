@@ -623,7 +623,10 @@ def test_every_check_has_a_category():
     looks — but it should be a fallback, not how checks normally arrive.
     """
     known = set(_check_ids_in_checks_py())
-    uncategorised = sorted(known - set(punchlist_builder.CHECK_CATEGORY))
+    # PUNCHLIST_EXCLUDE checks (floor plans) are Overview-only and deliberately
+    # have no punch-list category, so they are not "uncategorised".
+    uncategorised = sorted(known - set(punchlist_builder.CHECK_CATEGORY)
+                           - set(punchlist_builder.PUNCHLIST_EXCLUDE))
     assert not uncategorised, (
         f"checks with no punch-list category: {uncategorised}")
 
@@ -646,14 +649,14 @@ def _f(check_id, severity, evidence=None):
 def test_passes_are_counted_not_listed():
     """A punch list of things already done is a report, not a list."""
     out = punchlist_builder.build(
-        _verification(_f("aps-online", "ok"), _f("port-errors", "critical")), {})
+        _verification(_f("aps-online", "ok"), _f("port-errors", "critical")))
     assert out["passed"] == 1
     assert out["total"] == 1
     assert [t["id"] for g in out["groups"] for t in g["tasks"]] == ["port-errors"]
 
 
 def test_skipped_is_listed_separately_not_as_a_pass():
-    out = punchlist_builder.build(_verification(_f("dhcp-pools", "skipped")), {})
+    out = punchlist_builder.build(_verification(_f("dhcp-pools", "skipped")))
     assert out["total"] == 0 and out["passed"] == 0
     assert [r["id"] for r in out["skipped"]] == ["dhcp-pools"]
 
@@ -663,18 +666,26 @@ def test_groups_follow_install_order_and_severity():
         _f("ap-naming", "info"),        # documentation, last group
         _f("port-errors", "warning"),   # cabling
         _f("aps-online", "critical"),   # devices, first group
-    ), {})
+    ))
     assert [g["key"] for g in out["groups"]] == ["devices", "cabling", "documentation"]
 
 
-def test_alarms_become_tasks_in_their_own_group():
-    out = punchlist_builder.build(_verification(), {"rows": [
-        {"id": "a1", "severity": "Major", "text": "AP x disconnected",
-         "device": "ap-1", "serial": "S1", "entityType": "AP", "type": "ApDisConnected",
-         "raisedAt": "2026-08-01T00:00:00+00:00"}]})
-    group = next(g for g in out["groups"] if g["key"] == "alarms")
-    assert group["tasks"][0]["severity"] == "critical", "R1 Major means go and look"
-    assert group["devices"] == ["ap-1"]
+def test_alarms_are_not_in_the_punchlist():
+    """Alarms live on Overview now, not re-cut into the punch list. build()
+    takes only the verification — there is no alarms group."""
+    out = punchlist_builder.build(_verification(_f("aps-online", "critical")))
+    assert not any(g["key"] == "alarms" for g in out["groups"])
+
+
+def test_floorplans_is_excluded_from_the_punchlist():
+    """Floor plans are an Overview notice, not a crew visit — kept off the
+    punch list even when they fire, so they never become a task."""
+    out = punchlist_builder.build(_verification(
+        _f("floorplans", "warning"), _f("aps-online", "critical")))
+    ids = [t["id"] for g in out["groups"] for t in g["tasks"]]
+    assert "floorplans" not in ids
+    assert "aps-online" in ids
+    assert out["overviewOnly"] == ["floorplans"]
 
 
 def test_devices_to_visit_are_deduplicated():
@@ -682,7 +693,7 @@ def test_devices_to_visit_are_deduplicated():
     out = punchlist_builder.build(_verification(
         _f("aps-online", "critical", [{"ap": "ap-1"}, {"ap": "ap-2"}]),
         _f("ap-uplink-speed", "warning", [{"ap": "ap-1"}]),
-    ), {})
+    ))
     assert out["deviceCount"] == 2
 
 
@@ -694,8 +705,7 @@ def test_redact_rebuilds_the_punchlist_from_filtered_findings():
     """
     report = _sample_report()
     report["incidents"] = {"rows": []}
-    report["punchlist"] = punchlist_builder.build(report["verification"],
-                                                  report["incidents"])
+    report["punchlist"] = punchlist_builder.build(report["verification"])
     assert any(t["id"] == "poe-budget"
                for g in report["punchlist"]["groups"] for t in g["tasks"])
 
@@ -707,8 +717,7 @@ def test_redact_rebuilds_the_punchlist_from_filtered_findings():
 def test_hiding_the_punchlist_does_not_repopulate_it():
     report = _sample_report()
     report["incidents"] = {"rows": []}
-    report["punchlist"] = punchlist_builder.build(report["verification"],
-                                                  report["incidents"])
+    report["punchlist"] = punchlist_builder.build(report["verification"])
     out = redact.redact(report, ["punchlist.tasks"])
     assert out["punchlist"] == {}, "rebuilding must not undo the emptying"
 

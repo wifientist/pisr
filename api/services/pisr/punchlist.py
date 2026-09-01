@@ -47,12 +47,18 @@ CATEGORIES: Tuple[Tuple[str, str, str], ...] = (
      "Management VLAN, DHCP, subnets and VLANs carried on the wire."),
     ("identity", "Identity & policy",
      "DPSK pools, identity groups, adaptive policy and RADIUS."),
-    ("alarms", "RUCKUS ONE alarms",
-     "Raised by the platform itself rather than by PISR's checks."),
+    # RUCKUS ONE alarms are NOT a punch-list group: the platform raises them and
+    # they already have their own place on Overview beside Verification. Re-cutting
+    # them here duplicated them, so the punch list stays PISR's own findings only.
     ("documentation", "Documentation & handover",
-     "Naming and floor-plan placement. Does not stop the site working, and is "
-     "the group that never gets done after the crew leaves."),
+     "Naming placement. Does not stop the site working, and is the group that "
+     "never gets done after the crew leaves."),
 )
+
+# Checks kept OFF the punch list and shown on Overview only. Floor plans are a
+# documentation notice, not a visit a crew plans around — flagged on Overview
+# where an admin reviews the venue, not filed as a task with a ladder.
+PUNCHLIST_EXCLUDE = frozenset({"floorplans"})
 
 CATEGORY_ORDER = {key: index for index, (key, _, _) in enumerate(CATEGORIES)}
 CATEGORY_LABELS = {key: (label, blurb) for key, label, blurb in CATEGORIES}
@@ -100,7 +106,8 @@ CHECK_CATEGORY: Dict[str, str] = {
     # Documentation & handover
     "ap-naming": "documentation",
     "ap-placement": "documentation",
-    "floorplans": "documentation",
+    # "floorplans" is deliberately absent — it is in PUNCHLIST_EXCLUDE, shown on
+    # Overview only, not a punch-list task.
 }
 
 # Only these ask something of the reader. "ok" is done and "skipped" is neither
@@ -127,30 +134,15 @@ def _task_from_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _task_from_alarm(alarm: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "id": alarm.get("id"),
-        "source": "alarm",
-        "category": "alarms",
-        # R1's severities are its own vocabulary; map onto PISR's so one list
-        # can be sorted. Major and Critical both mean "go and look".
-        "severity": {"critical": "critical", "major": "critical",
-                     "minor": "warning", "warning": "warning"}.get(
-                         str(alarm.get("severity") or "").lower(), "info"),
-        "title": alarm.get("text") or alarm.get("type") or "Alarm",
-        "summary": (f"RUCKUS ONE raised this against "
-                    f"{alarm.get('device') or 'a device'}"
-                    + (f" on {alarm.get('raisedAt')[:10]}." if alarm.get("raisedAt") else ".")),
-        "detail": alarm.get("type"),
-        "evidence": [{"device": alarm.get("device"), "serial": alarm.get("serial"),
-                      "type": alarm.get("entityType"), "raised": alarm.get("raisedAt")}],
-        "count": 1,
-    }
 
 
-def build(verification: Dict[str, Any], incidents: Dict[str, Any]) -> Dict[str, Any]:
+def build(verification: Dict[str, Any]) -> Dict[str, Any]:
     """
     One list of outstanding work, grouped by trade and ordered by severity.
+
+    PISR's own findings only — R1 alarms live on Overview, not here, and the
+    checks in PUNCHLIST_EXCLUDE (floor plans) are Overview notices rather than
+    visits a crew plans around.
 
     Passes are counted, not listed — a punch list of things that are already
     done is a report, not a list. Skipped checks ARE listed, separately: a
@@ -160,8 +152,8 @@ def build(verification: Dict[str, Any], incidents: Dict[str, Any]) -> Dict[str, 
     findings = (verification or {}).get("findings") or []
 
     tasks = [_task_from_finding(f) for f in findings
-             if f.get("severity") in ACTIONABLE]
-    tasks += [_task_from_alarm(a) for a in (incidents or {}).get("rows") or []]
+             if f.get("severity") in ACTIONABLE
+             and f.get("id") not in PUNCHLIST_EXCLUDE]
 
     tasks.sort(key=lambda t: (CATEGORY_ORDER.get(t["category"], 99),
                               SEVERITY_RANK.get(t["severity"], 9),
@@ -199,4 +191,8 @@ def build(verification: Dict[str, Any], incidents: Dict[str, Any]) -> Dict[str, 
         "skipped": skipped,
         # Everything a crew would have to visit, across every group.
         "deviceCount": len({d for g in groups for d in g["devices"]}),
+        # Check ids kept off the punch list and shown on Overview instead, so the
+        # PDF can render them there even when the punch list has collapsed the
+        # rest of the Overview findings.
+        "overviewOnly": sorted(PUNCHLIST_EXCLUDE),
     }
