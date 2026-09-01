@@ -1782,8 +1782,10 @@ function ConfigGroup({ group, baselines, depth = 0 }: {
 }) {
   const [open, setOpen] = useState(false);
   const rows: any[] = group.rows || [];
-  const differing = rows.filter(
-    (r) => r.org?.matches === false || r.ruckus?.matches === false);
+  // Suppressed when recommendations are off — same as the category badge.
+  const showRec = baselines?.show ?? true;
+  const differing = showRec ? rows.filter(
+    (r) => r.org?.matches === false || r.ruckus?.matches === false) : [];
 
   return (
     <div className={`min-w-0 rounded border border-gray-200 ${depth ? "ml-3" : ""}`}>
@@ -1836,16 +1838,12 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
     );
   }
 
-  const compared = rows.filter((r) => r.org || r.ruckus);
-  const differing = compared.filter(
-    (r) => r.org?.matches === false || r.ruckus?.matches === false);
-  const shown = onlyDiffs ? differing : rows;
-
   // Both columns are gated on ONE global switch — `config.baselines.show`, the
   // admin's "show recommendations?" toggle. When it is on, the columns are
   // present for EVERY setting (with "—" where this field has no recommendation),
   // so the layout is stable rather than blinking per-category. When off, neither
-  // column appears anywhere and the values are simply not shown.
+  // column appears anywhere, and every "N differ" signal goes with them —
+  // there is nothing to differ from.
   //
   // The org column shows even when the admin has set NOTHING yet — an empty
   // column with a "not set" caption on the header, so a reader can see the
@@ -1855,6 +1853,11 @@ function ConfigRows({ rows, baselines, presentCount, totalCount, groups }: {
   const hasOrg = showRec;
   const hasRuckus = showRec;
   const orgEmpty = !baselines?.org?.active;
+
+  const compared = rows.filter((r) => r.org || r.ruckus);
+  const differing = showRec ? compared.filter(
+    (r) => r.org?.matches === false || r.ruckus?.matches === false) : [];
+  const shown = onlyDiffs ? differing : rows;
 
   const cell = (rec: any) => {
     if (!rec) return <span className="text-gray-300">—</span>;
@@ -2002,9 +2005,15 @@ function Config({ report, base, qs }: {
   const slugsWhere = (test: (cat: any) => boolean) =>
     new Set(categories.filter(test).map((c) => c.slug));
 
-  const differingSlugs = slugsWhere((cat) =>
+  // With recommendations off, there is nothing to differ FROM, so every
+  // "N differ" signal disappears: no badges, no "open the ones with
+  // differences", no diff toggle inside a category. The comparison still
+  // exists in the payload; the reader simply does not surface it.
+  const showRec = config.baselines?.show ?? true;
+
+  const differingSlugs = showRec ? slugsWhere((cat) =>
     (cat.rows || []).some((r: any) =>
-      r.org?.matches === false || r.ruckus?.matches === false));
+      r.org?.matches === false || r.ruckus?.matches === false)) : new Set();
 
   return (
     <div className="space-y-4">
@@ -2029,8 +2038,8 @@ function Config({ report, base, qs }: {
       {categories.map((cat) => {
         const rows: any[] = cat.rows || [];
         const compared = rows.filter((r) => r.org || r.ruckus);
-        const differing = compared.filter(
-          (r) => r.org?.matches === false || r.ruckus?.matches === false);
+        const differing = showRec ? compared.filter(
+          (r) => r.org?.matches === false || r.ruckus?.matches === false) : [];
         return (
         <Card key={cat.slug} id={`config.${cat.slug}`} title={cat.label}
               hint={cat.hint || undefined}
