@@ -531,7 +531,10 @@ export default function PISR() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("punchlist");
   const [deviceFilter, setDeviceFilter] = useState("");
-  const [showPasses, setShowPasses] = useState(false);
+  // Passes shown by default — an install review wants to see what WAS checked
+  // and passed, not just the exceptions; the button collapses them to the
+  // failures when the reader only wants the exceptions.
+  const [showPasses, setShowPasses] = useState(true);
 
   const base = `${API_BASE_URL}/pisr/${activeControllerId}`;
 
