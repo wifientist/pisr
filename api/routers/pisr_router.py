@@ -275,46 +275,83 @@ async def get_config_detail(request: Request,
 
     role = role_of(request)
     hidden = visibility.hidden_for(role)
-    if "config.ap-overrides" in hidden and "config.ap-groups" in hidden:
-        # Both halves hidden means the button is not rendered for this reader,
-        # so a request here is either a stale tab or somebody trying the URL.
-        # 403 rather than an empty list: an empty result would read as "this
-        # venue has no AP groups", which is a different and untrue statement.
+    if ({"config.ap-overrides", "config.ap-groups", "config.networks"} <= set(hidden)):
+        # Every section of the detail hidden means the button is not rendered for
+        # this reader, so a request here is either a stale tab or somebody trying
+        # the URL. 403 rather than an empty list: an empty result would read as
+        # "this venue has no AP groups or networks", which is a different and
+        # untrue statement.
         raise HTTPException(403, "Configuration detail is not shown at this "
                                  "access level.")
 
     r1 = build_r1_client(cfg)
     # to_thread like every other fetch here: the fetch layer is synchronous
     # requests, and PISR fans out through threads rather than an async client.
-    groups = await asyncio.to_thread(fetch_ap_groups, r1, override, venue_id)
+    #
+    # TWO WAVES, not six stages. The groups, the APs and the activated networks
+    # are independent listings, so they are read together; then every per-object
+    # read — each group's sub-resources, each AP, each network — goes out in one
+    # gather. Run in sequence, with the group reads serial inside one thread,
+    # a per-unit MDU could take minutes — past Cloudflare's 100-second origin
+    # timeout, which the browser sees as an HTTP 524. Everything still goes through the one default
+    # executor, so the R1 connection pool's bound holds — see the note on
+    # venue_config_one before reaching for a pool of your own.
+    groups, aps, activations = await asyncio.gather(
+        asyncio.to_thread(fetch_ap_groups, r1, override, venue_id),
+        asyncio.to_thread(fetch_module.access_points, r1, override, venue_id),
+        # The config side of "which SSIDs are deployed here", so it names the
+        # networks worth reading rather than every network on the tenant.
+        asyncio.to_thread(fetch_module.venue_activations, r1, override, venue_id))
+
+    group_total = len(groups)
+    groups = groups[:fetch_module.AP_GROUP_CONFIG_LIMIT]
     group_ids = [g.get("id") for g in groups if g.get("id")]
-
-    group_config = {}
-    if group_ids:
-        group_config = await asyncio.to_thread(
-            fetch_module.ap_group_config, r1, override, venue_id, group_ids)
-
-    aps = await asyncio.to_thread(fetch_module.access_points, r1, override, venue_id)
     serials = [ap.get("serialNumber") for ap in aps
                if ap.get("serialNumber")][:fetch_module.AP_CONFIG_LIMIT]
+    network_ids = list(dict.fromkeys(
+        a.get("networkId") for a in activations if a.get("networkId")))
+    capped_ids = network_ids[:fetch_module.NETWORK_CONFIG_LIMIT]
 
-    ap_config = {}
-    if serials:
-        results = await asyncio.gather(
-            *(asyncio.to_thread(fetch_module.ap_config, r1, override, serial)
-              for serial in serials),
-            return_exceptions=True)
-        for serial, result in zip(serials, results):
-            if not isinstance(result, Exception):
-                ap_config[serial] = result
-            else:
-                logger.warning("pisr: AP config failed for %s: %s", serial, result)
+    reads = {}
+    for gid in group_ids:
+        for key in ("detail", *fetch_module.AP_GROUP_CONFIG_SOURCES):
+            reads[("group", gid, key)] = (fetch_module.ap_group_config_one,
+                                          r1, override, venue_id, gid, key)
+    for serial in serials:
+        reads[("ap", serial)] = (fetch_module.ap_config, r1, override, serial)
+    for nid in capped_ids:
+        reads[("network", nid)] = (fetch_module.network_config, r1, override, nid)
 
-    detail = shape_module.config_detail(groups, group_config, ap_config, len(aps))
+    results = await asyncio.gather(
+        *(asyncio.to_thread(*call) for call in reads.values()),
+        return_exceptions=True)
+
+    group_config: Dict[str, Dict[str, Any]] = {gid: {} for gid in group_ids}
+    ap_config: Dict[str, Any] = {}
+    network_config: Dict[str, Any] = {}
+    for tag, result in zip(reads, results):
+        if isinstance(result, Exception):
+            logger.warning("pisr: config detail read %s failed: %s",
+                           " ".join(map(str, tag)), result)
+            if tag[0] == "group":
+                # A failed sub-resource is a missing block, as a non-2xx already
+                # is inside _json; the group itself is still listed.
+                group_config[tag[1]][tag[2]] = None
+            continue
+        if tag[0] == "group":
+            group_config[tag[1]][tag[2]] = result
+        elif tag[0] == "ap":
+            ap_config[tag[1]] = result
+        else:
+            network_config[tag[1]] = result
+
+    detail = shape_module.config_detail(groups, group_config, ap_config, len(aps),
+                                        network_config, len(network_ids),
+                                        group_total=group_total)
     logger.info("pisr: config detail for venue=%s user=%s role=%s "
-                "(%d group(s), %d AP(s), %d override(s))",
+                "(%d group(s), %d AP(s), %d network(s), %d override(s))",
                 venue_id, getattr(request.state, "pisr_user", "-"), role,
-                len(detail["groups"]), detail["apShown"],
+                len(detail["groups"]), detail["apShown"], detail["networkShown"],
                 detail["groupOverrideCount"] + detail["apOverrideCount"])
 
     # Scrubbed like everything else. `/venues/aps/{serial}` is the safe path —

@@ -379,6 +379,12 @@ AP_GROUP_CONFIG_SOURCES = {
 # the UI can say the list is partial instead of implying it is complete.
 AP_CONFIG_LIMIT = 100
 
+# Per AP-group, the same reasoning at eight calls a group (the group itself
+# plus AP_GROUP_CONFIG_SOURCES). A per-unit MDU has hundreds of groups, and
+# uncapped they alone can push the on-demand route past Cloudflare's 100-second
+# origin timeout (HTTP 524). Reported in the payload like the AP cap.
+AP_GROUP_CONFIG_LIMIT = 50
+
 
 def venue_config_one(r1, tenant_id: Optional[str], venue_id: str,
                      key: str) -> Any:
@@ -442,19 +448,24 @@ def radius_server_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]
     return cleaned
 
 
-def ap_group_config(r1, tenant_id: Optional[str], venue_id: str,
-                    group_ids: List[str]) -> Dict[str, Any]:
-    """Group detail plus the sub-resources that carry a useVenueSettings flag."""
-    out: Dict[str, Any] = {}
-    for group_id in group_ids:
-        base = f"/venues/{venue_id}/apGroups/{group_id}"
-        entry: Dict[str, Any] = {
-            "detail": _json(_get(r1, base, tenant_id), f"apGroup {group_id}", None)}
-        for key, path in AP_GROUP_CONFIG_SOURCES.items():
-            entry[key] = _json(_get(r1, f"{base}/{path}", tenant_id),
-                               f"apGroup {group_id} {path}", None)
-        out[group_id] = entry
-    return out
+def ap_group_config_one(r1, tenant_id: Optional[str], venue_id: str,
+                        group_id: str, key: str) -> Any:
+    """
+    ONE read for one AP group: `detail` for the group itself, otherwise a key
+    of AP_GROUP_CONFIG_SOURCES.
+
+    One call per invocation for the reason `venue_config_one` gives. A loop over
+    every group and sub-resource ran them serially in a single thread — eight
+    round trips per group, uncapped — which on a per-unit MDU is minutes and
+    ends in a 524 from the tunnel. The route fans these out through the one
+    default executor instead, beside the per-AP and per-network reads.
+    """
+    base = f"/venues/{venue_id}/apGroups/{group_id}"
+    if key == "detail":
+        return _json(_get(r1, base, tenant_id), f"apGroup {group_id}", None)
+    path = AP_GROUP_CONFIG_SOURCES[key]
+    return _json(_get(r1, f"{base}/{path}", tenant_id),
+                 f"apGroup {group_id} {path}", None)
 
 
 def ap_config(r1, tenant_id: Optional[str], serial: str) -> Optional[Dict[str, Any]]:
@@ -591,6 +602,29 @@ def wifi_networks(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
                        "the tenant may have more", NETWORK_PAGE_LIMIT, len(out))
 
     return out
+
+
+# Per network object, on demand. `GET /wifiNetworks/{id}` returns the FULL,
+# polymorphic network config — security, VLAN, the whole wlan.* tree and, for a
+# guest network, the portal. One call per network, and a per-unit-SSID property
+# has hundreds, so the Config-detail route caps it exactly as it caps per-AP
+# reads. The cap is surfaced in the payload so the tab can say the list is
+# partial rather than implying it is complete.
+NETWORK_CONFIG_LIMIT = 60
+
+
+def network_config(r1, tenant_id: Optional[str], network_id: str) -> Optional[Dict[str, Any]]:
+    """
+    One network's full configuration, by id. The response is the polymorphic
+    WifiNetwork object; its settable fields live under `wlan.*` and the security
+    block, which is what the network-level baseline is compared against.
+
+    It CAN carry secrets — a guest network's portal keys and social-login app
+    secrets — so the Config-detail route scrubs the whole payload, the same
+    backstop that covers the AP and switch reads.
+    """
+    return _json(_get(r1, f"/wifiNetworks/{network_id}", tenant_id),
+                 f"network config {network_id}", None)
 
 
 def venue_activations(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, Any]]:

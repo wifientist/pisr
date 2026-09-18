@@ -1450,8 +1450,9 @@ def _override_flags(node: Any) -> List[str]:
 
 
 def _config_rows(node: Any, endpoint: str, parts: Tuple[str, ...] = (),
-                 depth: int = 0,
-                 literals: Optional[set] = None) -> List[Dict[str, Any]]:
+                 depth: int = 0, literals: Optional[set] = None,
+                 level: str = baselines.DEFAULT_LEVEL,
+                 group: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     A settings blob flattened into labelled rows, ready to compare.
 
@@ -1494,9 +1495,10 @@ def _config_rows(node: Any, endpoint: str, parts: Tuple[str, ...] = (),
                 isinstance(value, list)
                 and all(not isinstance(v, (dict, list)) for v in value))
             if structured:
-                rows.extend(_config_rows(value, endpoint, here, depth + 1, literals))
+                rows.extend(_config_rows(value, endpoint, here, depth + 1,
+                                         literals, level, group))
                 continue
-            rows.append(_config_row(endpoint, here, key, value))
+            rows.append(_config_row(endpoint, here, key, value, level, group))
         return rows
 
     if isinstance(node, list):
@@ -1509,10 +1511,10 @@ def _config_rows(node: Any, endpoint: str, parts: Tuple[str, ...] = (),
                 if anchor:
                     literals.add(segment)
                 rows.extend(_config_rows(item, endpoint, parts + (segment,),
-                                         depth + 1, literals))
+                                         depth + 1, literals, level, group))
             else:
                 rows.append(_config_row(endpoint, parts + (f"[{index}]",),
-                                        parts[-1] if parts else "", item))
+                                        parts[-1] if parts else "", item, level, group))
         return rows
 
     return rows
@@ -1591,18 +1593,25 @@ def _group_config_rows(rows: List[Dict[str, Any]], depth: int = 0,
 
 
 def _config_row(endpoint: str, parts: Tuple[str, ...], key: str,
-                value: Any) -> Dict[str, Any]:
+                value: Any, level: str = baselines.DEFAULT_LEVEL,
+                group: Optional[str] = None) -> Dict[str, Any]:
     """
-    One setting, with whatever the baselines say about it.
+    One setting, with whatever the baselines say about it AT `level`.
 
     The baseline key is `<endpoint>.<dotted path>` — the R1 path, not the
     label. Labels are prose and change; a baseline keyed to prose drifts
     silently, which for a "recommended value" column means quietly comparing
-    against nothing.
+    against nothing. The LEVEL (venue / apgroup) is the other half of the
+    lookup: venue and AP-group share endpoint names, so the same key at two
+    levels is two different recommendations. Venue callers pass nothing.
+
+    `group` (network level only) selects a network group's recommendations over
+    the network default, per key — so a per-unit SSID group compares against its
+    own recs where it has them and the default everywhere else.
     """
     path = ".".join(parts)
     baseline_key = f"{endpoint}.{path}"
-    recommendations = baselines.lookup(baseline_key)
+    recommendations = baselines.lookup(baseline_key, level, group)
 
     row: Dict[str, Any] = {
         "path": path,
@@ -1614,6 +1623,9 @@ def _config_row(endpoint: str, parts: Tuple[str, ...], key: str,
         "value": value,
         "valueText": config_labels.format_value(key, value),
         "baselineKey": baseline_key,
+        # So the editor can round-trip a recommendation to the right level — a
+        # bare key is ambiguous between venue and apgroup.
+        "level": level,
     }
     for who in ("org", "ruckus"):
         if who not in recommendations:
@@ -1873,17 +1885,142 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
         # than the user discovering it.
         "groupTotal": len(groups),
         "apTotal": ap_total,
-        "detailCalls": len(groups) * (1 + len(AP_GROUP_SOURCE_COUNT)) + ap_total,
+        # Capped as the route caps them, and derived from the fetch module's
+        # own source list so a new sub-resource moves the estimate with it. An
+        # earlier literal counted two of the seven and understated it badly.
+        "detailCalls": (min(len(groups), fetch_module.AP_GROUP_CONFIG_LIMIT)
+                        * (1 + len(fetch_module.AP_GROUP_CONFIG_SOURCES))
+                        + min(ap_total, fetch_module.AP_CONFIG_LIMIT)),
     }
 
 
-# Kept as a name rather than a literal so the arithmetic above follows
-# fetch.AP_GROUP_CONFIG_SOURCES if a source is added.
-AP_GROUP_SOURCE_COUNT: Tuple[str, ...] = ("clientAdmission", "bandMode")
+def _apgroup_categories(blob: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    One AP group's config, flattened into comparable rows PER ENDPOINT and
+    compared against the AP-GROUP baseline — the same shape `config_card` builds
+    for the venue, so the frontend renders the org/RUCKUS columns the same way.
+
+    Keyed on the R1 SUFFIX (`radioSettings`, `apClientAdmissionControlSettings`,
+    …), which is how the catalogue and the apgroup baseline are keyed, so a
+    recommendation set in the editor for the AP-group level lands on the right
+    row. `blob` is `{alias -> payload}` from `fetch.AP_GROUP_CONFIG_SOURCES`; the
+    `detail` object is skipped — it is the group's identity, not a setting.
+    """
+    from services.pisr import fetch as _fetch
+    cats = []
+    for alias, suffix in _fetch.AP_GROUP_CONFIG_SOURCES.items():
+        payload = blob.get(alias)
+        if payload is None:
+            continue
+        cleaned = _config_clean(payload)
+        literals: set = set()
+        rows = _config_rows(cleaned, suffix, literals=literals,
+                            level=baselines.LEVELS[1])   # "apgroup"
+        if not rows:
+            continue
+        cats.append({
+            "key": suffix,
+            "slug": re.sub(r"(?<!^)(?=[A-Z])", "-", suffix).lower(),
+            "endpoint": suffix,
+            "label": config_labels.label_for(suffix),
+            "rows": rows,
+            "groups": _group_config_rows(rows, literals=literals),
+        })
+    return cats
+
+
+def _network_categories(blob: Dict[str, Any],
+                        group: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    One network's config flattened into comparable rows against the NETWORK
+    baseline (and, if the network is in a `group`, that group's recommendations
+    over the default). Keyed under the single endpoint `wifiNetworks`, matching
+    the catalogue and the network level of the baseline. The deep `wlan.*` /
+    `guestPortal.*` tree is split into sub-sections by `_group_config_rows`
+    exactly as the venue tab.
+    """
+    literals: set = set()
+    rows = _config_rows(blob, "wifiNetworks", literals=literals,
+                        level=baselines.LEVELS[2], group=group)   # "network"
+    if not rows:
+        return []
+    return [{
+        "key": "wifiNetworks",
+        "slug": "wifi-network",
+        "endpoint": "wifiNetworks",
+        "label": config_labels.label_for("wifiNetworks"),
+        "rows": rows,
+        "groups": _group_config_rows(rows, literals=literals),
+    }]
+
+
+# Leaf keys, and path fragments, that are per-instance rather than policy — a
+# per-unit SSID differs from its neighbour in exactly these, so they are ignored
+# when deciding whether two networks are "the same config" for auto-clustering.
+_NETWORK_IGNORE_LEAVES = {"id", "name", "ssid", "description"}
+_NETWORK_IGNORE_FRAGMENTS = ("vlan", "dpsk", "passphrase")
+
+
+def _network_fingerprint(cleaned: Dict[str, Any]) -> str:
+    """
+    A stable signature of a network's config with its per-instance fields
+    stripped, so two per-unit SSIDs that differ only by name/SSID/VLAN/DPSK
+    hash the same and collapse into one cluster. Display only — it decides how
+    the tab GROUPS networks, never what they are compared against.
+    """
+    def strip(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {k: strip(v) for k, v in node.items()
+                    if k not in _NETWORK_IGNORE_LEAVES
+                    and not any(f in k.lower() for f in _NETWORK_IGNORE_FRAGMENTS)}
+        if isinstance(node, list):
+            return [strip(x) for x in node]
+        return node
+    return json.dumps(strip(cleaned), sort_keys=True, default=str)
+
+
+def _cluster_variance(metas: List[Dict[str, Any]],
+                      cleaned: List[Dict[str, Any]]) -> List[str]:
+    """
+    Which per-instance dimensions actually differ across a cluster's members —
+    "SSID", "name", "VLAN", "DPSK". These are the fields the fingerprint ignored;
+    naming the ones that truly vary tells a reader "these N SSIDs are identical
+    except for their name and VLAN" rather than leaving them to assume.
+    """
+    if len(metas) < 2:
+        return []
+    dims: List[str] = []
+    if len({m.get("ssid") for m in metas}) > 1:
+        dims.append("SSID")
+    if len({m.get("name") for m in metas}) > 1:
+        dims.append("name")
+
+    def collect(node: Any, fragment: str) -> Tuple:
+        found: List[Tuple[str, Any]] = []
+
+        def walk(n: Any) -> None:
+            if isinstance(n, dict):
+                for k, v in n.items():
+                    if fragment in k.lower() and not isinstance(v, (dict, list)):
+                        found.append((k, v))
+                    walk(v)
+            elif isinstance(n, list):
+                for x in n:
+                    walk(x)
+        walk(node)
+        return tuple(sorted(found, key=lambda kv: kv[0]))
+
+    for fragment, label in (("vlan", "VLAN"), ("dpsk", "DPSK")):
+        if len({collect(c, fragment) for c in cleaned}) > 1:
+            dims.append(label)
+    return dims
 
 
 def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
-                  ap_config: Dict[str, Any], ap_total: int) -> Dict[str, Any]:
+                  ap_config: Dict[str, Any], ap_total: int,
+                  network_config: Optional[Dict[str, Any]] = None,
+                  network_total: int = 0,
+                  group_total: Optional[int] = None) -> Dict[str, Any]:
     """
     Group and per-AP configuration, shaped for the on-demand call.
 
@@ -1905,6 +2042,9 @@ def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
             "isDefault": bool(detail.get("isDefault")),
             "isEnforced": bool(detail.get("isEnforced")),
             "overrides": _override_flags(blob),
+            # Comparable rows with org/RUCKUS columns at the AP-group level,
+            # beside the raw tree the tab drew before recommendations existed.
+            "categories": _apgroup_categories(blob),
             "data": _config_clean(blob),
         })
 
@@ -1925,16 +2065,75 @@ def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
             "data": _config_clean(blob),
         })
 
+    # Networks: resolve each to its group, then CLUSTER by (group, fingerprint).
+    # An MDU runs hundreds of per-unit SSIDs that are identical apart from name
+    # and VLAN; collapsing them to one representative row keeps the genuinely
+    # distinct SSIDs (guest, corporate) from being buried. Members of a cluster
+    # share a group — so the same recommendations apply — and a fingerprint — so
+    # one representative's comparison speaks for all of them.
+    group_names = {g["id"]: g["name"] for g in baselines.network_groups()}
+    buckets: Dict[Tuple[Optional[str], str], List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
+    for nid, blob in (network_config or {}).items():
+        if not blob:
+            continue
+        cleaned = _config_clean(blob)
+        meta = {"id": nid, "name": blob.get("name") or blob.get("ssid") or nid,
+                "ssid": blob.get("ssid"), "type": blob.get("type")}
+        group_id = baselines.network_group_for(meta)
+        buckets.setdefault((group_id, _network_fingerprint(cleaned)), []).append((meta, cleaned))
+
+    network_shown = sum(len(members) for members in buckets.values())
+    network_rows = []
+    for (group_id, _fp), members in buckets.items():
+        metas = [m for m, _ in members]
+        cleaneds = [c for _, c in members]
+        rep_meta, rep_cleaned = members[0]
+        network_rows.append({
+            "id": rep_meta["id"],
+            "name": rep_meta["name"],
+            "ssid": rep_meta["ssid"],
+            "type": rep_meta["type"],
+            "group": group_id,
+            "groupName": group_names.get(group_id),
+            # A cluster of one is an ordinary standalone SSID; >1 collapses.
+            "count": len(members),
+            "members": metas,
+            "varies": _cluster_variance(metas, cleaneds),
+            "categories": _network_categories(rep_cleaned, group_id),
+            "data": rep_cleaned,
+        })
+    # Grouped SSIDs first (they are the admin's intentional buckets), then by name.
+    network_rows.sort(key=lambda r: (r["group"] is None, r["group"] or "", _norm(r["name"])))
+
     return {
         "groups": group_rows,
         "aps": ap_rows,
+        "networks": network_rows,
         "apOverrideCount": sum(1 for row in ap_rows if row["overridden"]),
         "groupOverrideCount": sum(1 for row in group_rows if row["overrides"]),
+        # Column headers for the comparison at each level — whose recommendations,
+        # whether verified, and the global show switch. One per level, because a
+        # group compares against the apgroup baseline and a network against the
+        # network baseline.
+        "apgroupBaselines": baselines.describe(baselines.LEVELS[1]),   # "apgroup"
+        "networkBaselines": baselines.describe(baselines.LEVELS[2]),   # "network"
         # Said out loud rather than implied: "no overrides" on a partial list
         # is a different statement from "no overrides".
         "apTotal": ap_total,
         "apShown": len(ap_rows),
         "apTruncated": ap_total > len(ap_rows),
+        # `networks` are CLUSTERS; the counts are of networks, not clusters, so
+        # "showing N of M" stays about SSIDs. `networkClusters` is the collapsed
+        # row count, for a reader who wants to know how much collapsing happened.
+        "networkTotal": network_total,
+        "networkShown": network_shown,
+        "networkClusters": len(network_rows),
+        "networkTruncated": network_total > network_shown,
+        # `groups` arrives already capped by the route; the venue's full count
+        # comes separately so the tab can say "showing N of M AP groups".
+        "groupTotal": len(group_rows) if group_total is None else group_total,
+        "groupShown": len(group_rows),
+        "groupTruncated": (group_total or 0) > len(group_rows),
     }
 
 

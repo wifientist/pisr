@@ -102,6 +102,7 @@ export const SECTION_IDS = [
   "config.antenna-type",
   "config.ap-groups",
   "config.ap-overrides",
+  "config.networks",
   "config.available-channels",
   "config.band-mode",
   "config.bss-coloring",
@@ -1984,6 +1985,10 @@ function Config({ report, base, qs }: {
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Filters the loaded detail lists by name/serial as the admin types — a
+  // per-unit MDU has hundreds of groups and APs and finding one by scrolling is
+  // hopeless. Empty = show everything.
+  const [detailFilter, setDetailFilter] = useState("");
 
   const loadDetail = useCallback(async () => {
     setLoading(true); setError("");
@@ -2009,6 +2014,18 @@ function Config({ report, base, qs }: {
     if (next.has(slug)) next.delete(slug); else next.add(slug);
     return next;
   });
+
+  // The detail filter, applied to each list by name/serial. A network cluster
+  // matches if the query hits its representative OR any collapsed member, so
+  // searching a specific per-unit SSID still surfaces the cluster it folded into.
+  const detailQ = detailFilter.trim().toLowerCase();
+  const hit = (...vals: any[]) =>
+    !detailQ || vals.some((v) => String(v ?? "").toLowerCase().includes(detailQ));
+  const fGroups = (detail?.groups || []).filter((g: any) => hit(g.name, g.id));
+  const fAps = (detail?.aps || []).filter((a: any) => hit(a.name, a.serial, a.model));
+  const fNetworks = (detail?.networks || []).filter((n: any) =>
+    hit(n.name, n.ssid, n.type, n.groupName,
+        ...(n.members || []).flatMap((m: any) => [m.name, m.ssid])));
 
   const slugsWhere = (test: (cat: any) => boolean) =>
     new Set(categories.filter(test).map((c) => c.slug));
@@ -2121,12 +2138,38 @@ function Config({ report, base, qs }: {
                   showing {detail.apShown} of {detail.apTotal} APs
                 </Pill>
               )}
+              {detail.groupTruncated && (
+                <Pill tone="gray">
+                  showing {detail.groupShown} of {detail.groupTotal} AP groups
+                </Pill>
+              )}
             </div>
 
+            {/* Filter the loaded lists by name/serial — a per-unit MDU has
+                hundreds of each, and scrolling to one is hopeless. */}
+            <input value={detailFilter} onChange={(e) => setDetailFilter(e.target.value)}
+                   placeholder="Filter by AP, AP-group or network name / serial…"
+                   className="w-full min-w-0 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm
+                              focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+
+            {(detail.groups.length > 0 || fGroups.length > 0) && (
             <div>
-              <h4 className="font-semibold text-gray-800 mb-2">AP groups</h4>
+              <h4 className="font-semibold text-gray-800 mb-2">
+                AP groups{detailQ && ` (${fGroups.length} of ${detail.groups.length})`}
+              </h4>
               <div className="space-y-2">
-                {detail.groups.map((g: any) => (
+                {fGroups.length === 0 && (
+                  <p className="text-sm text-gray-400">No AP group matches “{detailFilter}”.</p>
+                )}
+                {fGroups.map((g: any) => {
+                  // The AP-group recommendation columns appear only when an admin
+                  // has set some (or RUCKUS ships some) at the apgroup level and
+                  // the global switch is on — otherwise the compact tree is less
+                  // noise than a table of dashes, exactly as the venue tab.
+                  const showRecs = detail.apgroupBaselines?.show
+                    && (detail.apgroupBaselines?.org?.active || detail.apgroupBaselines?.ruckus?.active)
+                    && g.categories?.length;
+                  return (
                   <div key={g.id} className="min-w-0 rounded border border-gray-200 p-3">
                     <div className="flex flex-wrap items-baseline gap-2 mb-1">
                       <span className="font-medium text-gray-900 break-all">{g.name}</span>
@@ -2137,16 +2180,103 @@ function Config({ report, base, qs }: {
                         ? <Pill tone="amber">overrides {g.overrides.join(", ")}</Pill>
                         : <Pill tone="green">inherits the venue</Pill>}
                     </div>
-                    <ConfigTree node={g.data} depth={1} path={g.id} />
+                    {showRecs ? (
+                      <div className="mt-2 space-y-3">
+                        {g.categories.map((cat: any) => (
+                          <div key={cat.key} className="min-w-0">
+                            <h5 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                              {cat.label}
+                            </h5>
+                            <ConfigRows rows={cat.rows} groups={cat.groups}
+                                        baselines={detail.apgroupBaselines} />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <ConfigTree node={g.data} depth={1} path={g.id} />
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
+            )}
+
+            {detail.networks?.length > 0 && (
+              <Section id="config.networks">
+                <div className="flex flex-wrap items-baseline gap-2 mb-2">
+                  <h4 className="font-semibold text-gray-800">
+                    Wi-Fi network settings{detailQ && ` (${fNetworks.length} of ${detail.networks.length})`}
+                  </h4>
+                  {detail.networkClusters < detail.networkShown && (
+                    <Pill tone="gray">{detail.networkShown} SSID(s) in {detail.networkClusters} group(s)</Pill>
+                  )}
+                  {detail.networkTruncated && (
+                    <Pill tone="gray">showing {detail.networkShown} of {detail.networkTotal} networks</Pill>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {fNetworks.length === 0 && (
+                    <p className="text-sm text-gray-400">No network matches “{detailFilter}”.</p>
+                  )}
+                  {fNetworks.map((n: any) => {
+                    // Same rule as AP groups: the recommendation columns show only
+                    // when there is a network-level recommendation to compare
+                    // against and the global switch is on; otherwise the tree.
+                    const showRecs = detail.networkBaselines?.show
+                      && (detail.networkBaselines?.org?.active || detail.networkBaselines?.ruckus?.active)
+                      && n.categories?.length;
+                    const clustered = n.count > 1;
+                    return (
+                      <div key={n.id} className="min-w-0 rounded border border-gray-200 p-3">
+                        <div className="flex flex-wrap items-baseline gap-2 mb-1">
+                          <span className="font-medium text-gray-900 break-all">
+                            {clustered ? `${n.name} + ${n.count - 1} more` : n.name}
+                          </span>
+                          {n.type && <span className="text-xs text-gray-500">{n.type}</span>}
+                          {n.groupName && <Pill tone="blue">{n.groupName}</Pill>}
+                          {clustered && <Pill tone="gray">×{n.count} identical</Pill>}
+                          {clustered && n.varies?.length > 0 && (
+                            <span className="text-[11px] text-gray-500">
+                              differ only in {n.varies.join(", ")}
+                            </span>
+                          )}
+                        </div>
+                        {/* The SSIDs collapsed into this cluster, so a reader can
+                            still see which ones it stands for. */}
+                        {clustered && (
+                          <div className="mb-2 text-[11px] text-gray-500 break-words">
+                            {n.members.map((m: any) => m.ssid || m.name).join(" · ")}
+                          </div>
+                        )}
+                        {showRecs ? (
+                          <div className="mt-2 space-y-3">
+                            {n.categories.map((cat: any) => (
+                              <div key={cat.key} className="min-w-0">
+                                <ConfigRows rows={cat.rows} groups={cat.groups}
+                                            baselines={detail.networkBaselines} />
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <ConfigTree node={n.data} depth={1} path={n.id} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Section>
+            )}
 
             <Section id="config.ap-overrides">
-              <h4 className="font-semibold text-gray-800 mb-2">Per-AP settings</h4>
+              <h4 className="font-semibold text-gray-800 mb-2">
+                Per-AP settings{detailQ && ` (${fAps.length} of ${detail.aps.length})`}
+              </h4>
               <div className="space-y-2">
-                {detail.aps.map((a: any) => (
+                {fAps.length === 0 && (
+                  <p className="text-sm text-gray-400">No AP matches “{detailFilter}”.</p>
+                )}
+                {fAps.map((a: any) => (
                   <div key={a.serial} className="min-w-0 rounded border border-gray-200 p-3">
                     <div className="flex flex-wrap items-baseline gap-2 mb-1">
                       <span className="font-medium text-gray-900 break-all">{a.name}</span>

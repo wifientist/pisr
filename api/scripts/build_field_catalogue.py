@@ -77,6 +77,15 @@ def _is_curated(endpoint: str, path: str) -> bool:
     # inventory, not a setting an admin sets one value for.
     if "apModels" in path or "apModel" in path.split(".")[0]:
         return False
+    # A network's guest-portal branding, Passpoint config and per-instance
+    # identity (name/ssid/id) are not "recommend one value" settings — the
+    # recommendable network policy is the security and wlan.* fields. Leave the
+    # rest emitted but uncurated so "all fields" can still reach them.
+    if endpoint == "wifiNetworks":
+        head = path.split(".")[0].split("[")[0]
+        if head in ("guestPortal", "hotspot20Settings", "id", "name", "ssid",
+                    "type", "description", "owePairNetworkId"):
+            return False
     return True
 
 
@@ -130,12 +139,17 @@ def _walk(schema, resolve, prefix="", depth=0, out=None):
     return out
 
 
-def _endpoint_schema(spec: dict, resolve, suffix: str):
+def _endpoint_schema(spec: dict, resolve, suffix: str, base: str = "/venues/{venueId}"):
     """
-    The GET 200 response schema for `/venues/{venueId}/<suffix>`, or None. An
-    empty suffix is the venue object itself, `/venues/{venueId}`.
+    The GET 200 response schema for `<base>/<suffix>`, or None. An empty suffix
+    is the base object itself — `/venues/{venueId}` for the venue level, or
+    `/venues/{venueId}/apGroups/{apGroupId}` for an AP group.
+
+    `base` is a spec path template and must carry the placeholders exactly as
+    the spec writes them (`{venueId}`, `{apGroupId}`) — the lookup is a dict-key
+    match against `spec["paths"]`, not a pattern.
     """
-    path = f"/venues/{{venueId}}/{suffix}" if suffix else "/venues/{venueId}"
+    path = f"{base}/{suffix}" if suffix else base
     op = (spec.get("paths", {}).get(path, {}) or {}).get("get")
     if not op:
         return None
@@ -163,17 +177,18 @@ _EXTRA_ENDPOINTS = {
 }
 
 
-def build_venue_level(spec: dict, resolve) -> dict:
+def _build_level(spec: dict, resolve, base: str, sources: dict, what: str) -> dict:
+    """
+    Walk each `{endpoint key -> spec suffix}` under `base` into catalogue
+    entries. Shared by every level — only the base path and the source map
+    differ. `what` names the level for the "no schema" note.
+    """
     endpoints = {}
     missing = []
-    # (catalogue endpoint key -> spec path suffix). For VENUE_CONFIG_SOURCES the
-    # r1_path is both; the extras separate them for the venue object.
-    sources = {r1_path: r1_path for r1_path in fetch_module.VENUE_CONFIG_SOURCES.values()}
-    sources.update(_EXTRA_ENDPOINTS)
     for ep_key, suffix in sources.items():
-        sch = _endpoint_schema(spec, resolve, suffix)
+        sch = _endpoint_schema(spec, resolve, suffix, base)
         if sch is None:
-            missing.append((ep_key, suffix or "(venue object)"))
+            missing.append((ep_key, suffix or "(object)"))
             continue
         fields = {}
         for path, vtype, enum in _walk(sch, resolve):
@@ -191,34 +206,117 @@ def build_venue_level(spec: dict, resolve) -> dict:
                 "fields": fields,
             }
     if missing:
-        print("note: no venue GET schema for:",
+        print(f"note: no {what} GET schema for:",
               ", ".join(f"{s}({p})" for s, p in missing))
     return endpoints
+
+
+def build_venue_level(spec: dict, resolve) -> dict:
+    # (catalogue endpoint key -> spec path suffix). For VENUE_CONFIG_SOURCES the
+    # r1_path is both; the extras separate them for the venue object.
+    sources = {r1_path: r1_path for r1_path in fetch_module.VENUE_CONFIG_SOURCES.values()}
+    sources.update(_EXTRA_ENDPOINTS)
+    return _build_level(spec, resolve, "/venues/{venueId}", sources, "venue")
+
+
+# The polymorphic Wi-Fi network. Its GET response is a base object (id, name,
+# type) with a discriminator; the settable fields — security, VLAN, the whole
+# wlan.* tree, guest portal — live in the per-type SUBTYPES (PSK, AAA, Guest,
+# Hotspot 2.0, Open, DPSK), which reference the base through allOf. There is no
+# discriminator `mapping` in this spec, so the subtypes are found by scanning
+# for schemas that allOf-reference the base, and their fields unioned.
+_WIFI_NETWORK_BASE = "Wi-Fi_Services_WifiNetwork"
+_NETWORK_ENDPOINT = "wifiNetworks"
+
+
+def build_network_level(spec: dict, resolve) -> dict:
+    """
+    The network/SSID settable fields, from every WifiNetwork subtype unioned.
+
+    Keyed under the single endpoint `wifiNetworks`, which is how the reader forms
+    its baseline key (`wifiNetworks.<path>`) when it flattens a network's config
+    — so a network-level recommendation lands on the right row whatever the
+    network's type. A recommendation applies to EVERY network: the network level
+    is "what every SSID here should look like", flagged per network that deviates.
+    """
+    schemas = (spec.get("components") or {}).get("schemas") or {}
+    subtypes = [s for s in schemas.values()
+                for comb in ("allOf", "oneOf", "anyOf")
+                for sub in s.get(comb, [])
+                if sub.get("$ref", "").endswith("/" + _WIFI_NETWORK_BASE)]
+    if not subtypes:
+        print("note: no WifiNetwork subtypes found — network level left empty")
+        return {}
+
+    merged: dict = {}
+    for schema in subtypes:
+        for path, vtype, enum in _walk(schema, resolve):
+            merged.setdefault(path, (vtype, enum))
+
+    fields = {}
+    for path, (vtype, enum) in merged.items():
+        fields[path] = {
+            "type": vtype or "string",
+            "label": config_labels.label_for(path.split(".")[-1].split("[")[0]),
+            "curated": _is_curated(_NETWORK_ENDPOINT, path),
+            **({"enum": enum} if enum else {}),
+        }
+    if not fields:
+        return {}
+    return {_NETWORK_ENDPOINT: {
+        "label": config_labels.label_for(_NETWORK_ENDPOINT), "fields": fields}}
+
+
+def build_apgroup_level(spec: dict, resolve) -> dict:
+    """
+    The per-AP-group sub-resources, from `/venues/{venueId}/apGroups/{apGroupId}`.
+
+    Keyed on the R1 SUFFIX (`apClientAdmissionControlSettings`, `radioSettings`,
+    …), the same way the venue level keys on its suffixes and the way the reader
+    forms its baseline key — so an AP-group recommendation lands under exactly
+    the key the Config detail view will look it up by. `AP_GROUP_CONFIG_SOURCES`
+    maps short aliases to those suffixes; the suffix is the catalogue key.
+
+    The group OBJECT itself (`/apGroups/{apGroupId}` with no suffix) is
+    deliberately not included — it is the group's identity and inventory (name,
+    id, apModels), not a setting an admin recommends a value for. The
+    recommendable settings all live in the sub-resources.
+    """
+    sources = {suffix: suffix
+               for suffix in fetch_module.AP_GROUP_CONFIG_SOURCES.values()}
+    return _build_level(spec, resolve,
+                        "/venues/{venueId}/apGroups/{apGroupId}", sources, "apgroup")
 
 
 def main() -> None:
     spec, name = _load_spec()
     resolve = _resolver(spec)
     venue = build_venue_level(spec, resolve)
+    apgroup = build_apgroup_level(spec, resolve)
+    network = build_network_level(spec, resolve)
 
     catalogue = {
         "generatedFrom": name,
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "levels": {
             "venue": {"endpoints": venue},
-            # Populated in later phases; present so the shape is stable.
-            "apgroup": {"endpoints": {}},
-            "network": {"endpoints": {}},
+            "apgroup": {"endpoints": apgroup},
+            "network": {"endpoints": network},
         },
     }
     OUT.write_text(json.dumps(catalogue, indent=2, sort_keys=True) + "\n",
                    encoding="utf-8")
 
-    n_fields = sum(len(e["fields"]) for e in venue.values())
-    n_curated = sum(1 for e in venue.values()
-                    for f in e["fields"].values() if f["curated"])
-    print(f"wrote {OUT.relative_to(API.parent)}: {len(venue)} venue endpoint(s), "
-          f"{n_fields} field(s) ({n_curated} curated), from {name}")
+    def _tally(level):
+        return (len(level),
+                sum(len(e["fields"]) for e in level.values()),
+                sum(1 for e in level.values()
+                    for f in e["fields"].values() if f["curated"]))
+
+    print(f"wrote {OUT.relative_to(API.parent)} from {name}:")
+    for label, level in (("venue", venue), ("apgroup", apgroup), ("network", network)):
+        e, f, c = _tally(level)
+        print(f"  {label:8} {e} endpoint(s), {f} field(s) ({c} curated)")
 
 
 if __name__ == "__main__":

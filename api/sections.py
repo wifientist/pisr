@@ -389,6 +389,11 @@ SECTIONS: Tuple[Section, ...] = (
         hint="Every AP's own configuration, and which parts of it differ from "
              "what the venue specifies.",
     ),
+    Section(
+        id="config.networks", label="Wi-Fi network settings", tab="config",
+        hint="Each activated network's full configuration, compared against the "
+             "network-level recommendations. Loaded on request.",
+    ),
 
     # ── Wireless ─────────────────────────────────────────────────────
     Section(

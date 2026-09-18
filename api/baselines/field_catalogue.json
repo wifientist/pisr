@@ -1,12 +1,5553 @@
 {
-  "generatedAt": "2026-09-01T20:36:21+00:00",
+  "generatedAt": "2026-09-02T12:34:43+00:00",
   "generatedFrom": "RUCKUS_One_Consolidated_API_08122026.json",
   "levels": {
     "apgroup": {
-      "endpoints": {}
+      "endpoints": {
+        "apClientAdmissionControlSettings": {
+          "fields": {
+            "enable24G": {
+              "curated": true,
+              "label": "Enabled on 2.4 GHz",
+              "type": "boolean"
+            },
+            "enable50G": {
+              "curated": true,
+              "label": "Enabled on 5 GHz",
+              "type": "boolean"
+            },
+            "maxRadioLoad24G": {
+              "curated": true,
+              "label": "Maximum radio load (2.4 GHz)",
+              "type": "integer"
+            },
+            "maxRadioLoad50G": {
+              "curated": true,
+              "label": "Maximum radio load (5 GHz)",
+              "type": "integer"
+            },
+            "minClientCount24G": {
+              "curated": true,
+              "label": "Minimum clients (2.4 GHz)",
+              "type": "integer"
+            },
+            "minClientCount50G": {
+              "curated": true,
+              "label": "Minimum clients (5 GHz)",
+              "type": "integer"
+            },
+            "minClientThroughput24G": {
+              "curated": true,
+              "label": "Minimum client throughput (2.4 GHz)",
+              "type": "integer"
+            },
+            "minClientThroughput50G": {
+              "curated": true,
+              "label": "Minimum client throughput (5 GHz)",
+              "type": "integer"
+            },
+            "useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            }
+          },
+          "label": "AP client admission control settings"
+        },
+        "apModelAntennaTypeSettings": {
+          "fields": {
+            "antennaTypeSettings[].antennaType": {
+              "curated": false,
+              "enum": [
+                "SECTOR",
+                "NARROW",
+                null
+              ],
+              "label": "Antenna type",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "antennaTypeSettings[].model": {
+              "curated": false,
+              "label": "Model",
+              "type": "string"
+            },
+            "useVenueSettings": {
+              "curated": false,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            }
+          },
+          "label": "AP model antenna type settings"
+        },
+        "apModelBandModeSettings": {
+          "fields": {
+            "apModelBandModeSettings[].bandMode": {
+              "curated": false,
+              "enum": [
+                "DUAL",
+                "TRIPLE",
+                null
+              ],
+              "label": "Band mode",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "apModelBandModeSettings[].model": {
+              "curated": false,
+              "label": "Model",
+              "type": "string"
+            },
+            "useVenueSettings": {
+              "curated": false,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            }
+          },
+          "label": "AP model band mode settings"
+        },
+        "apModelCapabilities": {
+          "fields": {
+            "apModels[].allowCbandCountry": {
+              "curated": false,
+              "label": "Allow cband country",
+              "type": "array"
+            },
+            "apModels[].allowDfsCountry": {
+              "curated": false,
+              "label": "Allow dfs country",
+              "type": "array"
+            },
+            "apModels[].bandCombinationCapabilities": {
+              "curated": false,
+              "label": "Band combination capabilities",
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "apModels[].canSupportCellular": {
+              "curated": false,
+              "label": "Can support cellular",
+              "type": "boolean"
+            },
+            "apModels[].canSupportLacp": {
+              "curated": false,
+              "label": "Can support lacp",
+              "type": "boolean"
+            },
+            "apModels[].canSupportPoeMode": {
+              "curated": false,
+              "label": "Can support PoE mode",
+              "type": "boolean"
+            },
+            "apModels[].canSupportPoeOut": {
+              "curated": false,
+              "label": "Can support PoE out",
+              "type": "boolean"
+            },
+            "apModels[].capabilityScore": {
+              "curated": false,
+              "label": "Capability score",
+              "type": "integer"
+            },
+            "apModels[].defaultBandCombination": {
+              "curated": false,
+              "enum": [
+                "DUAL",
+                "TRIPLE",
+                null
+              ],
+              "label": "Default band combination",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "apModels[].externalAntenna.coupled": {
+              "curated": false,
+              "label": "Coupled",
+              "type": "boolean"
+            },
+            "apModels[].externalAntenna.enable24G": {
+              "curated": false,
+              "label": "Enabled on 2.4 GHz",
+              "type": "boolean"
+            },
+            "apModels[].externalAntenna.enable50G": {
+              "curated": false,
+              "label": "Enabled on 5 GHz",
+              "type": "boolean"
+            },
+            "apModels[].externalAntenna.gain24G": {
+              "curated": false,
+              "label": "Antenna gain (2.4 GHz)",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].externalAntenna.gain50G": {
+              "curated": false,
+              "label": "Antenna gain (5 GHz)",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].externalAntenna.supportDisable": {
+              "curated": false,
+              "label": "Can be disabled",
+              "type": "boolean"
+            },
+            "apModels[].has160MHzChannelBandwidth": {
+              "curated": false,
+              "label": "Has160 MHz channel bandwidth",
+              "type": "boolean"
+            },
+            "apModels[].isOutdoor": {
+              "curated": false,
+              "label": "Is outdoor",
+              "type": "boolean"
+            },
+            "apModels[].lanPortPictureDownloadUrl": {
+              "curated": false,
+              "label": "LAN port picture download url",
+              "type": "string"
+            },
+            "apModels[].lanPorts[].defaultType": {
+              "curated": false,
+              "label": "Default type",
+              "type": "string"
+            },
+            "apModels[].lanPorts[].displayLabel": {
+              "curated": false,
+              "label": "Display label",
+              "type": "string"
+            },
+            "apModels[].lanPorts[].id": {
+              "curated": false,
+              "label": "ID",
+              "type": "string"
+            },
+            "apModels[].lanPorts[].isPoeOutPort": {
+              "curated": false,
+              "label": "Is PoE out port",
+              "type": "boolean"
+            },
+            "apModels[].lanPorts[].isPoePort": {
+              "curated": false,
+              "label": "Is PoE port",
+              "type": "boolean"
+            },
+            "apModels[].lanPorts[].supportDisable": {
+              "curated": false,
+              "label": "Can be disabled",
+              "type": "boolean"
+            },
+            "apModels[].lanPorts[].trunkPortOnly": {
+              "curated": false,
+              "label": "Trunk port only",
+              "type": "boolean"
+            },
+            "apModels[].lanPorts[].untagId": {
+              "curated": false,
+              "label": "Untagged VLAN",
+              "type": "integer"
+            },
+            "apModels[].lanPorts[].vlanMembers": {
+              "curated": false,
+              "label": "VLAN members",
+              "type": "string"
+            },
+            "apModels[].ledOn": {
+              "curated": false,
+              "label": "LED on",
+              "type": "boolean"
+            },
+            "apModels[].lldpAdInterval": {
+              "curated": false,
+              "label": "Lldp ad interval",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].lldpEnable": {
+              "curated": false,
+              "label": "Lldp enable",
+              "type": "boolean"
+            },
+            "apModels[].lldpHoldTime": {
+              "curated": false,
+              "label": "Lldp hold time",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].lldpMgmtEnable": {
+              "curated": false,
+              "label": "Lldp mgmt enable",
+              "type": "boolean"
+            },
+            "apModels[].maxChannelization24G": {
+              "curated": false,
+              "label": "Max channelization24 g",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].maxChannelization5G": {
+              "curated": false,
+              "label": "Max channelization5 g",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].maxChannelization6G": {
+              "curated": false,
+              "label": "Max channelization6 g",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "apModels[].model": {
+              "curated": false,
+              "label": "Model",
+              "type": "string"
+            },
+            "apModels[].pictureDownloadUrl": {
+              "curated": false,
+              "label": "Picture download url",
+              "type": "string"
+            },
+            "apModels[].poeModeCapabilities": {
+              "curated": false,
+              "label": "PoE mode capabilities",
+              "type": "array"
+            },
+            "apModels[].primaryWanRecoveryTimer": {
+              "curated": false,
+              "label": "Primary WAN recovery timer",
+              "type": "integer"
+            },
+            "apModels[].requireOneEnabledTrunkPort": {
+              "curated": false,
+              "label": "Require one enabled trunk port",
+              "type": "boolean"
+            },
+            "apModels[].simCardPrimaryApn": {
+              "curated": false,
+              "label": "SIM card primary APN",
+              "type": "string"
+            },
+            "apModels[].simCardPrimaryCellularNetworkSelection": {
+              "curated": false,
+              "label": "SIM card primary cellular network selection",
+              "type": "string"
+            },
+            "apModels[].simCardPrimaryEnabled": {
+              "curated": false,
+              "label": "SIM card primary enabled",
+              "type": "boolean"
+            },
+            "apModels[].simCardPrimaryRoaming": {
+              "curated": false,
+              "label": "SIM card primary roaming",
+              "type": "boolean"
+            },
+            "apModels[].simCardSecondaryApn": {
+              "curated": false,
+              "label": "SIM card secondary APN",
+              "type": "string"
+            },
+            "apModels[].simCardSecondaryCellularNetworkSelection": {
+              "curated": false,
+              "label": "SIM card secondary cellular network selection",
+              "type": "string"
+            },
+            "apModels[].simCardSecondaryEnabled": {
+              "curated": false,
+              "label": "SIM card secondary enabled",
+              "type": "boolean"
+            },
+            "apModels[].simCardSecondaryRoaming": {
+              "curated": false,
+              "label": "SIM card secondary roaming",
+              "type": "boolean"
+            },
+            "apModels[].support11AX": {
+              "curated": false,
+              "label": "Support11 AX",
+              "type": "boolean"
+            },
+            "apModels[].supportApStickyClientSteering": {
+              "curated": false,
+              "label": "Support AP sticky client steering",
+              "type": "boolean"
+            },
+            "apModels[].supportBandCombination": {
+              "curated": false,
+              "label": "Support band combination",
+              "type": "boolean"
+            },
+            "apModels[].supportChannel144": {
+              "curated": false,
+              "label": "Support channel144",
+              "type": "boolean"
+            },
+            "apModels[].supportDual5gMode": {
+              "curated": false,
+              "label": "Support dual5g mode",
+              "type": "boolean"
+            },
+            "apModels[].supportMesh": {
+              "curated": false,
+              "label": "Support mesh",
+              "type": "boolean"
+            },
+            "apModels[].supportTriRadio": {
+              "curated": false,
+              "label": "Support tri radio",
+              "type": "boolean"
+            },
+            "apModels[].version": {
+              "curated": false,
+              "label": "Version",
+              "type": "string"
+            },
+            "apModels[].wanConnection": {
+              "curated": false,
+              "label": "WAN connection",
+              "type": "string"
+            }
+          },
+          "label": "AP model capabilities"
+        },
+        "apModelExternalAntennaSettings": {
+          "fields": {
+            "externalAntennaSettings[].enable24G": {
+              "curated": false,
+              "label": "Enabled on 2.4 GHz",
+              "type": "boolean"
+            },
+            "externalAntennaSettings[].enable50G": {
+              "curated": false,
+              "label": "Enabled on 5 GHz",
+              "type": "boolean"
+            },
+            "externalAntennaSettings[].gain24G": {
+              "curated": false,
+              "label": "Antenna gain (2.4 GHz)",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "externalAntennaSettings[].gain50G": {
+              "curated": false,
+              "label": "Antenna gain (5 GHz)",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "externalAntennaSettings[].model": {
+              "curated": false,
+              "label": "Model",
+              "type": "string"
+            },
+            "useVenueSettings": {
+              "curated": false,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            }
+          },
+          "label": "AP model external antenna settings"
+        },
+        "radioSettings": {
+          "fields": {
+            "radioParams24G.allowedChannels": {
+              "curated": true,
+              "enum": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+                "13"
+              ],
+              "label": "Allowed channels",
+              "type": "array"
+            },
+            "radioParams24G.changeInterval": {
+              "curated": true,
+              "label": "Channel change interval",
+              "type": "integer"
+            },
+            "radioParams24G.channel": {
+              "curated": true,
+              "label": "Channel",
+              "type": "integer"
+            },
+            "radioParams24G.channelBandwidth": {
+              "curated": true,
+              "enum": [
+                "AUTO",
+                "20MHz",
+                "40MHz",
+                null
+              ],
+              "label": "Channel width",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams24G.method": {
+              "curated": true,
+              "enum": [
+                "MANUAL",
+                "BACKGROUND_SCANNING",
+                "CHANNELFLY",
+                null
+              ],
+              "label": "Channel selection method",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams24G.scanInterval": {
+              "curated": true,
+              "label": "Scan interval",
+              "type": "integer"
+            },
+            "radioParams24G.txPower": {
+              "curated": true,
+              "enum": [
+                "Auto",
+                "MAX",
+                "-1",
+                "-2",
+                "-3",
+                "-4",
+                "-5",
+                "-6",
+                "-7",
+                "-8",
+                "-9",
+                "-10",
+                "MIN",
+                null
+              ],
+              "label": "Tx power",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams24G.useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            },
+            "radioParams5G.allowedIndoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed indoor channels",
+              "type": "array"
+            },
+            "radioParams5G.allowedOutdoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed outdoor channels",
+              "type": "array"
+            },
+            "radioParams5G.changeInterval": {
+              "curated": true,
+              "label": "Channel change interval",
+              "type": "integer"
+            },
+            "radioParams5G.channelBandwidth": {
+              "curated": true,
+              "enum": [
+                "AUTO",
+                "20MHz",
+                "40MHz",
+                "80MHz",
+                "160MHz",
+                null
+              ],
+              "label": "Channel width",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams5G.combineChannels": {
+              "curated": true,
+              "label": "Combine channels",
+              "type": "boolean"
+            },
+            "radioParams5G.indoorChannel": {
+              "curated": true,
+              "label": "Indoor channel",
+              "type": "integer"
+            },
+            "radioParams5G.method": {
+              "curated": true,
+              "enum": [
+                "MANUAL",
+                "BACKGROUND_SCANNING",
+                "CHANNELFLY",
+                null
+              ],
+              "label": "Channel selection method",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams5G.outdoorChannel": {
+              "curated": true,
+              "label": "Outdoor channel",
+              "type": "integer"
+            },
+            "radioParams5G.scanInterval": {
+              "curated": true,
+              "label": "Scan interval",
+              "type": "integer"
+            },
+            "radioParams5G.txPower": {
+              "curated": true,
+              "enum": [
+                "Auto",
+                "MAX",
+                "-1",
+                "-2",
+                "-3",
+                "-4",
+                "-5",
+                "-6",
+                "-7",
+                "-8",
+                "-9",
+                "-10",
+                "MIN",
+                null
+              ],
+              "label": "Tx power",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams5G.useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            },
+            "radioParams6G.allowedIndoorChannels": {
+              "curated": true,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "Allowed indoor channels",
+              "type": "array"
+            },
+            "radioParams6G.allowedOutdoorChannels": {
+              "curated": true,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "Allowed outdoor channels",
+              "type": "array"
+            },
+            "radioParams6G.bssMinRate6G": {
+              "curated": true,
+              "enum": [
+                "HE_MCS_0",
+                "HE_MCS_1",
+                "HE_MCS_2",
+                "HE_MCS_3",
+                null
+              ],
+              "label": "BSS minimum rate (6 GHz)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams6G.changeInterval": {
+              "curated": true,
+              "label": "Channel change interval",
+              "type": "integer"
+            },
+            "radioParams6G.channelBandwidth": {
+              "curated": true,
+              "enum": [
+                "AUTO",
+                "20MHz",
+                "40MHz",
+                "80MHz",
+                "160MHz",
+                null
+              ],
+              "label": "Channel width",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams6G.enableMulticastDownlinkRateLimiting": {
+              "curated": true,
+              "label": "Enable multicast downlink rate limiting",
+              "type": "boolean"
+            },
+            "radioParams6G.enableMulticastUplinkRateLimiting": {
+              "curated": true,
+              "label": "Enable multicast uplink rate limiting",
+              "type": "boolean"
+            },
+            "radioParams6G.indoorChannel": {
+              "curated": true,
+              "label": "Indoor channel",
+              "type": "integer"
+            },
+            "radioParams6G.method": {
+              "curated": true,
+              "enum": [
+                "MANUAL",
+                "BACKGROUND_SCANNING",
+                "CHANNELFLY",
+                null
+              ],
+              "label": "Channel selection method",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams6G.mgmtTxRate6G": {
+              "curated": true,
+              "enum": [
+                "6",
+                "9",
+                "12",
+                "18",
+                "24",
+                "36",
+                "48",
+                "54",
+                null
+              ],
+              "label": "Management frame rate (6 GHz)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams6G.multicastDownlinkRateLimiting": {
+              "curated": true,
+              "label": "Multicast downlink rate limiting",
+              "type": "integer"
+            },
+            "radioParams6G.multicastUplinkRateLimiting": {
+              "curated": true,
+              "label": "Multicast uplink rate limiting",
+              "type": "integer"
+            },
+            "radioParams6G.outdoorChannel": {
+              "curated": true,
+              "label": "Outdoor channel",
+              "type": "integer"
+            },
+            "radioParams6G.scanInterval": {
+              "curated": true,
+              "label": "Scan interval",
+              "type": "integer"
+            },
+            "radioParams6G.txPower": {
+              "curated": true,
+              "enum": [
+                "MAX",
+                "-1",
+                "-2",
+                "-3",
+                "-4",
+                "-5",
+                "-6",
+                "-7",
+                "-8",
+                "-9",
+                "-10",
+                "MIN",
+                null
+              ],
+              "label": "Tx power",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParams6G.useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            },
+            "radioParamsDual5G.enabled": {
+              "curated": true,
+              "label": "Enabled",
+              "type": "boolean"
+            },
+            "radioParamsDual5G.radioParamsLower5G.allowedIndoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed indoor channels",
+              "type": "array"
+            },
+            "radioParamsDual5G.radioParamsLower5G.allowedOutdoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed outdoor channels",
+              "type": "array"
+            },
+            "radioParamsDual5G.radioParamsLower5G.changeInterval": {
+              "curated": true,
+              "label": "Channel change interval",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsLower5G.channelBandwidth": {
+              "curated": true,
+              "enum": [
+                "AUTO",
+                "20MHz",
+                "40MHz",
+                "80MHz",
+                "160MHz",
+                null
+              ],
+              "label": "Channel width",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsLower5G.indoorChannel": {
+              "curated": true,
+              "label": "Indoor channel",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsLower5G.method": {
+              "curated": true,
+              "enum": [
+                "MANUAL",
+                "BACKGROUND_SCANNING",
+                "CHANNELFLY",
+                null
+              ],
+              "label": "Channel selection method",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsLower5G.outdoorChannel": {
+              "curated": true,
+              "label": "Outdoor channel",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsLower5G.scanInterval": {
+              "curated": true,
+              "label": "Scan interval",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsLower5G.txPower": {
+              "curated": true,
+              "enum": [
+                "Auto",
+                "MAX",
+                "-1",
+                "-2",
+                "-3",
+                "-4",
+                "-5",
+                "-6",
+                "-7",
+                "-8",
+                "-9",
+                "-10",
+                "MIN",
+                null
+              ],
+              "label": "Tx power",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsLower5G.useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.allowedIndoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed indoor channels",
+              "type": "array"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.allowedOutdoorChannels": {
+              "curated": true,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Allowed outdoor channels",
+              "type": "array"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.changeInterval": {
+              "curated": true,
+              "label": "Channel change interval",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.channelBandwidth": {
+              "curated": true,
+              "enum": [
+                "AUTO",
+                "20MHz",
+                "40MHz",
+                "80MHz",
+                "160MHz",
+                null
+              ],
+              "label": "Channel width",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsUpper5G.indoorChannel": {
+              "curated": true,
+              "label": "Indoor channel",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.method": {
+              "curated": true,
+              "enum": [
+                "MANUAL",
+                "BACKGROUND_SCANNING",
+                "CHANNELFLY",
+                null
+              ],
+              "label": "Channel selection method",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsUpper5G.outdoorChannel": {
+              "curated": true,
+              "label": "Outdoor channel",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.scanInterval": {
+              "curated": true,
+              "label": "Scan interval",
+              "type": "integer"
+            },
+            "radioParamsDual5G.radioParamsUpper5G.txPower": {
+              "curated": true,
+              "enum": [
+                "Auto",
+                "MAX",
+                "-1",
+                "-2",
+                "-3",
+                "-4",
+                "-5",
+                "-6",
+                "-7",
+                "-8",
+                "-9",
+                "-10",
+                "MIN",
+                null
+              ],
+              "label": "Tx power",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "radioParamsDual5G.radioParamsUpper5G.useVenueSettings": {
+              "curated": true,
+              "label": "Inherits from venue",
+              "type": "boolean"
+            },
+            "tripleBandEnabled": {
+              "curated": true,
+              "label": "Triple band enabled",
+              "type": "boolean"
+            }
+          },
+          "label": "Radio settings"
+        },
+        "wifiAvailableChannels": {
+          "fields": {
+            "2.4GChannels.20MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+                "13"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "2.4GChannels.40MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+                "13"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "2.4GChannels.auto": {
+              "curated": false,
+              "enum": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+                "13"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GChannels.dfs.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GChannels.dfs.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GChannels.dfs.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GChannels.dfs.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GChannels.dfs.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GChannels.indoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GChannels.indoorForOutdoorAp.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoorForOutdoorAp.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoorForOutdoorAp.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoorForOutdoorAp.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GChannels.indoorForOutdoorAp.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GChannels.outdoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GChannels.outdoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GChannels.outdoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GChannels.outdoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GChannels.outdoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GLowerChannels.dfs.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.dfs.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.dfs.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.dfs.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.dfs.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GLowerChannels.indoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GLowerChannels.indoorForOutdoorAp.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoorForOutdoorAp.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoorForOutdoorAp.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoorForOutdoorAp.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.indoorForOutdoorAp.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GLowerChannels.outdoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.outdoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.outdoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.outdoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GLowerChannels.outdoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GUpperChannels.dfs.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.dfs.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.dfs.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.dfs.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.dfs.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GUpperChannels.indoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GUpperChannels.indoorForOutdoorAp.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoorForOutdoorAp.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoorForOutdoorAp.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoorForOutdoorAp.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.indoorForOutdoorAp.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "5GUpperChannels.outdoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.outdoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.outdoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.outdoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "5GUpperChannels.outdoor.auto": {
+              "curated": false,
+              "enum": [
+                "36",
+                "40",
+                "44",
+                "48",
+                "52",
+                "56",
+                "60",
+                "64",
+                "100",
+                "104",
+                "108",
+                "112",
+                "116",
+                "120",
+                "124",
+                "128",
+                "132",
+                "136",
+                "140",
+                "144",
+                "149",
+                "153",
+                "157",
+                "161",
+                "163",
+                "165",
+                "167",
+                "169",
+                "173"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "6GChannels.160MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "6GChannels.20MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "6GChannels.40MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "6GChannels.80MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "6GChannels.auto": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "6GChannels.indoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "6GChannels.indoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "6GChannels.indoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "6GChannels.indoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "6GChannels.indoor.auto": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "Auto",
+              "type": "array"
+            },
+            "6GChannels.outdoor.160MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "160 MHz",
+              "type": "array"
+            },
+            "6GChannels.outdoor.20MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "20 MHz",
+              "type": "array"
+            },
+            "6GChannels.outdoor.40MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "40 MHz",
+              "type": "array"
+            },
+            "6GChannels.outdoor.80MHz": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "80 MHz",
+              "type": "array"
+            },
+            "6GChannels.outdoor.auto": {
+              "curated": false,
+              "enum": [
+                "1",
+                "5",
+                "9",
+                "13",
+                "17",
+                "21",
+                "25",
+                "29",
+                "33",
+                "37",
+                "41",
+                "45",
+                "49",
+                "53",
+                "57",
+                "61",
+                "65",
+                "69",
+                "73",
+                "77",
+                "81",
+                "85",
+                "89",
+                "93",
+                "97",
+                "101",
+                "105",
+                "109",
+                "113",
+                "117",
+                "121",
+                "125",
+                "129",
+                "133",
+                "137",
+                "141",
+                "145",
+                "149",
+                "153",
+                "157",
+                "161",
+                "165",
+                "169",
+                "173",
+                "177",
+                "181",
+                "185",
+                "189",
+                "193",
+                "197",
+                "201",
+                "205",
+                "209",
+                "213",
+                "217",
+                "221",
+                "225",
+                "229",
+                "233"
+              ],
+              "label": "Auto",
+              "type": "array"
+            }
+          },
+          "label": "Wi-Fi available channels"
+        }
+      }
     },
     "network": {
-      "endpoints": {}
+      "endpoints": {
+        "wifiNetworks": {
+          "fields": {
+            "accountingInterimUpdates": {
+              "curated": true,
+              "label": "Accounting interim updates",
+              "type": "integer"
+            },
+            "description": {
+              "curated": false,
+              "label": "Description",
+              "type": "string"
+            },
+            "enableDhcp": {
+              "curated": true,
+              "label": "Enable DHCP",
+              "type": "boolean"
+            },
+            "guestPortal.enableSelfService": {
+              "curated": false,
+              "label": "Enable self service",
+              "type": "boolean"
+            },
+            "guestPortal.enableSmsLogin": {
+              "curated": false,
+              "label": "Enable sms login",
+              "type": "boolean"
+            },
+            "guestPortal.endOfDayReauthDelay": {
+              "curated": false,
+              "label": "End of day reauth delay",
+              "type": "boolean"
+            },
+            "guestPortal.externalPortalKey": {
+              "curated": false,
+              "label": "External portal key",
+              "type": "string"
+            },
+            "guestPortal.externalPortalUrl": {
+              "curated": false,
+              "label": "External portal url",
+              "type": "string"
+            },
+            "guestPortal.guestNetworkType": {
+              "curated": false,
+              "enum": [
+                "ClickThrough",
+                "SelfSignIn",
+                "HostApproval",
+                "GuestPass",
+                "WISPr",
+                "Cloudpath",
+                "Directory",
+                "SAML",
+                "Workflow",
+                null
+              ],
+              "label": "Guest network type",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "guestPortal.guestPage.advertImage.id": {
+              "curated": false,
+              "label": "ID",
+              "type": "string"
+            },
+            "guestPortal.guestPage.advertImage.name": {
+              "curated": false,
+              "label": "Name",
+              "type": "string"
+            },
+            "guestPortal.guestPage.langCode": {
+              "curated": false,
+              "label": "Lang code",
+              "type": "string"
+            },
+            "guestPortal.guestPage.logoImage.id": {
+              "curated": false,
+              "label": "ID",
+              "type": "string"
+            },
+            "guestPortal.guestPage.logoImage.name": {
+              "curated": false,
+              "label": "Name",
+              "type": "string"
+            },
+            "guestPortal.guestPage.tagLine": {
+              "curated": false,
+              "label": "Tag line",
+              "type": "string"
+            },
+            "guestPortal.guestPage.termsAndConditions": {
+              "curated": false,
+              "label": "Terms and conditions",
+              "type": "string"
+            },
+            "guestPortal.guestPage.title": {
+              "curated": false,
+              "label": "Title",
+              "type": "string"
+            },
+            "guestPortal.guestPage.welcomeMessage": {
+              "curated": false,
+              "label": "Welcome message",
+              "type": "string"
+            },
+            "guestPortal.guestPage.wifi4Eu": {
+              "curated": false,
+              "label": "Wifi4 eu",
+              "type": "boolean"
+            },
+            "guestPortal.guestPage.wifi4EuNetworkId": {
+              "curated": false,
+              "label": "Wifi4 eu network ID",
+              "type": "string"
+            },
+            "guestPortal.hostGuestConfig.hostDomains": {
+              "curated": false,
+              "label": "Host domains",
+              "type": "array"
+            },
+            "guestPortal.hostGuestConfig.hostDurationChoices": {
+              "curated": false,
+              "label": "Host duration choices",
+              "type": "array"
+            },
+            "guestPortal.lockoutPeriod": {
+              "curated": false,
+              "label": "Lockout period",
+              "type": "integer"
+            },
+            "guestPortal.lockoutPeriodEnabled": {
+              "curated": false,
+              "label": "Lockout period enabled",
+              "type": "boolean"
+            },
+            "guestPortal.macCredentialsDuration": {
+              "curated": false,
+              "label": "MAC credentials duration",
+              "type": "integer"
+            },
+            "guestPortal.maxDevices": {
+              "curated": false,
+              "label": "Max devices",
+              "type": "integer"
+            },
+            "guestPortal.redirectUrl": {
+              "curated": false,
+              "label": "Redirect url",
+              "type": "string"
+            },
+            "guestPortal.smsPasswordDuration.duration": {
+              "curated": false,
+              "label": "Duration",
+              "type": "integer"
+            },
+            "guestPortal.smsPasswordDuration.unit": {
+              "curated": false,
+              "enum": [
+                "YEAR",
+                "MONTH",
+                "DAY",
+                "HOUR",
+                "MINUTE",
+                "SECOND"
+              ],
+              "label": "Unit",
+              "type": "string"
+            },
+            "guestPortal.socialDomains": {
+              "curated": false,
+              "label": "Social domains",
+              "type": "array"
+            },
+            "guestPortal.socialEmails": {
+              "curated": false,
+              "label": "Social emails",
+              "type": "boolean"
+            },
+            "guestPortal.socialIdentities.facebook.config.appId": {
+              "curated": false,
+              "label": "App ID",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.facebook.config.appSecret": {
+              "curated": false,
+              "label": "App secret",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.facebook.source": {
+              "curated": false,
+              "enum": [
+                "RUCKUS",
+                "CUSTOM"
+              ],
+              "label": "Source",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.google.config.appId": {
+              "curated": false,
+              "label": "App ID",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.google.config.appSecret": {
+              "curated": false,
+              "label": "App secret",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.google.source": {
+              "curated": false,
+              "enum": [
+                "RUCKUS",
+                "CUSTOM"
+              ],
+              "label": "Source",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.linkedin.config.appId": {
+              "curated": false,
+              "label": "App ID",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.linkedin.config.appSecret": {
+              "curated": false,
+              "label": "App secret",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.linkedin.source": {
+              "curated": false,
+              "enum": [
+                "RUCKUS",
+                "CUSTOM"
+              ],
+              "label": "Source",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.twitter.config.appId": {
+              "curated": false,
+              "label": "App ID",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.twitter.config.appSecret": {
+              "curated": false,
+              "label": "App secret",
+              "type": "string"
+            },
+            "guestPortal.socialIdentities.twitter.source": {
+              "curated": false,
+              "enum": [
+                "RUCKUS",
+                "CUSTOM"
+              ],
+              "label": "Source",
+              "type": "string"
+            },
+            "guestPortal.userSessionGracePeriod": {
+              "curated": false,
+              "label": "User session grace period",
+              "type": "integer"
+            },
+            "guestPortal.userSessionTimeout": {
+              "curated": false,
+              "label": "User session timeout",
+              "type": "integer"
+            },
+            "guestPortal.walledGardens": {
+              "curated": false,
+              "label": "Walled gardens",
+              "type": "array"
+            },
+            "guestPortal.wisprPage.authType": {
+              "curated": false,
+              "enum": [
+                "RADIUS",
+                "ALWAYS_ACCEPT"
+              ],
+              "label": "Auth type",
+              "type": "string"
+            },
+            "guestPortal.wisprPage.captivePortalUrl": {
+              "curated": false,
+              "label": "Captive portal url",
+              "type": "string"
+            },
+            "guestPortal.wisprPage.customExternalProvider": {
+              "curated": false,
+              "label": "Custom external provider",
+              "type": "boolean"
+            },
+            "guestPortal.wisprPage.externalProviderName": {
+              "curated": false,
+              "label": "External provider name",
+              "type": "string"
+            },
+            "guestPortal.wisprPage.externalProviderRegion": {
+              "curated": false,
+              "label": "External provider region",
+              "type": "string"
+            },
+            "guestPortal.wisprPage.integrationKey": {
+              "curated": false,
+              "label": "Integration key",
+              "type": "string"
+            },
+            "hotspot20Settings.accessNetworkType": {
+              "curated": false,
+              "enum": [
+                "PRIVATE",
+                "PRIVATE_WITH_GUEST",
+                "CHARGEABLE_PUBLIC",
+                "FREE_PUBLIC",
+                "PERSONAL_DEVICE",
+                "TEST",
+                "WILDCARD"
+              ],
+              "label": "Access network type",
+              "type": "string"
+            },
+            "hotspot20Settings.allowInternetAccess": {
+              "curated": false,
+              "label": "Allow internet access",
+              "type": "boolean"
+            },
+            "hotspot20Settings.connectionCapabilities[].port": {
+              "curated": false,
+              "label": "Port",
+              "type": "integer"
+            },
+            "hotspot20Settings.connectionCapabilities[].protocol": {
+              "curated": false,
+              "label": "Protocol",
+              "type": "string"
+            },
+            "hotspot20Settings.connectionCapabilities[].protocolNumber": {
+              "curated": false,
+              "label": "Protocol number",
+              "type": "integer"
+            },
+            "hotspot20Settings.connectionCapabilities[].status": {
+              "curated": false,
+              "enum": [
+                "CLOSED",
+                "OPEN",
+                "UNKNOWN",
+                null
+              ],
+              "label": "Status",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hotspot20Settings.ipv4AddressType": {
+              "curated": false,
+              "enum": [
+                "UNAVAILABLE",
+                "PUBLIC",
+                "PORT_RESTRICTED",
+                "SINGLE_NATED_PRIVATE",
+                "DOUBLE_NATED_PRIVATE",
+                "PORT_RESTRICTED_AND_SINGLE_NATED",
+                "PORT_RESTRICTED_AND_DOUBLE_NATED",
+                "UNKNOWN"
+              ],
+              "label": "Ipv4 address type",
+              "type": "string"
+            },
+            "id": {
+              "curated": false,
+              "label": "ID",
+              "type": "string"
+            },
+            "isEnforced": {
+              "curated": true,
+              "label": "Enforced by template",
+              "type": "boolean"
+            },
+            "isOweMaster": {
+              "curated": true,
+              "label": "Is owe master",
+              "type": "boolean"
+            },
+            "name": {
+              "curated": false,
+              "label": "Name",
+              "type": "string"
+            },
+            "owePairNetworkId": {
+              "curated": false,
+              "label": "Owe pair network ID",
+              "type": "string"
+            },
+            "type": {
+              "curated": false,
+              "label": "Type",
+              "type": "string"
+            },
+            "useCertificateTemplate": {
+              "curated": true,
+              "label": "Use certificate template",
+              "type": "boolean"
+            },
+            "useDpskService": {
+              "curated": true,
+              "label": "Use dpsk service",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.applicationVisibilityEnabled": {
+              "curated": true,
+              "label": "Application visibility enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.arpRequestRateLimit": {
+              "curated": true,
+              "label": "Arp request rate limit",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.broadcastProbeResponseDelay": {
+              "curated": true,
+              "label": "Broadcast probe response delay",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.bssPriority": {
+              "curated": true,
+              "enum": [
+                "HIGH",
+                "LOW"
+              ],
+              "label": "BSS priority",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.clientInactivityTimeout": {
+              "curated": true,
+              "label": "Client inactivity timeout",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.clientIsolation": {
+              "curated": true,
+              "label": "Client isolation",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.clientIsolationOptions.autoVrrp": {
+              "curated": true,
+              "label": "Auto vrrp",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.clientIsolationOptions.packetsType": {
+              "curated": true,
+              "enum": [
+                "UNICAST",
+                "MULTICAST",
+                "UNICAST_MULTICAST",
+                null
+              ],
+              "label": "Packets type",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.advancedCustomization.clientLoadBalancingEnable": {
+              "curated": true,
+              "label": "Client load balancing enable",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82Enabled": {
+              "curated": true,
+              "label": "DHCP option82 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82MacFormat": {
+              "curated": true,
+              "enum": [
+                "COLON",
+                "HYPHEN",
+                "NODELIMITER"
+              ],
+              "label": "DHCP option82 MAC format",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption150Enabled": {
+              "curated": true,
+              "label": "DHCP option82 sub option150 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption151Enabled": {
+              "curated": true,
+              "label": "DHCP option82 sub option151 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption151Format": {
+              "curated": true,
+              "enum": [
+                "SUBOPT151_AREA_NAME",
+                "SUBOPT151_ESSID",
+                null
+              ],
+              "label": "DHCP option82 sub option151 format",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption151Input": {
+              "curated": true,
+              "label": "DHCP option82 sub option151 input",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption1Enabled": {
+              "curated": true,
+              "label": "DHCP option82 sub option1 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption1Format": {
+              "curated": true,
+              "enum": [
+                "SUBOPT1_AP_INFO_LOCATION",
+                "SUBOPT1_AP_INFO",
+                "SUBOPT1_AP_MAC_ESSID_PRIVACYTYPE",
+                "SUBOPT1_AP_MAC_hex",
+                "SUBOPT1_AP_MAC_hex_ESSID",
+                "SUBOPT1_ESSID",
+                "SUBOPT1_AP_MAC",
+                "SUBOPT1_AP_MAC_ESSID",
+                "SUBOPT1_AP_Name_ESSID",
+                "SUBOPT1_CUSTOMIZED",
+                null
+              ],
+              "label": "DHCP option82 sub option1 format",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption2Enabled": {
+              "curated": true,
+              "label": "DHCP option82 sub option2 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.dhcpOption82SubOption2Format": {
+              "curated": true,
+              "enum": [
+                "SUBOPT2_CLIENT_MAC",
+                "SUBOPT2_CLIENT_MAC_hex",
+                "SUBOPT2_CLIENT_MAC_hex_ESSID",
+                "SUBOPT2_AP_MAC",
+                "SUBOPT2_AP_MAC_hex",
+                "SUBOPT2_AP_MAC_hex_ESSID",
+                "SUBOPT2_AP_MAC_ESSID",
+                "SUBOPT2_AP_Name",
+                null
+              ],
+              "label": "DHCP option82 sub option2 format",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.advancedCustomization.dhcpRequestRateLimit": {
+              "curated": true,
+              "label": "DHCP request rate limit",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.directedThreshold": {
+              "curated": true,
+              "label": "Directed threshold",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.dnsProxy.dnsProxyRules[].domainName": {
+              "curated": true,
+              "label": "Domain name",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.dnsProxy.dnsProxyRules[].ipList": {
+              "curated": true,
+              "label": "IP list",
+              "type": "array"
+            },
+            "wlan.advancedCustomization.dnsProxyEnabled": {
+              "curated": true,
+              "label": "DNS proxy enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableAaaVlanOverride": {
+              "curated": true,
+              "label": "Enable AAA VLAN override",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableAdditionalRegulatoryDomains": {
+              "curated": true,
+              "label": "Enable additional regulatory domains",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableAirtimeDecongestion": {
+              "curated": true,
+              "label": "Enable airtime decongestion",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableAntiSpoofing": {
+              "curated": true,
+              "label": "Enable anti spoofing",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableApHostNameAdvertisement": {
+              "curated": true,
+              "label": "Enable AP host name advertisement",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableArpRequestRateLimit": {
+              "curated": true,
+              "label": "Enable arp request rate limit",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableBandBalancing": {
+              "curated": true,
+              "label": "Enable band balancing",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableDhcpRequestRateLimit": {
+              "curated": true,
+              "label": "Enable DHCP request rate limit",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableFastRoaming": {
+              "curated": true,
+              "label": "Enable fast roaming",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableGtkRekey": {
+              "curated": true,
+              "label": "Enable gtk rekey",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableJoinRSSIThreshold": {
+              "curated": true,
+              "label": "Enable join RSSIThreshold",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableMulticastDownlinkRateLimiting": {
+              "curated": true,
+              "label": "Enable multicast downlink rate limiting",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableMulticastDownlinkRateLimiting6G": {
+              "curated": true,
+              "label": "Enable multicast downlink rate limiting6 g",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableMulticastUplinkRateLimiting": {
+              "curated": true,
+              "label": "Enable multicast uplink rate limiting",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableMulticastUplinkRateLimiting6G": {
+              "curated": true,
+              "label": "Enable multicast uplink rate limiting6 g",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableNeighborReport": {
+              "curated": true,
+              "label": "Enable neighbor report",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableOptimizedConnectivityExperience": {
+              "curated": true,
+              "label": "Enable optimized connectivity experience",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableSyslog": {
+              "curated": true,
+              "label": "Enable syslog",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.enableTransientClientManagement": {
+              "curated": true,
+              "label": "Enable transient client management",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.forceMobileDeviceDhcp": {
+              "curated": true,
+              "label": "Force mobile device DHCP",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.hideSsid": {
+              "curated": true,
+              "label": "Hide SSID",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.joinExpireTime": {
+              "curated": true,
+              "label": "Join expire time",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.joinRSSIThreshold": {
+              "curated": true,
+              "label": "Join RSSIThreshold",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.joinWaitThreshold": {
+              "curated": true,
+              "label": "Join wait threshold",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.joinWaitTime": {
+              "curated": true,
+              "label": "Join wait time",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.maxClientsOnWlanPerRadio": {
+              "curated": true,
+              "label": "Max clients on wlan per radio",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.mobilityDomainId": {
+              "curated": true,
+              "label": "Mobility domain ID",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.multiLinkOperationEnabled": {
+              "curated": true,
+              "label": "Multi link operation enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.multiLinkOperationOptions.enable24G": {
+              "curated": true,
+              "label": "Enabled on 2.4 GHz",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.multiLinkOperationOptions.enable50G": {
+              "curated": true,
+              "label": "Enabled on 5 GHz",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.multiLinkOperationOptions.enable6G": {
+              "curated": true,
+              "label": "Enable6 g",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.multicastDownlinkRateLimiting": {
+              "curated": true,
+              "label": "Multicast downlink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.multicastFilterEnabled": {
+              "curated": true,
+              "label": "Multicast filter enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.multicastUplinkRateLimiting": {
+              "curated": true,
+              "label": "Multicast uplink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.proxyARP": {
+              "curated": true,
+              "label": "Proxy ARP",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.qosMapSetEnabled": {
+              "curated": true,
+              "label": "QoS map set enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.qosMapSetOptions.rules[].dscpExceptionValues": {
+              "curated": true,
+              "label": "Dscp exception values",
+              "type": "array"
+            },
+            "wlan.advancedCustomization.qosMapSetOptions.rules[].dscpHigh": {
+              "curated": true,
+              "label": "Dscp high",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.qosMapSetOptions.rules[].dscpLow": {
+              "curated": true,
+              "label": "Dscp low",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.qosMapSetOptions.rules[].enabled": {
+              "curated": true,
+              "label": "Enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.qosMapSetOptions.rules[].priority": {
+              "curated": true,
+              "label": "Priority",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.qosMirroringEnabled": {
+              "curated": true,
+              "label": "QoS mirroring enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.qosMirroringScope": {
+              "curated": true,
+              "enum": [
+                "MSCS_REQUESTS_ONLY",
+                "ALL_CLIENTS"
+              ],
+              "label": "QoS mirroring scope",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radioCustomization.bssMinimumPhyRate": {
+              "curated": true,
+              "enum": [
+                "1",
+                "2",
+                "5.5",
+                "12",
+                "24",
+                "default"
+              ],
+              "label": "BSS minimum phy rate",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radioCustomization.managementFrameMinimumPhyRate": {
+              "curated": true,
+              "enum": [
+                "1",
+                "2",
+                "5.5",
+                "6",
+                "9",
+                "11",
+                "12",
+                "18",
+                "24",
+                "36",
+                "48",
+                "54"
+              ],
+              "label": "Management frame minimum phy rate",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radioCustomization.phyTypeConstraint": {
+              "curated": true,
+              "enum": [
+                "OFDM",
+                "NONE"
+              ],
+              "label": "Phy type constraint",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radioCustomization.rfBandUsage": {
+              "curated": true,
+              "enum": [
+                "2.4GHZ",
+                "5.0GHZ",
+                "BOTH"
+              ],
+              "label": "Rf band usage",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radiusOptions.calledStationIdType": {
+              "curated": true,
+              "enum": [
+                "BSSID",
+                "AP_MAC",
+                "NONE",
+                "AP_GROUP",
+                null
+              ],
+              "label": "Called-Station-Id format",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.advancedCustomization.radiusOptions.nasIdDelimiter": {
+              "curated": true,
+              "enum": [
+                "DASH",
+                "COLON"
+              ],
+              "label": "NAS-Identifier delimiter",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radiusOptions.nasIdType": {
+              "curated": true,
+              "enum": [
+                "USER",
+                "BSSID",
+                "AP_MAC",
+                "VENUE_NAME",
+                "AP_GROUP_NAME"
+              ],
+              "label": "NAS-Identifier format",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.radiusOptions.nasMaxRetry": {
+              "curated": true,
+              "label": "NAS max retry",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.radiusOptions.nasReconnectPrimaryMin": {
+              "curated": true,
+              "label": "NAS reconnect primary min",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.radiusOptions.nasRequestTimeoutSec": {
+              "curated": true,
+              "label": "NAS request timeout sec",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.radiusOptions.singleSessionIdAccounting": {
+              "curated": true,
+              "label": "Single session ID accounting",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.radiusOptions.userDefinedNasId": {
+              "curated": true,
+              "label": "User defined NAS ID",
+              "type": "string"
+            },
+            "wlan.advancedCustomization.respectiveAccessControl": {
+              "curated": true,
+              "label": "Respective access control",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.rssiAssociationRejectionThreshold": {
+              "curated": true,
+              "label": "RSSI association rejection threshold",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.totalDownlinkRateLimiting": {
+              "curated": true,
+              "label": "Total downlink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.totalUplinkRateLimiting": {
+              "curated": true,
+              "label": "Total uplink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.userDownlinkRateLimiting": {
+              "curated": true,
+              "label": "User downlink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.userUplinkRateLimiting": {
+              "curated": true,
+              "label": "User uplink rate limiting",
+              "type": "integer"
+            },
+            "wlan.advancedCustomization.wifi6Enabled": {
+              "curated": true,
+              "label": "Wifi6 enabled",
+              "type": "boolean"
+            },
+            "wlan.advancedCustomization.wifi7Enabled": {
+              "curated": true,
+              "label": "Wifi7 enabled",
+              "type": "boolean"
+            },
+            "wlan.bypassCNA": {
+              "curated": true,
+              "label": "Bypass CNA",
+              "type": "boolean"
+            },
+            "wlan.bypassCPUsingMacAddressAuthentication": {
+              "curated": true,
+              "label": "Bypass CPUsing MAC address authentication",
+              "type": "boolean"
+            },
+            "wlan.enabled": {
+              "curated": true,
+              "label": "Enabled",
+              "type": "boolean"
+            },
+            "wlan.macAddressAuthentication": {
+              "curated": true,
+              "label": "MAC address authentication",
+              "type": "boolean"
+            },
+            "wlan.managementFrameProtection": {
+              "curated": true,
+              "enum": [
+                "Disabled",
+                "Optional",
+                "Required",
+                null
+              ],
+              "label": "Management frame protection",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wlan.passphrase": {
+              "curated": true,
+              "label": "Passphrase",
+              "type": "string"
+            },
+            "wlan.saePassphrase": {
+              "curated": true,
+              "label": "Sae passphrase",
+              "type": "string"
+            },
+            "wlan.ssid": {
+              "curated": true,
+              "label": "SSID",
+              "type": "string"
+            },
+            "wlan.vlanId": {
+              "curated": true,
+              "label": "VLAN ID",
+              "type": "integer"
+            },
+            "wlan.wepHexKey": {
+              "curated": true,
+              "label": "Wep hex key",
+              "type": "string"
+            },
+            "wlan.wlanSecurity": {
+              "curated": true,
+              "enum": [
+                "WPA2Enterprise",
+                "WPA3"
+              ],
+              "label": "Wlan security",
+              "type": "string"
+            }
+          },
+          "label": "Wi-Fi networks"
+        }
+      }
     },
     "venue": {
       "endpoints": {

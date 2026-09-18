@@ -1,17 +1,24 @@
 {
   "name": "RUCKUS",
   "status": "verified",
-  "note": "RUCKUS's recommended configuration, shown to readers as the \"RUCKUS recommends\" column. Keep ONLY values confirmed against RUCKUS guidance here \u2014 a verified column is presented as authoritative, so an unconfirmed value is worse than an absent one. See api/baselines.py.",
+  "note": "RUCKUS's recommended configuration, shown to readers as the \"RUCKUS recommends\" column. Keep ONLY values confirmed against RUCKUS guidance here — a verified column is presented as authoritative, so an unconfirmed value is worse than an absent one. Values are keyed by level; a key at the apgroup level is a different setting from the same key at venue level. See api/baselines.py.",
   "source": "RUCKUS ONE configuration guidance",
   "verifiedAt": "2026-09-01T19:56:09+00:00",
-  "values": {
-    "apRadioSettings.radioParams24G.allowedChannels": [
-      "1",
-      "6",
-      "11"
-    ],
-    "rogueApSettings.enabled": true,
-    "apRebootTimeoutSettings.gatewayLossTimeout": 1800,
-    "apRebootTimeoutSettings.serverLossTimeout": 7200
+  "levels": {
+    "venue": {
+      "values": {
+        "apRadioSettings.radioParams24G.allowedChannels": [
+          "1",
+          "6",
+          "11"
+        ],
+        "rogueApSettings.enabled": true,
+        "apRebootTimeoutSettings.gatewayLossTimeout": 1800,
+        "apRebootTimeoutSettings.serverLossTimeout": 7200
+      }
+    },
+    "apgroup": {
+      "values": {}
+    }
   }
 }

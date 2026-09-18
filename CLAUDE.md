@@ -75,7 +75,10 @@ upstream copy. It is not.
   - the org config baseline at `PISR_ORG_BASELINE_FILE`
     (`/data/org-baseline.json`) — recommended values keyed by R1 path, edited by
     an admin. No venue data: it is the customer's *agreed configuration*, not a
-    reading from their network. See `api/baselines.py`.
+    reading from their network. Its `networkGroups` may carry an SSID-name glob
+    or an explicit network id in a match rule — a tenant *reference*, the same
+    class as the venue ids in the visibility policy, not a reading; still no
+    device, credential or config value read off the network. See `api/baselines.py`.
 
   Guard the distinction rather than the file count. All three are configuration
   with a portal in front of them; a customer's *report* is the thing that must
@@ -388,6 +391,17 @@ an upstream.
   calls would be safe to repeat, but a silent retry turns a failing R1
   endpoint into a slow one.
 
+  **The default executor is widened at startup, and the pool is coupled to it.**
+  `min(32, cpu+4)` is six threads on the 2-core prod box, but a report fires ~50
+  network-bound reads at once, so `main._widen_report_executor` sets the loop's
+  default executor to `config.FETCH_WORKERS` (`PISR_FETCH_WORKERS`, default 24)
+  and `config.py` `setdefault`s `R1_POOL_MAXSIZE` to the same value. They MUST
+  move together: a wide executor over a pool of ten just reintroduces the
+  discard above. This is a floor for medium venues, not a fix for a single slow
+  R1 call — a report is bounded by its slowest single read, which on a large
+  per-unit MDU is the unpaginated `/venues/wifiNetworks/query` activations call
+  (~14s, no `fields`/page knobs on that endpoint), not by the worker count.
+
 - **Spectrum chart paint order** — `src/pages/PISR.tsx` (`SpectrumChart`) and
   `api/reports/pisr.py` (`_spectrum`). Both sorted blocks by `inUse` alone, so
   states differing only by colour painted in channel order and a translucent
@@ -401,7 +415,17 @@ an upstream.
   settings do NOT — they are one R1 call per object, and an MDU with a
   per-unit AP group would put several hundred requests behind every report for
   a tab most readers never open. `/pisr/{cid}/config/detail` fetches them on a
-  button press, capped at `fetch.AP_CONFIG_LIMIT` APs.
+  button press, capped at `fetch.AP_CONFIG_LIMIT` APs and
+  `fetch.AP_GROUP_CONFIG_LIMIT` AP groups.
+
+  **That route must finish inside Cloudflare's 100-second origin timeout**, or
+  the browser gets an HTTP 524 while the backend carries on polling R1 for
+  nobody. It reads in two waves: the three listings (groups, APs, activations)
+  together, then EVERY per-object read — each group sub-resource, each AP, each
+  network — in one gather on the default executor. The group reads used to run
+  serially inside one thread, eight round trips per group and uncapped, which is
+  minutes on a per-unit MDU. Do not put them back behind a loop, and do not give
+  them a pool of their own (see "R1 connection pool").
 
   The bulk `/venues/aps/query` cannot substitute: it ACCEPTS the nested field
   names (`radio`, `clientAdmissionControl`, `useVenueSettings`) and echoes them
@@ -518,9 +542,67 @@ an upstream.
   recommendation can never key on a field the catalogue does not know. The
   reader (Config tab) still derives its columns from LIVE config, so a field
   RUCKUS adds shows there before the catalogue is rebuilt; the catalogue only
-  bounds what the editor offers. This is phase 1 of the multi-level model — the
-  catalogue is structured by level (venue / apgroup / network) for the AP-group
-  and network phases to grow into.
+  bounds what the editor offers.
+
+  **The catalogue and the whole baseline are STRUCTURED BY LEVEL — venue /
+  apgroup / network.** A setting is recommended at the level R1 exposes it, and
+  venue and AP-group SHARE ENDPOINT NAMES (`apClientAdmissionControlSettings`,
+  the `apModel*` set live at both), so the `<endpoint>.<path>` key alone cannot
+  say which level a value belongs to. The level is therefore a SEPARATE
+  DIMENSION of the store, never baked into the key — the same key at two levels
+  is two different settings. `baselines.lookup(key, level)` and
+  `shape._config_row(..., level=)` both default to `venue`, so every venue call
+  site is unchanged. `build_field_catalogue.build_apgroup_level` walks
+  `/venues/{venueId}/apGroups/{apGroupId}/<suffix>` from
+  `fetch.AP_GROUP_CONFIG_SOURCES` (keyed on the R1 suffix, matching the reader).
+  `build_network_level` is the odd one: `GET /wifiNetworks/{id}` is a
+  POLYMORPHIC base (id/name/type + a discriminator, only 3 fields on its own),
+  and the settable fields live in the six per-type SUBTYPES (PSK, AAA, Guest,
+  Hotspot 2.0, Open, DPSK) that `allOf`-reference the base. The spec ships no
+  discriminator `mapping`, so the builder finds the subtypes by scanning
+  `components.schemas` for that allOf-reference and UNIONS their fields under the
+  single endpoint `wifiNetworks` — don't expect `_endpoint_schema` to reach
+  them. A baseline file written BEFORE the level dimension existed is flat
+  `values`/`notApplicable` at the top level; `Baseline._read_levels` reads it AS
+  the venue level, so no mounted org file needs migrating. `ruckus.json` is
+  migrated in-repo to the `levels` shape.
+
+  **The AP-group and network comparisons are surfaced by `config/detail`, not
+  the report.** `shape.config_detail` flattens each AP group's live config
+  (`_apgroup_categories`, `level="apgroup"`) and each activated NETWORK's config
+  (`_network_categories`, `level="network"`) into comparable rows, and stamps
+  `apgroupBaselines`/`networkBaselines` (each a `baselines.describe(level)`) on
+  the payload, so the frontend renders the same org/RUCKUS columns the venue
+  Config tab uses (`ConfigRows`). Each shows its columns only when that level has
+  a recommendation to compare against; otherwise the compact tree stays. Network
+  config is one R1 call per network (`fetch.network_config`, `GET
+  /wifiNetworks/{id}`), keyed off the venue's `venue_activations`, and CAPPED at
+  `fetch.NETWORK_CONFIG_LIMIT` exactly like the per-AP reads — and it can carry
+  guest-portal secrets, which the route's `scrub_report` covers. The editor
+  (`AdminBaseline.tsx`) has a LEVEL SWITCHER that auto-shows any level the
+  catalogue has fields for (Venue / AP group / Network): one document, edited a
+  level at a time, but EVERY level is sent on save — a body carrying only the
+  level on screen would delete the others, which is the whole reason
+  `full()`/`save()` round-trip all levels.
+
+  **The network level has GROUPS with per-group recommendations, plus display
+  auto-clustering.** An MDU runs hundreds of per-unit SSIDs identical apart from
+  name/VLAN, and a few genuinely distinct ones. Two mechanisms, kept apart:
+  - **Groups** (`baselines.networkGroups`, ORG only) are the admin's intentional
+    buckets. Each has a `match` rule — `{by:"name",pattern}` glob, `{by:"type"}`,
+    or `{by:"ids"}` (which also pins one SSID out) — and its own `values`/
+    `notApplicable` that OVERRIDE the network default PER KEY (`lookup(key,
+    "network", group)`); a key the group is silent on inherits the default. The
+    FIRST matching group wins, so order is precedence. Stored, edited in the
+    Network tab's bucket bar. RUCKUS is never grouped — its guidance is generic.
+  - **Auto-clustering** (`shape._network_fingerprint`) is DISPLAY ONLY and
+    stored nowhere. `config_detail` collapses networks sharing a (group,
+    fingerprint) into one representative row with a member list and a `varies`
+    summary; the fingerprint ignores per-instance fields (name/ssid/id/
+    description and anything matching vlan/dpsk/passphrase), so per-unit SSIDs
+    fold together while a distinct SSID stands alone. `networkShown` counts
+    SSIDs, `networkClusters` the collapsed rows. It decides how the tab GROUPS
+    networks, never what they are compared against — that is the baseline's job.
 
   **The org baseline has THREE states per field, and PISR writes it now.**
   `api/baselines.py` + `api/routers/baseline_router.py` + the admin editor
@@ -535,12 +617,12 @@ an upstream.
   renderer keys a mismatch off `matches === false` for exactly this reason — a
   cell with no `matches` (N.A. or absent) must never count as differing. RUCKUS
   has no N.A. concept and is never written: it is read-only reference from the
-  repo. The editor's field CATALOGUE comes from a live venue's `config
-  .categories`, not a hardcoded list, because R1's field set is dynamic (the
-  de-camelCase fallback in `config_labels` exists for the same reason). The save
-  is a whole-document replace, so the frontend seeds the working copy from the
-  ENTIRE stored baseline and overlays only the venue's visible fields —
-  otherwise saving from one venue would delete recommendations set from another.
+  repo. The editor's field CATALOGUE is the static committed
+  `field_catalogue.json` (see above), so it shows every settable field without
+  loading a venue. The save is a whole-document replace, so the frontend seeds
+  the working copy from the ENTIRE stored baseline — every level — and overlays
+  only the edits, so saving from one level (or one venue's visible fields) never
+  deletes recommendations set at another.
 
   **The config comparison table (org/RUCKUS columns) is screen-only.** The PDF
   renders `config.venue-summary` but not `config.categories`, so the
