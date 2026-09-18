@@ -616,7 +616,7 @@ SECTIONS: Tuple[Section, ...] = (
         label="Adaptive policy sets",
         tab="identity",
         paths=("policy.sets", "policy.inUse"),
-        checks=("policy-chain",),
+        checks=("policy-chain", "policy-set-empty"),
     ),
     Section(
         id="identity.radius",

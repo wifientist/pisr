@@ -103,6 +103,7 @@ CHECK_CATEGORY: Dict[str, str] = {
     "dpsk-passphrases": "identity",
     "dpsk-identity-groups": "identity",
     "policy-chain": "identity",
+    "policy-set-empty": "identity",
     "radius-group-orphans": "identity",
     # Documentation & handover
     "ap-naming": "documentation",

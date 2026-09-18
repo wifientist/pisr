@@ -911,32 +911,73 @@ def check_policy_chain_resolves(report: Dict[str, Any]) -> Dict[str, Any]:
         return _finding("policy-chain", "Adaptive policy chain resolves", "skipped",
                         "No adaptive policy set is attached to this venue's DPSK.")
 
-    dangling_policies = policy.get("unresolvedPolicies") or 0
+    # One row PER broken link, not one row per set with a CSV of ids — the
+    # evidence renders in a scrollable table, so a flat list is scannable where
+    # a 900-id comma string in a single cell is not. Each row says which set it
+    # is in, the kind of break, and the policy (a name where we resolved it, the
+    # bare id where the policy itself is what is gone).
+    dangling = [{"issue": "policy id not found", "set": row["name"], "policy": pid}
+                for row in policy["sets"]
+                for pid in (row.get("unresolvedPolicyIds") or [])]
     missing_radius = [
-        {"set": row["name"], "policy": member["policy"]}
+        {"issue": "RADIUS group gone", "set": row["name"], "policy": member["policy"]}
         for row in policy["sets"] for member in row["policies"]
         if member.get("radiusGroupMissing")
     ]
-    if dangling_policies or missing_radius:
+    if dangling or missing_radius:
         parts = []
-        if dangling_policies:
-            parts.append(f"{dangling_policies} policy id(s) in a set no longer exist")
+        if dangling:
+            parts.append(f"{len(dangling)} policy id(s) in a set no longer exist")
         if missing_radius:
             parts.append(f"{len(missing_radius)} policy/policies point at a RADIUS "
                          f"attribute group that is gone")
         return _finding("policy-chain", "Adaptive policy chain resolves", "warning",
                         " and ".join(parts) + ". Traffic matching those rules gets no "
                         "rate tier applied.",
-                        headline=f"{dangling_policies + len(missing_radius)} broken link(s) "
+                        headline=f"{len(dangling) + len(missing_radius)} broken link(s) "
                                  f"in the adaptive policy chain",
-                        evidence=missing_radius or [{"unresolvedPolicyIds": _join(row["unresolvedPolicyIds"])}
-                                                    for row in policy["sets"]
-                                                    if row["unresolvedPolicyIds"]])
+                        evidence=missing_radius + dangling)
 
     total = sum(len(row["policies"]) for row in policy["sets"])
     return _finding("policy-chain", "Adaptive policy chain resolves", "ok",
                     f"All {total} policy/policies across {policy['setCount']} set(s) "
                     f"resolve to a RADIUS attribute group.")
+
+
+def check_policy_set_populated(report: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Every policy set scoped to this venue carries at least one WORKING policy.
+
+    Distinct from `policy-chain`, which flags individual broken links: a set can
+    have no broken links and still deliver nothing — it is either empty (no
+    members at all) or every member dangles, so `policies` (the resolved list)
+    is empty. A client that matches such a set is admitted and then handed no
+    rate tier, which no other check catches because there is no dangling id to
+    point at. Set-level verdict, not link-level.
+    """
+    policy = report.get("policy") or {}
+    if not policy.get("inUse"):
+        return _finding("policy-set-empty", "Assigned policy sets carry a policy", "skipped",
+                        "No adaptive policy set is attached to this venue's DPSK.")
+
+    empty = [row for row in policy["sets"] if not (row.get("policies") or [])]
+    if empty:
+        return _finding("policy-set-empty", "Assigned policy sets carry a policy", "warning",
+                        f"{len(empty)} policy set(s) scoped to this venue's DPSK resolve to "
+                        "no working policy — a client that matches one is admitted but gets "
+                        "no rate tier applied.",
+                        headline=f"{len(empty)} assigned policy set(s) hand out no rate tier",
+                        # `members` vs `dangling` says WHY it is empty: 0 members
+                        # is a set never populated, dangling>0 is one whose
+                        # policies were all deleted out from under it.
+                        evidence=[{"set": row.get("name"),
+                                   "assignedTo": _join(row.get("assignedTo")) or "—",
+                                   "members": row.get("policyCount") or 0,
+                                   "dangling": len(row.get("unresolvedPolicyIds") or [])}
+                                  for row in empty])
+
+    return _finding("policy-set-empty", "Assigned policy sets carry a policy", "ok",
+                    f"All {policy['setCount']} assigned policy set(s) carry a working policy.")
 
 
 def check_radius_group_orphans(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -1255,6 +1296,7 @@ CHECKS: List[Callable[[Dict[str, Any]], Dict[str, Any]]] = [
     check_dhcp_pools,
     check_dpsk_in_use,
     check_policy_chain_resolves,
+    check_policy_set_populated,
     check_radius_group_orphans,
     check_dpsk_pool_has_passphrases,
     check_dpsk_identity_groups,

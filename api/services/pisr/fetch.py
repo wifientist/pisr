@@ -764,6 +764,7 @@ def dpsk_passphrase_count(r1, tenant_id: Optional[str], pool_id: str) -> Optiona
 # and makes the UI show "0 policies" while refusing to delete it with a 409.
 
 POLICY_PAGE_SIZE = 500
+POLICY_PAGE_LIMIT = 40  # 20k policies — a runaway backstop, not an expected bound
 
 
 def policy_sets(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
@@ -790,10 +791,42 @@ def adaptive_policies(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     0-INDEXED and honours `size` (page 1 of 200 returns nothing when there are
     54 policies). Note that is the opposite of /dpskServices/query, which 500s
     on page 0.
+
+    PAGINATED ON PURPOSE. This used to fetch a single page of 500, which on a
+    per-unit DPSK MDU (one policy per unit is common) silently truncated the
+    tenant to its first 500 policies — and every set member pointing at a policy
+    beyond that then read as an "unresolved" broken link in the adaptive policy
+    chain, turning a fetch limit into hundreds of phantom findings. Same bug and
+    same fix as wifi_networks. Page until a short page comes back.
     """
-    return _rows(_json(_get(r1, "/policyTemplates/policies", tenant_id,
-                            params={"page": 0, "size": POLICY_PAGE_SIZE}),
-                       "GET /policyTemplates/policies", []))
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for page in range(POLICY_PAGE_LIMIT):
+        rows = _rows(_json(_get(r1, "/policyTemplates/policies", tenant_id,
+                                params={"page": page, "size": POLICY_PAGE_SIZE}),
+                           f"GET /policyTemplates/policies page={page}", []))
+        if not rows:
+            break
+        fresh = 0
+        for row in rows:
+            pid = row.get("id")
+            if pid:
+                if pid in seen:
+                    continue
+                seen.add(pid)
+            out.append(row)
+            fresh += 1
+        if len(rows) < POLICY_PAGE_SIZE:
+            break
+        if not fresh:
+            logger.warning("pisr: /policyTemplates/policies page=%s was all "
+                           "duplicates, stopping", page)
+            break
+    else:
+        logger.warning("pisr: /policyTemplates/policies hit the %s-page backstop "
+                       "(%s policies) — the tenant may have more",
+                       POLICY_PAGE_LIMIT, len(out))
+    return out
 
 
 def radius_attribute_groups(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
