@@ -72,6 +72,11 @@ SECRET_TOKENS = frozenset({"psk", "pmk", "pwd", "token", "cookie"})
 SAFE_KEYS = frozenset({
     "pskenabled", "haspsk", "passphraseenabled", "passphrasecount",
     "passphrases", "passphrasetotal", "passphrasecountsknown",
+    # DPSK pool POLICY, not a passphrase: the format (an enum like
+    # NUMBERS_ONLY) and the required length (an int). `shape.dpsk_card` shows
+    # these on the pool row, and without them here the compound "passphrase"
+    # rule deletes real content — the exact false positive this list is for.
+    "passphraseformat", "passphraselength",
     "secretconfigured", "tokenexpiry", "keytype", "keymanagement",
     "keyexchange", "dpsk", "dpskenabled", "dpskpoolid", "dpskssids",
 })
@@ -129,9 +134,17 @@ def scrub(payload: Any, _path: str = "", _depth: int = 0,
         for key, value in payload.items():
             here = f"{_path}.{key}" if _path else str(key)
             if _is_secret(key):
-                out[key] = REDACTED if value not in (None, "", [], {}) else value
-                if value not in (None, "", [], {}):
+                # An empty value has nothing to scrub; a value already REDACTED
+                # was scrubbed upstream (the fetch-time scrub over venue config
+                # and RADIUS profiles). Neither is a NEW leak, so neither is
+                # reported — that keeps this warning meaning "something started
+                # leaking", not "a field we already handle exists". The value is
+                # left as-is (still REDACTED, or still empty) either way.
+                if value not in (None, "", [], {}) and value != REDACTED:
+                    out[key] = REDACTED
                     _removed.append(here)
+                else:
+                    out[key] = value
                 continue
             out[key], _ = scrub(value, here, _depth + 1, _removed)
         return out, _removed

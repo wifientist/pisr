@@ -973,6 +973,40 @@ def test_scrub_keeps_configuration_that_merely_mentions_a_secret():
     assert out == {"pskEnabled": True, "passphraseCount": 42, "keyType": "WPA2"}
 
 
+def test_scrub_keeps_dpsk_passphrase_policy_but_not_the_passphrase():
+    """
+    A DPSK pool's `passphraseFormat`/`passphraseLength` are POLICY (an enum and
+    an int) an install review shows; only a `passphrase` VALUE is a credential.
+    The compound "passphrase" rule matched all three and deleted the policy —
+    real content lost silently, the failure mode this file exists for.
+    """
+    out, removed = secret_scrub.scrub(
+        {"passphraseFormat": "NUMBERS_ONLY", "passphraseLength": 8,
+         "passphrase": "s3cret-value"})
+    assert out["passphraseFormat"] == "NUMBERS_ONLY"
+    assert out["passphraseLength"] == 8
+    assert out["passphrase"] == secret_scrub.REDACTED
+    assert removed == ["passphrase"], f"policy fields should not be redacted, got {removed}"
+
+
+def test_scrub_does_not_recount_an_already_redacted_value():
+    """
+    The fetch-time scrub redacts venue-config and RADIUS credentials before the
+    boundary scrub runs, so the boundary sees `«redacted»` still sitting in the
+    key. Re-reporting it made the warning cry "a shaper is leaking" over a field
+    already handled; only a genuinely NEW value should be counted.
+    """
+    out, removed = secret_scrub.scrub(
+        {"apPassword": secret_scrub.REDACTED,
+         "primary": {"sharedSecret": secret_scrub.REDACTED}})
+    assert removed == [], f"already-redacted values must not re-report, got {removed}"
+    assert out["apPassword"] == secret_scrub.REDACTED, "must stay redacted, not revert"
+    # A real new value alongside is still caught.
+    out2, removed2 = secret_scrub.scrub(
+        {"apPassword": secret_scrub.REDACTED, "loginPassword": "hunter2"})
+    assert removed2 == ["loginPassword"]
+
+
 def test_scrub_leaves_empty_values_alone():
     """Nothing was leaked, so nothing is reported — the log stays meaningful."""
     out, removed = secret_scrub.scrub({"password": "", "secret": None})
