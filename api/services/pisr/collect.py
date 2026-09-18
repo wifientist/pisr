@@ -132,10 +132,38 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             fetch.venue_config_one, (r1, tenant_id, venue_id, config_key))
 
     keys = list(reads)
+
+    # Per-read timing, to tell executor STARVATION from a slow single crawl.
+    # Wave 1 is ~40 reads but `asyncio.to_thread` uses the default executor,
+    # `min(32, cpu+4)` workers — 8 on a 4-core box — so the reads queue into
+    # several batches. If the wave's WALL time is much larger than its slowest
+    # single read, the bottleneck is the worker count, not R1; if one read's
+    # time ≈ the wall time, that crawl (clients/ports) is the pole. The log line
+    # below says which, so a fix is aimed rather than guessed.
+    timings: Dict[str, float] = {}
+
+    def _timed(key, fn):
+        def run(*args):
+            t = time.time()
+            try:
+                return fn(*args)
+            finally:
+                timings[key] = time.time() - t
+        return run
+
+    wave1_start = time.time()
     results = await asyncio.gather(
-        *(asyncio.to_thread(reads[key][0], *reads[key][1]) for key in keys),
+        *(asyncio.to_thread(_timed(key, reads[key][0]), *reads[key][1]) for key in keys),
         return_exceptions=True,
     )
+    wave1_wall = time.time() - wave1_start
+    if timings:
+        slowest = sorted(timings.items(), key=lambda kv: kv[1], reverse=True)
+        top = ", ".join(f"{k}={v:.1f}s" for k, v in slowest[:6])
+        logger.info(
+            "pisr: venue %s wave-1 %.1fs wall over %d reads (slowest single %.1fs, "
+            "sum %.1fs) — %s", venue_id, wave1_wall, len(timings),
+            slowest[0][1], sum(timings.values()), top)
 
     raw: Dict[str, Any] = {}
     errors: Dict[str, str] = {}

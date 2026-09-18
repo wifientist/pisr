@@ -521,6 +521,19 @@ def _load_auth() -> AuthConfig:
 CONTROLLER: ControllerConfig = _load()
 AUTH: AuthConfig = _load_auth()
 
+# The width of the report's I/O fan-out. A report fires ~50 R1 reads at once,
+# every one network-bound — a thread parked on a socket, not on the CPU — so the
+# useful worker count is far above the core count; the box is idle waiting on
+# api.ruckus.cloud, not computing. `asyncio.to_thread`'s default executor is only
+# `min(32, cpu+4)` (SIX on a 2-core prod LXC), which serialises the fan-out into
+# several batches. main.py widens the default executor to this at startup, and
+# the R1 connection pool is COUPLED to it here so urllib3 does not discard
+# connections past its own limit (see api/r1api/client.py). Raise them together
+# or not at all — a wider executor over a pool of ten just churns TCP handshakes.
+# `setdefault`, so an explicit R1_POOL_MAXSIZE in the environment still wins.
+FETCH_WORKERS: int = _int("PISR_FETCH_WORKERS", 24)
+os.environ.setdefault("R1_POOL_MAXSIZE", str(FETCH_WORKERS))
+
 # Whether PISR_SESSION_SECRET was supplied rather than generated. main.py logs
 # this once at startup so "everyone got logged out again" has a visible cause.
 # True in both cookie-minting modes: accounts mode has the same property and a

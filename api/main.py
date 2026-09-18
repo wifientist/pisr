@@ -6,9 +6,11 @@ database, no user accounts, no Redis, no scheduler and no background work: the
 tool reads one RUCKUS ONE venue when someone asks it to, and returns the answer.
 """
 
+import asyncio
 import logging
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Imported for effect as much as for use: config validates .env at import and
 # raises if anything required is missing or malformed, so a misconfigured
 # container fails to start rather than failing every request.
-from config import AUTH, CONTROLLER, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
+from config import AUTH, CONTROLLER, FETCH_WORKERS, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
 from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
@@ -64,6 +66,26 @@ if _origins:
 # its own origin and no preflight happens. If you ever put the frontend on a
 # different origin, move CORS after this line so it becomes the outer one.
 app.add_middleware(SessionGateMiddleware)
+
+
+@app.on_event("startup")
+async def _widen_report_executor() -> None:
+    """
+    Widen the loop's default executor to the report's fan-out width.
+
+    `asyncio.to_thread` (every R1 read in collect.py) runs on the loop's default
+    executor, which is `min(32, cpu+4)` — six threads on the 2-core prod box, far
+    fewer than the ~50 reads a report fires at once, so the fan-out serialises
+    into batches. The reads are network-bound, so more threads than cores is
+    free here: they park on a socket, not the CPU. `config.FETCH_WORKERS` sizes
+    this and is coupled to `R1_POOL_MAXSIZE` (see config.py) — the two move
+    together, or a wide executor just churns handshakes over a pool of ten.
+    """
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(
+        ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefix="pisr-io"))
+    logger.info("report I/O executor set to %d workers (R1 pool_maxsize=%s)",
+                FETCH_WORKERS, os.environ.get("R1_POOL_MAXSIZE"))
 
 # Outermost of all, so it also covers the SPA, the 401s and the error pages.
 app.add_middleware(SecurityHeadersMiddleware)
