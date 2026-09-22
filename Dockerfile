@@ -2,8 +2,21 @@
 FROM node:20-alpine AS web
 WORKDIR /web
 
-COPY package.json package-lock.json* ./
-RUN npm install
+# `ci`, not `install`, and no `*` on the lockfile — both deliberate.
+#
+# Production rebuilds itself from a git poll (deploy/README.md), so the
+# dependency set has to come from the repository rather than from whatever npm
+# resolves that morning. `npm install` re-resolves the `^` ranges in
+# package.json and may rewrite the lock during the build, which means two
+# deploys of the SAME commit can ship different bundles and a bad transitive
+# release arrives with nothing in the diff to show it. `npm ci` installs
+# exactly what package-lock.json says, or fails.
+#
+# The cost is a habit: change a dependency in package.json, run `npm install`
+# locally, and COMMIT the updated lock. Skip that and the build stops here
+# rather than quietly drifting — which is the trade being made.
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY index.html vite.config.ts tsconfig.json tailwind.config.js postcss.config.js ./
 COPY public ./public
