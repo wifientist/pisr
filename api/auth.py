@@ -927,10 +927,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "Cross-Origin-Resource-Policy": "same-origin",
     }
 
+    # Everything behind the gate. Not the SPA, whose bundle is hashed, public
+    # by design and worth caching.
+    _PRIVATE_PREFIXES = ("/api", "/docs", "/redoc", "/openapi.json")
+
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         for name, value in self._HEADERS.items():
             response.headers.setdefault(name, value)
+
+        # NO-STORE ON EVERYTHING GATED. A report names a customer's devices,
+        # addresses and SSIDs, and a roll-up PDF names their venues; with no
+        # cache header at all a browser is free to keep either on disk, where
+        # it outlives the session, the sign-out and the person's involvement
+        # with the account. PISR going to the trouble of storing no report
+        # server-side means little if the browser quietly keeps one.
+        #
+        # This does NOT cover the PDF a person deliberately downloads — that
+        # file is theirs, in their Downloads folder, and no header reaches it.
+        # It covers the copies nobody chose to keep.
+        if request.url.path.startswith(self._PRIVATE_PREFIXES):
+            response.headers.setdefault("Cache-Control", "no-store")
 
         # HSTS only on a connection that was actually HTTPS. Sent over plain
         # HTTP it is ignored by a browser, but sent from a LAN deployment on

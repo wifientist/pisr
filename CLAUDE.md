@@ -204,6 +204,16 @@ Read them in this order; each explains the next.
 
 ## Traps
 
+- **No report is stored server-side, and `Cache-Control: no-store` is what
+  stops the BROWSER storing one.** `SecurityHeadersMiddleware` sets it on
+  `/api`, `/docs`, `/redoc` and `/openapi.json` — not on the SPA, whose bundle
+  is hashed, public and worth caching. Report JSON and both PDFs are generated
+  per request and streamed; nothing is written to disk and no URL serves a
+  previously-generated document. The only lasting copy is the file a person
+  deliberately downloads, which no header can reach. Do not add a "recent
+  exports" list or a temporary download URL without deciding, explicitly, that
+  a report may live on the volume — today none may.
+
 - **`hashlib.scrypt` needs `maxmem` passed explicitly.** At PISR's parameters
   (N=2^15, r=8) it wants 128·N·r = *exactly* 32 MiB, which is also OpenSSL's
   default ceiling — so the default raises `ValueError: memory limit exceeded`
