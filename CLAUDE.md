@@ -61,10 +61,11 @@ upstream copy. It is not.
   docstrings and the README.
 - **Human-triggered.** No scheduler, no background tasks, no recurring polls. If
   something needs to happen repeatedly, a person clicks the button.
-- **PISR stores nothing — of the tenant.** No snapshot files, no cache, no
-  database, no report that outlives the response carrying it. It writes exactly
-  THREE files, all on the `pisr-config` volume, and none holds anything
-  belonging to the customer whose network is being reported on:
+- **PISR stores no report.** No snapshot files, no cache, no database, no
+  report that outlives the response carrying it. It writes exactly FOUR files,
+  all on the `pisr-config` volume. Three are configuration and hold nothing
+  read off the customer's network; the fourth — the batch record — is the one
+  deliberate exception, and holds counts only:
 
   - the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`) — a
     list of section ids and venue ids, no venue data, no device, no credential.
@@ -80,10 +81,96 @@ upstream copy. It is not.
     class as the venue ids in the visibility policy, not a reading; still no
     device, credential or config value read off the network. See `api/baselines.py`.
 
+  - the batch record at `PISR_BATCH_FILE` (`/data/batch-runs.json`) — per
+    venue, when an admin's batch last checked it, whether that came back
+    ok/partial/failed, the punch-list COUNTS (by severity and by trade), and
+    WHICH checks fired: `{severity: {checkId: deviceCount}}`, ids from
+    `sections.ALL_CHECK_IDS` and nothing else, so the only strings written are
+    ones this repo ships. Plus run history ("48/58"). Never a finding's text,
+    its evidence, a device name, a config value or an R1 error body — "APs
+    online · 3" is a catalogue label and an integer, "3 APs offline in Unit 4B"
+    is the report and is not kept. `services/pisr/rollup.summarise` is the
+    allowlist of what crosses into it, and
+    `test_batch.py::test_summary_holds_only_counts` enforces it, KEYS INCLUDED.
+    See `api/batch_runs.py`.
+
   Guard the distinction rather than the file count. All three are configuration
   with a portal in front of them; a customer's *report* is the thing that must
   not be persisted, and if something later wants to keep one there it is a
   different feature that has to make its own case.
+
+## Batch runs
+
+Admin-only (`/api/admin/batch`, the "Batch" chip, `src/pages/AdminBatch.tsx`).
+Check every venue of one tenant, keep the counts, roll them up
+MSP → tenant (MSP-EC) → venue.
+
+- **The browser is the loop.** It starts a run (`POST /runs` with the
+  tenant's WHOLE venue list — the denominator of "48 of 58" — and the ids to
+  run), then calls `POST /runs/{id}/venues/{venueId}` a few at a time, then
+  `/finish`. One venue per request is what keeps every request inside
+  Cloudflare's 100-second origin timeout, and it is what keeps this
+  human-triggered: closing the tab stops the batch. Do not move the loop
+  server-side into a background task — that is the scheduler the constraints
+  rule out, by another name.
+- **Check ids are written through a fixed vocabulary.** `summarise` drops any
+  id not in `sections.ALL_CHECK_IDS`, and `sections.check_label` is the one
+  place a label for one exists (the portal renders the same prose). Note
+  `sections._CHECK_LABELS`: an id is named for the condition TESTED, a label is
+  read where the check FAILED, so "aps-online" is labelled "APs offline" rather
+  than de-kebabed. Fix a misleading label there; do NOT rename the id, which is
+  in stored policies and in the batch record and would need a migration. A check
+  renamed in `checks.py` but not in `sections.py` is caught by
+  `test_sections.py::test_checks_exist`, not by silently landing on disk.
+- **The server builds the report itself** and records `summarise(report)`. It
+  never accepts counts from the browser, so the record is PISR's reading of R1.
+  The report passes through `redact(report, ())` (admin, nothing hidden) so the
+  credential scrub still runs, and is then dropped.
+- **Only `ok` moves `lastComplete`.** `partial` (any read in `meta.errors`
+  failed) and `failed` (build_report raised) update `lastAttempt` only, so the
+  venue stays not-fresh and the "Select not fresh" button picks it up. That is
+  the whole resume story — there is no retry queue.
+- **A failure records the exception CLASS, not its text** — a requests error
+  quotes the URL, and this file is on disk.
+- **Run status is derived, not stored**: complete / incomplete / running /
+  interrupted (no update for `STALE_SECONDS`). Nothing finishes an abandoned run.
+- **The record FAILS OPEN but is never overwritten while broken.** Unreadable →
+  every venue reads never-checked (errs toward re-running), and runs are refused
+  until it is repaired, so a recoverable history is not replaced by an empty one.
+- **The roll-up PDF renders from the record and does NOT re-poll**, unlike the
+  venue PDF. Every row prints the date it is as-of. `detail=critical,warning`
+  (the dialog's "List checks" tick boxes) lists each venue's failed checks by
+  catalogue label; an unknown word in it is ignored rather than refused, since
+  this decides how much a document says and a typo should not 500 a download.
+  The detail is a SECTION BELOW the summary table, one heading row per venue —
+  never rows inside the table, which exists to be scanned for which venues need
+  attention. `rollup.attach_detail` shapes it (the router adds only the link,
+  because only it knows the origin), so the template loops and decides nothing.
+- **EVERY CHECKED VENUE IS NAMED, clean ones included.** `attach_detail`
+  produces three lists — `detailVenues` (has findings), `cleanVenues` (none at
+  the chosen severities) and `unrecordedVenues` (checked before ids were kept,
+  `rollup.has_checks`) — and the PDF renders all three. A document that lists
+  only problems cannot show an estate arriving at "all clear", and leaves a
+  reader inferring a venue is fine from its absence, which is indistinguishable
+  from its having been missed. Do not "tidy" the clean list into a count.
+- **`clean` is fixed at critical+warning and does not follow `detail=`.** It is
+  the progress number (PDF tile, dialog, MSP table), and it is also served to
+  the batch dialog, which has no severity selection — so it has to mean one
+  thing everywhere. The PDF's "Clean sites" LIST follows the selection and says
+  so in its heading; the tile does not. They agree at the default selection and
+  are each labelled with what they count.
+- **Device tallies in the roll-up are up/down, and DOWN IS EVERYTHING NOT UP.**
+  `rollup.device_counts` computes `total - online`, not `offline`: `shape._state`
+  folds never-contacted and mid-provision devices into `other`, so a venue can
+  have zero offline APs and still not be up — which is exactly why
+  `check_aps_online` refuses to pass it. A roll-up that read `offline` alone
+  would be more optimistic than the check it summarises. An older record with
+  no device states shows the fleet size alone rather than a fabricated split. Its links are deep links
+  (`/?ec=&ecName=&venue=`, read by `PISR.tsx` on load) built from an `origin`
+  the BROWSER passes — the server does not know its own address (see the
+  enrolment-link trap) — and `_origin` accepts scheme://host[:port] only.
+- **Single uvicorn worker assumed.** The store's lock is in-process. More
+  workers would need `AccountStore`'s mtime re-read.
 
 ## The role policy, in four files
 

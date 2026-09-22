@@ -1,0 +1,310 @@
+{#
+  The batch roll-up. Rendered from the batch RECORD, not from a poll — every
+  number here is as of the date printed beside it. Counts only, by design: the
+  detail is in the live report, which each venue name links to when the
+  browser supplied an origin (see batch_router._origin).
+
+  Autoescape is on (pisr_router._jinja). Tenant and venue names come from the
+  RUCKUS ONE tenant; nothing here may be marked |safe.
+#}
+{% macro sev(n, kind) %}<td class="num {% if n %}{{ kind }}{% else %}zero{% endif %}">{{ n }}</td>{% endmacro %}
+{% macro when(stamp) %}{% if stamp %}{{ stamp[:10] }}{% else %}<span class="muted">never</span>{% endif %}{% endmacro %}
+{#
+  A device tally as "up / down". `d.up` is None on a record written before
+  device states were kept: those show the fleet size alone rather than a
+  fabricated split.
+#}
+{% macro updown(d) %}<td class="num">
+  {%- if not d %}<span class="muted">—</span>
+  {%- elif d.up is none %}{{ d.total }}<span class="muted"> total</span>
+  {%- else %}{{ d.up }}<span class="muted"> / </span>{% if d.down %}<span class="down">{{ d.down }}</span>{% else %}<span class="zero">0</span>{% endif %}
+  {%- endif %}</td>{% endmacro %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Batch roll-up — {{ title }}</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 1.3cm 1.1cm;
+      @bottom-right { content: "Page " counter(page) " of " counter(pages);
+                      font-size: 8.5px; color: #9ca3af; }
+      @bottom-left  { content: "Batch roll-up — {{ title }} — {{ generated_at }}";
+                      font-size: 8.5px; color: #9ca3af; }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           color: #1f2937; font-size: 10px; }
+    h1 { font-size: 20px; color: #111827; }
+    h2 { font-size: 14px; color: #111827; margin: 16px 0 6px;
+         border-bottom: 2px solid #e5e7eb; padding-bottom: 4px; page-break-after: avoid; }
+    h3 { font-size: 11px; color: #374151; margin: 10px 0 4px; page-break-after: avoid; }
+    p  { line-height: 1.45; }
+    .header { border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 12px; }
+    .subtitle { font-size: 12px; color: #6b7280; margin-top: 3px; }
+    .timestamp { font-size: 9px; color: #9ca3af; margin-top: 5px; }
+    .note { font-size: 9px; color: #6b7280; margin: 4px 0 8px; }
+
+    .tiles { display: flex; gap: 6px; margin: 8px 0 12px; }
+    .tile { flex: 1; border: 1px solid #e5e7eb; border-radius: 7px; padding: 7px 9px; }
+    .tile .n { font-size: 17px; font-weight: 700; line-height: 1.1; color: #111827; }
+    .tile .l { font-size: 8px; text-transform: uppercase; letter-spacing: .05em;
+               color: #6b7280; margin-top: 2px; }
+    .tile.critical { background: #fef2f2; border-color: #fecaca; } .tile.critical .n { color: #b91c1c; }
+    .tile.warning  { background: #fffbeb; border-color: #fde68a; } .tile.warning  .n { color: #b45309; }
+    .tile.info     { background: #eff6ff; border-color: #bfdbfe; } .tile.info     .n { color: #1d4ed8; }
+    /* The number to watch go up: venues with no critical and no warning. */
+    .tile.clean    { background: #f0fdf4; border-color: #bbf7d0; } .tile.clean    .n { color: #15803d; }
+
+    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    th { text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: .04em;
+         color: #6b7280; border-bottom: 1px solid #d1d5db; padding: 4px 5px; }
+    td { border-bottom: 1px solid #f3f4f6; padding: 3.5px 5px; vertical-align: top; }
+    tr { page-break-inside: avoid; }
+    th.num, td.num { text-align: right; white-space: nowrap; }
+    td.critical { color: #b91c1c; font-weight: 700; }
+    td.warning  { color: #b45309; font-weight: 600; }
+    td.info     { color: #1d4ed8; }
+    td.zero, .zero { color: #d1d5db; }
+    .clean-n { color: #15803d; font-weight: 700; }
+    .muted { color: #9ca3af; }
+    .tag { display: inline-block; font-size: 7.5px; border-radius: 3px; padding: 0 3px;
+           margin-left: 3px; text-transform: uppercase; letter-spacing: .03em; }
+    .tag.failed  { background: #fef2f2; color: #b91c1c; }
+    .tag.partial { background: #fffbeb; color: #b45309; }
+    .tag.stale   { background: #f3f4f6; color: #6b7280; }
+    .tag.gone    { background: #f3f4f6; color: #6b7280; }
+    a { color: #1d4ed8; text-decoration: none; }
+    .tenant { page-break-before: always; }
+    /* The per-venue check list, as its own table below the summary. Each venue
+       is a heading row; its checks are the rows under it. */
+    table.detail { margin-top: 2px; }
+    table.detail tr.vhead td { background: #f9fafb; border-bottom: 1px solid #e5e7eb;
+                               padding-top: 5px; font-weight: 600; color: #111827; }
+    table.detail tr.vhead .muted { font-weight: 400; font-size: 9px; }
+    .down { color: #b91c1c; font-weight: 700; }
+    h3.clear { color: #15803d; }
+    .tick { color: #15803d; font-weight: 700; margin-right: 2px; }
+    table.clean tr td:first-child { color: #111827; }
+    .chk { font-size: 8.5px; border-radius: 3px; padding: 1px 4px;
+           text-transform: uppercase; letter-spacing: .03em;
+           border: 1px solid #e5e7eb; background: #f9fafb; color: #374151; }
+    .chk.critical { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+    .chk.warning  { border-color: #fde68a; background: #fffbeb; color: #b45309; }
+    .chk.info     { border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; }
+    .chk .n { color: #6b7280; }
+    .trades { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 9px; color: #4b5563;
+              margin: 2px 0 8px; }
+    .trades b { color: #111827; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Batch roll-up</h1>
+  <div class="subtitle">{{ title }}</div>
+  <div class="timestamp">
+    Generated {{ generated_at }} from the batch record — no venue was polled to
+    make this. Each count is as of that venue's last complete check.
+    “Fresh” means checked completely in the last {{ days_label }} day(s).
+    {% if detail_severities %}
+    Each venue lists the {{ detail_severities|join(" and ") }} checks it failed,
+    with the number of devices each names.
+    {% endif %}
+  </div>
+</div>
+
+{% set top = overall if overall else tenants[0] %}
+<div class="tiles">
+  {% if overall %}
+  <div class="tile"><div class="n">{{ overall.tenantsBatched }}/{{ overall.tenantCount }}</div><div class="l">Tenants batched</div></div>
+  {% endif %}
+  <div class="tile"><div class="n">{{ top.checked }}/{{ top.venueCount }}</div><div class="l">Venues checked</div></div>
+  <div class="tile"><div class="n">{{ top.fresh }}</div><div class="l">Fresh</div></div>
+  <div class="tile clean"><div class="n">{{ top.clean }}/{{ top.checked }}</div><div class="l">Clean sites</div></div>
+  <div class="tile critical"><div class="n">{{ top.totals.counts.critical }}</div><div class="l">Critical</div></div>
+  <div class="tile warning"><div class="n">{{ top.totals.counts.warning }}</div><div class="l">Warning</div></div>
+  <div class="tile info"><div class="n">{{ top.totals.counts.info }}</div><div class="l">Info</div></div>
+</div>
+
+<h3>Punch-list items by trade</h3>
+<div class="trades">
+  {% for c in categories %}
+  <span>{{ c.label }}: <b>{{ top.totals.byCategory[c.key] }}</b></span>
+  {% endfor %}
+  <span>Checks that could not run: <b>{{ top.totals.skipped }}</b></span>
+</div>
+
+{% if overall %}
+<h2>Tenants</h2>
+<table>
+  <thead><tr>
+    <th>Tenant</th><th class="num">Venues</th><th class="num">Checked</th>
+    <th class="num">Clean</th><th class="num">Critical</th><th class="num">Warning</th>
+    <th class="num">Info</th><th class="num">Skipped</th><th>Last run</th>
+  </tr></thead>
+  <tbody>
+  {% for t in tenants %}
+  <tr>
+    <td>{{ t.name }}{% if t.lastAttemptNotOk %}<span class="tag partial">{{ t.lastAttemptNotOk }} not clean</span>{% endif %}</td>
+    <td class="num">{{ t.venueCount if t.listedAt else '—' }}</td>
+    <td class="num">{{ t.checked }}</td>
+    <td class="num">{% if t.checked %}<span class="clean-n">{{ t.clean }}</span>{% else %}<span class="zero">0</span>{% endif %}</td>
+    {{ sev(t.totals.counts.critical, 'critical') }}
+    {{ sev(t.totals.counts.warning, 'warning') }}
+    {{ sev(t.totals.counts.info, 'info') }}
+    <td class="num">{{ t.totals.skipped }}</td>
+    <td>{% if t.lastRun %}{{ t.lastRun.startedAt[:10] }} · {{ t.lastRun.tally.ok }}/{{ t.lastRun.planned }}{% else %}<span class="muted">never</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="note">“—” venues: never batched, so PISR has not listed that tenant's venues yet.
+  “Not clean”: venues whose latest attempt failed or came back partial.</p>
+{% endif %}
+
+{% for t in tenants %}
+{% if t.venues %}
+<div class="{% if overall %}tenant{% endif %}">
+  {% if overall %}
+  <h2>{{ t.name }}</h2>
+  <div class="tiles">
+    <div class="tile"><div class="n">{{ t.checked }}/{{ t.venueCount }}</div><div class="l">Venues checked</div></div>
+    <div class="tile"><div class="n">{{ t.fresh }}</div><div class="l">Fresh</div></div>
+    <div class="tile clean"><div class="n">{{ t.clean }}/{{ t.checked }}</div><div class="l">Clean sites</div></div>
+    <div class="tile critical"><div class="n">{{ t.totals.counts.critical }}</div><div class="l">Critical</div></div>
+    <div class="tile warning"><div class="n">{{ t.totals.counts.warning }}</div><div class="l">Warning</div></div>
+    <div class="tile info"><div class="n">{{ t.totals.counts.info }}</div><div class="l">Info</div></div>
+  </div>
+  {% else %}
+  <h2>Venues</h2>
+  {% endif %}
+  <table>
+    <thead><tr>
+      <th>Venue</th><th>Last checked</th><th class="num">Critical</th>
+      <th class="num">Warning</th><th class="num">Info</th><th class="num">Skipped</th>
+      <th class="num">APs up/down</th><th class="num">Switches up/down</th>
+    </tr></thead>
+    <tbody>
+    {% for v in t.venues %}
+    {% set s = v.summary or {} %}
+    {% set c = s.counts or {} %}
+    <tr>
+      <td>{% if v.link %}<a href="{{ v.link }}">{{ v.name }}</a>{% else %}{{ v.name }}{% endif %}
+        {%- if not v.listed %}<span class="tag gone">not listed</span>{% endif %}
+        {%- if v.lastAttemptStatus in ('failed', 'partial') %}<span class="tag {{ v.lastAttemptStatus }}">latest {{ v.lastAttemptStatus }}</span>{% endif %}
+        {%- if v.lastCompleteAt and not v.fresh %}<span class="tag stale">stale</span>{% endif %}</td>
+      <td>{{ when(v.lastCompleteAt) }}</td>
+      {% if v.summary %}
+      {{ sev(c.critical or 0, 'critical') }}
+      {{ sev(c.warning or 0, 'warning') }}
+      {{ sev(c.info or 0, 'info') }}
+      <td class="num">{{ s.skipped or 0 }}</td>
+      {{ updown(v.aps) }}
+      {{ updown(v.switches) }}
+      {% else %}
+      <td class="muted" colspan="6" style="text-align: center">not checked</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    “Down” is every device that is not online, which includes any still
+    provisioning or never contacted — the same reading the report's own check
+    uses, so this page cannot be more optimistic than the venue it describes.
+    {% if has_links %}Venue names open the live report, which re-polls the venue.{% endif %}
+  </p>
+
+  {#
+    THE DETAIL, BELOW THE SUMMARY — never interleaved into the table above.
+    The table answers "which venues need attention" and is meant to be scanned;
+    a venue's list of checks in among its rows destroys that. Each venue here
+    is a heading row with its own checks under it.
+  #}
+  {% if detail_severities %}
+  {% if t.detailVenues %}
+  <h3>Needs attention — {{ detail_severities|join(", ") }} checks</h3>
+  <table class="detail">
+    <thead><tr>
+      <th>Severity</th><th>Check</th><th class="num">Devices</th><th>Trade</th>
+    </tr></thead>
+    <tbody>
+    {% for v in t.detailVenues %}
+    <tr class="vhead">
+      <td colspan="4">
+        {% if v.link %}<a href="{{ v.link }}">{{ v.name }}</a>{% else %}{{ v.name }}{% endif %}
+        <span class="muted">· checked {{ when(v.lastCompleteAt) }}
+          {%- if v.summary %} · {{ v.summary.counts.critical }} critical,
+          {{ v.summary.counts.warning }} warning, {{ v.summary.counts.info }} info{% endif %}</span>
+      </td>
+    </tr>
+    {% for chk in v.checkDetail %}
+    <tr>
+      <td><span class="chk {{ chk.severity }}">{{ chk.severity }}</span></td>
+      <td>{{ chk.label }}</td>
+      <td class="num">{% if chk.count %}{{ chk.count }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="muted">{{ chk.category }}</td>
+    </tr>
+    {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    The devices column counts what each check names; the devices themselves are
+    in the venue's own report.
+  </p>
+  {% endif %}
+
+  {#
+    EVERY CHECKED VENUE IS NAMED, the clean ones included. A document that
+    lists only problems cannot show an estate arriving at "all clear", and
+    leaves the reader inferring a venue is fine from its absence — which looks
+    exactly like its having been missed.
+  #}
+  {% if t.cleanVenues %}
+  <h3 class="clear">Clean sites — no {{ detail_severities|join(" or ") }} checks
+    ({{ t.cleanVenues|length }})</h3>
+  <table class="clean">
+    <thead><tr>
+      <th>Venue</th><th>Last checked</th><th class="num">Info</th>
+      <th class="num">Skipped</th><th class="num">APs up/down</th>
+      <th class="num">Switches up/down</th>
+    </tr></thead>
+    <tbody>
+    {% for v in t.cleanVenues %}
+    <tr>
+      <td><span class="tick">✓</span>
+        {% if v.link %}<a href="{{ v.link }}">{{ v.name }}</a>{% else %}{{ v.name }}{% endif %}</td>
+      <td>{{ when(v.lastCompleteAt) }}</td>
+      {{ sev(v.summary.counts.info or 0, 'info') }}
+      <td class="num">{{ v.summary.skipped or 0 }}</td>
+      {{ updown(v.aps) }}
+      {{ updown(v.switches) }}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    Clean at the severities listed above. A skipped check is not a pass — it is
+    one that could not run, usually because a prerequisite is missing, and the
+    venue's own report says which.
+  </p>
+  {% endif %}
+
+  {% if t.unrecordedVenues %}
+  <h3>Checked before check detail was kept ({{ t.unrecordedVenues|length }})</h3>
+  <p class="note">
+    {% for v in t.unrecordedVenues %}{{ v.name }}{% if not loop.last %} · {% endif %}{% endfor %}
+    — these have counts in the table above but no list of which checks failed.
+    Re-run them to fill that in.
+  </p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}
+{% endfor %}
+
+</body>
+</html>

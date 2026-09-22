@@ -1,11 +1,12 @@
 import {
   createContext, useCallback, useContext, useEffect, useState, type ReactNode,
 } from "react";
-import { Lock, LogOut, ShieldAlert, SlidersHorizontal, Target, Users } from "lucide-react";
+import { Layers, Lock, LogOut, ShieldAlert, SlidersHorizontal, Target, Users } from "lucide-react";
 import { UNAUTHENTICATED_EVENT } from "@/utils/api";
 import AdminVisibility from "@/pages/AdminVisibility";
 import AdminAccounts from "@/pages/AdminAccounts";
 import AdminBaseline from "@/pages/AdminBaseline";
+import AdminBatch from "@/pages/AdminBatch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -425,6 +426,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [portalOpen, setPortalOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [baselineOpen, setBaselineOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
 
   // UP HERE WITH THE OTHER HOOKS, DELIBERATELY. This component returns early
   // three times below, and a useState added under one of those is called only
@@ -634,6 +636,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">Baselines</span>
               </button>
             )}
+            {isAdmin && (
+              <button
+                onClick={() => setBatchOpen(true)}
+                title="Check many venues at once and see when each was last checked"
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <Layers size={13} className="shrink-0" />
+                <span className="hidden sm:inline">Batch</span>
+              </button>
+            )}
             {status?.required && (canSignOut ? (
               <button
                 onClick={signOut}
@@ -671,6 +683,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       */}
       {accountsOpen && <AdminAccounts onClose={() => setAccountsOpen(false)} />}
       {baselineOpen && <AdminBaseline onClose={() => setBaselineOpen(false)} />}
+      {/*
+        The batch runs in this component's own loop, so closing it stops the
+        batch — it confirms first when one is in flight. See AdminBatch.tsx.
+      */}
+      {batchOpen && (
+        <AdminBatch controllerId={controller.id}
+                    isMsp={controller.controller_subtype === "MSP"}
+                    onClose={() => setBatchOpen(false)} />
+      )}
     </AuthContext.Provider>
   );
 }

@@ -32,8 +32,8 @@ from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
 from routers import (  # noqa: E402
-    accounts_router, admin_router, baseline_router, config_router, msp_router,
-    pisr_router)
+    accounts_router, admin_router, baseline_router, batch_router, config_router,
+    msp_router, pisr_router)
 import accounts  # noqa: E402
 import visibility  # noqa: E402
 
@@ -237,6 +237,17 @@ if AUTH.org_baseline_file and not baselines.ORG.writable:
         "PISR_ORG_BASELINE_FILE unset to hide the column.",
         AUTH.org_baseline_file)
 
+import batch_runs  # noqa: E402
+if batch_runs.STORE.broken:
+    logger.error(
+        "Batch: %s could not be read, so every venue reads as never checked "
+        "and batch runs are refused until it is repaired or moved.",
+        batch_runs.STORE.path)
+elif batch_runs.STORE.configured and not batch_runs.STORE.writable:
+    logger.warning(
+        "Batch: %s is not writable, so batch runs cannot be recorded. Mount a "
+        "writable volume at its directory.", batch_runs.STORE.path)
+
 
 @app.get("/healthz")
 async def healthz():
@@ -284,6 +295,7 @@ app.include_router(config_router.router, prefix="/api")
 app.include_router(admin_router.router, prefix="/api")
 app.include_router(accounts_router.router, prefix="/api")
 app.include_router(baseline_router.router, prefix="/api")
+app.include_router(batch_router.router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
 

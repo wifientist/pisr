@@ -41,8 +41,12 @@ reloading on save.
 
 **Read-only by construction.** Every call PISR makes is a `GET` or a `POST` to a
 `*/query` path. It creates nothing, changes nothing, activates nothing, reboots
-nothing, and stores nothing — no snapshot files, no database rows, no cache. A
-report exists for the length of one HTTP response.
+nothing, and stores no report — no snapshot files, no database rows, no cache. A
+report exists for the length of one HTTP response. The one thing kept from a
+venue is the **batch record** (`/data/batch-runs.json`): when each venue was
+last checked by an admin's batch run, its punch-list *counts*, and which checks
+failed as ids from PISR's own catalogue — never a finding's text, a device name
+or a config value.
 
 You can verify this rather than take its word for it: set `R1_VERBOSE=1`, run a
 report, and grep the log for any method that isn't a `GET` or a `POST` to a
@@ -51,6 +55,15 @@ report, and grep the log for any method that isn't a `GET` or a `POST` to a
 **Human-triggered only.** Every endpoint runs once per request. There is no
 scheduler, no background task, and no recurring-poll entry point for anything to
 call. The page refreshes when someone clicks refresh.
+
+**Batch runs are human-triggered too.** The admin-only *Batch* dialog checks
+many venues of one tenant in one go, but the browser tab drives it — one venue
+per request — so closing the tab stops it, and nothing runs on a timer. A
+stopped or failed batch is resumed by selecting the venues that are not fresh
+and running again. The roll-up PDF (per tenant, or MSP-wide) is rendered from
+the batch record without re-polling, and links each venue to its live report.
+Tick *List checks* for critical, warning or info and each venue also names the
+checks it failed, with the number of devices each one names.
 
 ## Architecture
 

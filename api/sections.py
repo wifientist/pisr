@@ -676,9 +676,39 @@ _ACRONYMS = {"ap": "AP", "aps": "APs", "poe": "PoE", "dpsk": "DPSK",
              "24ghz": "2.4 GHz", "rf": "RF"}
 
 
+# Labels that the id cannot produce, because the ID is named for the condition
+# being TESTED while the label is read where the check has FAILED.
+#
+# "aps-online" derives to "APs Online", which in a punch list or a roll-up
+# chip reads as good news — the reader sees "APs Online" beside a red count and
+# has to work out that it means the opposite. The id stays as it is: it is
+# written into stored visibility policies and into the batch record, so
+# renaming it is a migration (see visibility.RENAMED) for a wording problem.
+#
+# Only for ids whose derived label actively misleads. Anything merely terse
+# belongs in `_ACRONYMS` or nowhere.
+_CHECK_LABELS = {
+    "aps-online": "APs offline",
+    "switches-online": "Switches offline",
+}
+
+
 def _check_label(check_id: str) -> str:
+    if check_id in _CHECK_LABELS:
+        return _CHECK_LABELS[check_id]
     words = check_id.split("-")
     return " ".join(_ACRONYMS.get(w, w.capitalize()) for w in words)
+
+
+def check_label(check_id: str) -> str:
+    """
+    A check id as prose, for anything outside this module.
+
+    The batch roll-up (`services/pisr/rollup.py`) renders check ids it read
+    back off disk, and this is the only place a label for one exists. Public
+    so that never becomes a second, drifting copy of `_ACRONYMS`.
+    """
+    return _check_label(check_id)
 
 
 def is_known_id(vid: str) -> bool:

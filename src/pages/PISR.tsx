@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2, RefreshCw, ChevronRight, AlertTriangle, AlertOctagon, Info,
   CheckCircle2, MinusCircle, Wifi, Cable, Network, Zap, Server, Users,
@@ -535,8 +535,22 @@ export default function PISR() {
   const isR1 = activeControllerType === "RuckusONE";
   const needsEcSelection = activeControllerSubtype === "MSP";
 
-  const [ecId, setEcId] = useState<string | null>(null);
-  const [ecName, setEcName] = useState<string | null>(null);
+  // A deep link — `/?ec=<tenantId>&ecName=<name>&venue=<venueId>`, or just
+  // `?venue=` on an EC deployment — opens straight onto one venue's report.
+  // The batch roll-up (PDF and dialog) links every venue this way. Read once
+  // from the initial URL, like the enrolment token in AuthContext; the venue
+  // is chosen by the effect further down once the venue list has loaded, and
+  // the parameters are then taken out of the address bar so a later EC change
+  // is not undone by a reload.
+  const [deepLink] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return { ec: params.get("ec"), ecName: params.get("ecName"), venue: params.get("venue") };
+  });
+  const pendingVenue = useRef<string | null>(deepLink.venue);
+
+  const [ecId, setEcId] = useState<string | null>(needsEcSelection ? deepLink.ec : null);
+  const [ecName, setEcName] = useState<string | null>(
+    needsEcSelection && deepLink.ec ? (deepLink.ecName || deepLink.ec) : null);
   const ecChosen = isR1 && (!needsEcSelection || !!ecId);
 
   const [venues, setVenues] = useState<VenueRow[]>([]);
@@ -661,6 +675,22 @@ export default function PISR() {
     setTab("punchlist");
     poll(row);
   };
+
+  // The deep link's venue, once the list it has to be found in has arrived.
+  // Up here with the other hooks — see the note on the tab fallback below.
+  useEffect(() => {
+    const wanted = pendingVenue.current;
+    if (!wanted || venuesLoading || !venues.length) return;
+    pendingVenue.current = null;
+    window.history.replaceState({}, "", window.location.pathname);
+    const row = venues.find((v) => v.id === wanted);
+    if (row) chooseVenue(row);
+    else setError("The linked venue is not in this customer's venue list — it may "
+                  + "have been removed, or this account is not scoped to it.");
+    // chooseVenue is a plain function re-created each render; the ref makes
+    // this run once regardless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venues, venuesLoading]);
 
   // Which sections this reader is not being shown, as the server decided it.
   // Read here rather than at the tab bar so the effect below can sit with the
