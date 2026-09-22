@@ -46,7 +46,7 @@ from weasyprint import HTML as WeasyHTML
 import batch_runs
 from auth import require_admin
 from config import CONTROLLER
-from r1_client import build_r1_client, resolve_tenant
+from r1_client import build_r1_client, require_id, resolve_tenant
 from redact import redact
 from services.pisr import rollup
 from services.pisr.collect import build_report
@@ -180,6 +180,11 @@ async def start_run(body: StartBody, request: Request):
     if len(body.venues) > MAX_VENUES or len(body.venueIds) > MAX_VENUES:
         raise HTTPException(413, f"At most {MAX_VENUES} venues per run.")
     key = _tenant_key(body.tenantId)
+    # Admin-only, but these ids are written to the record and later
+    # interpolated into R1 paths by `check_venue`, so they are checked on the
+    # way in like any other caller id. See r1_client.require_id.
+    for venue in body.venues:
+        require_id(venue.id, "venue id")
     known = {v.id for v in body.venues}
     unknown = [vid for vid in body.venueIds if vid not in known]
     if unknown:
@@ -210,6 +215,7 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
     which is what a failure should mean. The response still says it failed.
     """
     _require_store()
+    require_id(venue_id, "venue id")
     run = batch_runs.STORE.get_run(run_id)
     if run is None:
         raise HTTPException(404, "No such run.")

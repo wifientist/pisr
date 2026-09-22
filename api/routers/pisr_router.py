@@ -40,7 +40,7 @@ from weasyprint import HTML as WeasyHTML
 import sections as section_catalogue
 import visibility
 from auth import require_admin, role_of
-from r1_client import build_r1_client, get_controller, resolve_tenant
+from r1_client import build_r1_client, get_controller, require_id, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
 import scrub as secret_scrub
 from services.pisr import fetch as fetch_module
@@ -113,6 +113,14 @@ def _require_scope(request: Request, tenant_id, venue_id=None) -> None:
     misconfigured scope indistinguishable from a deleted venue, and send
     someone hunting for a site that is sitting there working. See api/scope.py.
     """
+    # Shape first, then permission. Every route that reaches R1 calls this
+    # (test_access.py::test_every_route_that_reaches_r1_checks_scope_or_is
+    # _admin_only holds it to that), which makes this the one place an id from
+    # a caller can be checked for all of them. An id with a slash in it does
+    # not name a venue — it names another endpoint. See r1_client.require_id.
+    if venue_id is not None:
+        require_id(venue_id, "venue id")
+
     allowed = visibility.scope_for(role_of(request))
     if not allowed.allows_ec(tenant_id):
         logger.warning("scope: refused tenant=%s to user=%s role=%s",

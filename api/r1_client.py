@@ -8,6 +8,7 @@ collapse into the small functions below.
 """
 
 import logging
+import re
 from typing import Optional
 
 from fastapi import HTTPException
@@ -16,6 +17,45 @@ from config import CONTROLLER, ControllerConfig
 from r1api.client import R1Client
 
 logger = logging.getLogger(__name__)
+
+# Every RUCKUS ONE id PISR handles — tenant, venue, AP group, network, pool,
+# policy — is a 32-character hex string. Verified against a live MSP tenant
+# 2026-09-22: EC ids and venue ids are both plain hex. The pattern below is
+# wider than that on purpose (letters, digits, dash, underscore) so a future
+# R1 id shape does not break the tool, and narrow enough that an id can never
+# be anything but ONE path segment.
+_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def require_id(value: str, what: str = "id") -> str:
+    """
+    An id from a caller, or a 400.
+
+    WHY THIS EXISTS. `fetch` builds R1 paths by interpolation — `f"/venues/
+    {venue_id}"` — so an id carrying a slash or a dot-segment does not name a
+    venue, it names a DIFFERENT ENDPOINT. Before this check, any signed-in
+    caller, including a plain `user`, could pass
+    `<venue>/aps/<serial>/passwords` and have PISR issue
+    `GET /venues/<venue>/aps/<serial>/passwords` — the one endpoint CLAUDE.md
+    says is never to be called, whose payload is an AP's admin password. The
+    shapers and `scrub.py` meant nothing obviously leaked, but "the scrubber
+    caught it" is not the guarantee: PISR promises not to make that call at
+    all, and a promise the caller can steer is not a promise.
+
+    It is equally a scope question. Scope compares venue ids as strings, so
+    anything that makes one id reach another venue's data is a way around it.
+
+    Validated HERE rather than in `fetch`, because this is the boundary where
+    a value stops being a caller's input and becomes ours; `fetch` is called
+    with ids PISR itself read back from R1.
+    """
+    if not isinstance(value, str) or not _ID.fullmatch(value):
+        # The value is not echoed. It is attacker-controlled and this message
+        # can land in a log or a PDF error page.
+        raise HTTPException(
+            400, f"That {what} is not a RUCKUS ONE id. Ids are up to 64 "
+                 "letters, digits, dashes or underscores.")
+    return value
 
 
 def get_controller(controller_id: int) -> ControllerConfig:
@@ -46,7 +86,9 @@ def resolve_tenant(cfg: ControllerConfig, tenant_id: Optional[str]) -> Optional[
         if not tenant_id:
             raise HTTPException(
                 400, "This is an MSP tenant — select an MSP-EC first.")
-        return tenant_id
+        # The override goes into the x-rks-tenantid header and into scope
+        # comparisons, so it is checked on the way in like any other caller id.
+        return require_id(tenant_id, "MSP-EC id")
     return None
 
 

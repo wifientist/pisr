@@ -204,6 +204,28 @@ Read them in this order; each explains the next.
 
 ## Traps
 
+- **An id from a caller is validated before it reaches an R1 path.**
+  `r1_client.require_id` — `[A-Za-z0-9_-]{1,64}`, enforced in
+  `pisr_router._require_scope` (which every R1 route calls) and in
+  `resolve_tenant` and `batch_router`. `fetch` builds paths by interpolation,
+  so before this any signed-in caller — a plain `user` — could pass
+  `<venue>/aps/<serial>/passwords` as `venue_id` and make PISR issue
+  `GET /venues/<venue>/aps/<serial>/passwords`, the "Get AP Password" endpoint
+  this tool promises never to call. Nothing obviously leaked, because the
+  shapers allowlist and `scrub.py` blanks the key — but the promise is not to
+  make the call, and a promise the caller can steer is not a promise. Live R1
+  ids are 32-hex (verified 2026-09-22), so the pattern costs nothing. Do not
+  move this check into `fetch`: that layer is called with ids PISR read back
+  from R1, and the boundary is where a value stops being input.
+
+- **`api/tests/test_access.py` pins the access surface, in BOTH directions.**
+  The public path list and the admin route list are exact sets, so a new route
+  fails the test until someone decides which it is. It also holds every
+  R1-reaching route to calling `_require_scope` (or being admin-only) and to
+  validating its ids, because those are calls inside a function body that
+  nothing else enforces — the gate fails safe when you forget it, these two
+  fail open.
+
 - **No report is stored server-side, and `Cache-Control: no-store` is what
   stops the BROWSER storing one.** `SecurityHeadersMiddleware` sets it on
   `/api`, `/docs`, `/redoc` and `/openapi.json` — not on the SPA, whose bundle
