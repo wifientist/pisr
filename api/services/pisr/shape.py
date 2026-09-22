@@ -702,6 +702,26 @@ def floorplan_summary(venue: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def venue_tags(raw: Any) -> List[str]:
+    """
+    A venue's tags as a clean list.
+
+    R1 hands back a list of strings, but operators type comma-separated values
+    into one tag often enough that a single element can hold several
+    ("Pool Room,Gym Room"), trail a comma, or be empty. Split on commas, strip,
+    drop blanks, de-duplicate case-insensitively in first-seen order.
+    """
+    items = raw if isinstance(raw, list) else ([raw] if isinstance(raw, str) else [])
+    out, seen = [], set()
+    for item in items:
+        for part in str(item or "").split(","):
+            tag = part.strip()
+            if tag and tag.casefold() not in seen:
+                seen.add(tag.casefold())
+                out.append(tag)
+    return out
+
+
 def venue_card(venue: Dict[str, Any], prop: Optional[Dict[str, Any]],
                units: Dict[str, Any], mgmt_vlan: Optional[int],
                radio: Dict[str, Any], mesh: Dict[str, Any]) -> Dict[str, Any]:
@@ -716,6 +736,7 @@ def venue_card(venue: Dict[str, Any], prop: Optional[Dict[str, Any]],
         "id": venue.get("id"),
         "name": venue.get("name"),
         "description": venue.get("description"),
+        "tags": venue_tags(venue.get("tags")),
         "address": {
             "line": address.get("addressLine"),
             "city": address.get("city"),
@@ -2791,6 +2812,31 @@ def _assignment_identity_ids(assignment: Dict[str, Any]) -> List[str]:
     return []
 
 
+def scoped_policy_set_ids(pool_rows: List[Dict[str, Any]],
+                          other_groups: List[Dict[str, Any]],
+                          sets: List[Dict[str, Any]]) -> set:
+    """
+    The policy sets this venue's DPSK reaches: those its pools and property
+    identity groups name, plus any set whose external assignment names one of
+    its pools — which catches sets the pool row itself did not carry an id for.
+
+    One definition, because three callers need it (the report's policy fetch,
+    policy_card, and the identity trace) and a venue whose sets differ between
+    them would show a chain on one screen that the next cannot find.
+    """
+    scoped = {row.get("policySetId") for row in pool_rows if row.get("policySetId")}
+    for group in other_groups:
+        if group.get("policySetId"):
+            scoped.add(group["policySetId"])
+    pool_ids = {row.get("id") for row in pool_rows}
+    for policy_set in sets:
+        for assignment in policy_set.get("externalAssignments") or []:
+            if pool_ids & set(_assignment_identity_ids(assignment)):
+                scoped.add(policy_set.get("id"))
+    scoped.discard(None)
+    return scoped
+
+
 def _rate_limits(group: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     The rate tier a RADIUS attribute group hands back, in readable units.
@@ -2841,17 +2887,7 @@ def policy_card(pool_rows: List[Dict[str, Any]],
       rows pointing at policies that no longer exist — the orphaned assignment
       that pins a group behind a 409 while the UI claims it has no policies.
     """
-    scoped_set_ids = {row.get("policySetId") for row in pool_rows if row.get("policySetId")}
-    for group in other_groups:
-        if group.get("policySetId"):
-            scoped_set_ids.add(group["policySetId"])
-    # A set can also name the pool it is assigned to, which catches sets the
-    # pool row itself did not carry an id for.
-    pool_ids = {row.get("id") for row in pool_rows}
-    for policy_set in sets:
-        for assignment in policy_set.get("externalAssignments") or []:
-            if pool_ids & set(_assignment_identity_ids(assignment)):
-                scoped_set_ids.add(policy_set.get("id"))
+    scoped_set_ids = scoped_policy_set_ids(pool_rows, other_groups, sets)
 
     policy_by_id = {p.get("id"): p for p in policies}
     radius_by_id = {g.get("id"): g for g in radius_groups}

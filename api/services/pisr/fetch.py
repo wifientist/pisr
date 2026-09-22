@@ -143,6 +143,19 @@ def venue_rows(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     return _rows(_json(_get(r1, "/venues", tenant_id), "GET /venues", []))
 
 
+def venue_tag_map(r1, tenant_id: Optional[str]) -> Dict[str, Any]:
+    """
+    Every venue's raw tags, keyed by venue id, from GET /venues.
+
+    A separate read because /venues/query ACCEPTS `tags` in `fields`, echoes it
+    back, and returns it on no row — the same trap as the nested AP fields.
+    GET /venues carries them on every tenant probed (2026-09-22), for one call
+    of ~0.2s rather than one detail read per venue.
+    """
+    rows = _rows(_json(_get(r1, "/venues", tenant_id), "GET /venues (tags)", []))
+    return {row.get("id"): row.get("tags") for row in rows if row.get("id")}
+
+
 def venue_detail(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str, Any]:
     return _json(_get(r1, f"/venues/{venue_id}", tenant_id),
                  f"GET /venues/{venue_id}", {}) or {}
@@ -798,13 +811,28 @@ def adaptive_policies(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     beyond that then read as an "unresolved" broken link in the adaptive policy
     chain, turning a fetch limit into hundreds of phantom findings. Same bug and
     same fix as wifi_networks. Page until a short page comes back.
+
+    SORTED ON PURPOSE, by id. With no sort the endpoint's order is not stable
+    between page requests: under concurrent load a page can repeat rows from
+    another, the dedupe below silently drops them, and a whole page of policies
+    vanishes. Measured 2026-09-22: one run in three returned 2,456 rows but
+    only 2,076 unique ids; `sort=id,asc` was complete every time. It surfaced
+    as a per-unit set "losing" half its policies between two identity traces,
+    and it equally made the report's policy-chain check flag phantom links.
+    The walk is then checked against `paging.totalCount`.
     """
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    total: Optional[int] = None
     for page in range(POLICY_PAGE_LIMIT):
-        rows = _rows(_json(_get(r1, "/policyTemplates/policies", tenant_id,
-                                params={"page": page, "size": POLICY_PAGE_SIZE}),
-                           f"GET /policyTemplates/policies page={page}", []))
+        payload = _json(_get(r1, "/policyTemplates/policies", tenant_id,
+                             params={"page": page, "size": POLICY_PAGE_SIZE,
+                                     "sort": "id,asc"}),
+                        f"GET /policyTemplates/policies page={page}", [])
+        paging = payload.get("paging") if isinstance(payload, dict) else None
+        if isinstance(paging, dict) and isinstance(paging.get("totalCount"), int):
+            total = paging["totalCount"]
+        rows = _rows(payload)
         if not rows:
             break
         fresh = 0
@@ -826,6 +854,10 @@ def adaptive_policies(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
         logger.warning("pisr: /policyTemplates/policies hit the %s-page backstop "
                        "(%s policies) — the tenant may have more",
                        POLICY_PAGE_LIMIT, len(out))
+    if total is not None and len(out) < total:
+        logger.warning("pisr: /policyTemplates/policies walked %s of %s policies — "
+                       "set members beyond them will read as unresolved",
+                       len(out), total)
     return out
 
 
@@ -839,6 +871,166 @@ def policy_set_members(r1, tenant_id: Optional[str], set_id: str) -> List[Dict[s
     """The policies in one set, with their evaluation priority."""
     return _rows(_json(_get(r1, f"/policySets/{set_id}/prioritizedPolicies", tenant_id),
                        f"prioritizedPolicies {set_id}", []))
+
+
+# ── identity trace (on demand, admin only) ───────────────────
+#
+# Reads for /pisr/{cid}/identity/trace, which follows each DPSK username through
+# its policy's conditions to the network, AP groups and APs it lands on. Kept
+# out of the report: the conditions are one call per policy, and a per-unit MDU
+# puts a thousand policies in one venue's set.
+
+# A policy's `policyType` names the template its conditions live under. The
+# policy row does not carry `templateId`, and the conditions path needs it.
+# DPSK -> 100 verified live 2026-09-22 across 14 tenants; RADIUS -> 200 is the
+# other template /policyTemplates lists and is inferred.
+POLICY_TEMPLATE_BY_TYPE = {"DPSK": 100, "RADIUS": 200}
+
+# One call per policy. Measured at ~9ms each effective across 24 workers
+# (240 reads in 2.1s), so the cap is about 20s of R1 time — well inside
+# Cloudflare's 100s origin timeout. The largest single venue set seen live
+# holds 1,032 policies.
+POLICY_CONDITION_LIMIT = 2000
+
+# Passphrase rows, walked for their USERNAME only — see dpsk_usernames.
+PASSPHRASE_PAGE_SIZE = 500
+PASSPHRASE_PAGE_LIMIT = 20
+USERNAME_LIMIT = 5000
+
+
+def policy_conditions(r1, tenant_id: Optional[str], policy_id: str,
+                      policy_type: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """
+    One policy's conditions, reduced to what the trace compares.
+
+    None when R1 did not answer, which the trace reports as "could not be
+    read" rather than as a policy with no conditions — those are different
+    faults with different fixes.
+    """
+    template = POLICY_TEMPLATE_BY_TYPE.get(str(policy_type or "").upper(), 100)
+    payload = _json(_get(r1, f"/policyTemplates/{template}/policies/{policy_id}/conditions",
+                         tenant_id, params={"size": 50}),
+                    f"conditions {policy_id}", None)
+    if payload is None:
+        return None
+    out = []
+    for row in _rows(payload):
+        attribute = row.get("templateAttribute") or {}
+        rule = row.get("evaluationRule") or {}
+        out.append({
+            "attributeId": row.get("templateAttributeId") or attribute.get("id"),
+            "attribute": attribute.get("name"),
+            # `Dpsk_Username`, `SSID` — the stable machine name; `attribute` is
+            # console prose and has quotes in it (`Wireless Network "SSID"`).
+            "match": attribute.get("attributeTextMatch"),
+            "criteria": rule.get("criteriaType"),
+            "regex": rule.get("regexStringCriteria"),
+        })
+    return out
+
+
+def dpsk_usernames(r1, tenant_id: Optional[str], pool_id: str) -> Dict[str, Any]:
+    """
+    Every DPSK username in a pool, with its VLAN and a device count — and
+    nothing else from those rows.
+
+    This endpoint's rows carry the passphrase itself. It is read here because
+    the policy condition PISR is checking (`DPSK Username`) is evaluated
+    against THIS username, and it is not the identity's `name`: on about half
+    the tenants probed live 2026-09-22 the two differ for some rows. Checking
+    the regex against the identity name would report typos that are not there
+    and miss ones that are.
+
+    So each row is reduced to an allowlist the moment it arrives, inside this
+    function, and the raw rows go out of scope with it. Same discipline as
+    dpsk_passphrase_count; a wider read, the same promise.
+
+    Returns {"rows": [...], "total": int, "complete": bool}.
+    """
+    rows: List[Dict[str, Any]] = []
+    total: Optional[int] = None
+    for page in range(DPSK_FIRST_PAGE, DPSK_FIRST_PAGE + PASSPHRASE_PAGE_LIMIT):
+        # Sorted for a stable walk — see adaptive_policies for what an
+        # unsorted one does under load. Accepted here, verified 2026-09-22.
+        payload = _json(_post(r1, f"/dpskServices/{pool_id}/passphrases/query",
+                              {"page": page, "pageSize": PASSPHRASE_PAGE_SIZE,
+                               "sortField": "id", "sortOrder": "ASC"}, tenant_id),
+                        f"passphrases/query {pool_id} page={page}", {}) or {}
+        if isinstance(payload, dict):
+            for key in ("totalCount", "totalElements"):
+                if isinstance(payload.get(key), int):
+                    total = payload[key]
+        batch = _rows(payload)
+        for row in batch:
+            # Devices are reduced to a COUNT per last-connected network. Each
+            # device record carries `devicePassphrase` and a MAC; neither is
+            # kept. `online` is null and `deviceConnectivity` is always
+            # "CONNECTED" on every row seen live, so no online/offline claim is
+            # made from them.
+            by_network: Dict[str, int] = {}
+            devices = row.get("devices") or []
+            for device in devices:
+                nid = device.get("lastConnectedNetworkId") or ""
+                by_network[nid] = by_network.get(nid, 0) + 1
+            rows.append({
+                "id": row.get("id"),
+                "username": row.get("username"),
+                "identityGroupId": row.get("identityGroupId"),
+                "identityId": row.get("identityId"),
+                "vlanId": row.get("vlanId"),
+                "deviceCount": len(devices),
+                "devicesByNetwork": by_network,
+            })
+        if len(batch) < PASSPHRASE_PAGE_SIZE or len(rows) >= USERNAME_LIMIT:
+            break
+    if total is None:
+        total = len(rows)
+    return {"rows": rows, "total": total, "complete": len(rows) >= total}
+
+
+# GET /identityGroups/{id}/identities is 0-INDEXED and honours `size` up to at
+# least 2000 (a 1,465-identity group came back whole). Verified 2026-09-22.
+IDENTITY_PAGE_SIZE = 1000
+IDENTITY_PAGE_LIMIT = 10
+
+
+def identity_details(r1, tenant_id: Optional[str], group_id: str) -> Dict[str, Any]:
+    """
+    Each identity's name and description, for the identity trace.
+
+    The Identity DTO carries the DPSK passphrase, email and phone number
+    alongside these. Reduced to an allowlist on arrival, like dpsk_usernames:
+    `description` is the one free-text field an operator writes here (unit
+    notes, usually), and it is only ever shown to an admin by the trace route.
+
+    `dpskGuid` is the passphrase row's id, the fallback join when a passphrase
+    does not carry `identityId`.
+
+    Returns {"rows": [...], "total": int, "complete": bool}.
+    """
+    rows: List[Dict[str, Any]] = []
+    total: Optional[int] = None
+    for page in range(IDENTITY_PAGE_LIMIT):
+        payload = _json(_get(r1, f"/identityGroups/{group_id}/identities", tenant_id,
+                             params={"page": page, "size": IDENTITY_PAGE_SIZE,
+                                     "sort": "id,asc"}),
+                        f"identities {group_id} page={page}", {}) or {}
+        if isinstance(payload, dict) and isinstance(payload.get("totalElements"), int):
+            total = payload["totalElements"]
+        batch = _rows(payload)
+        for row in batch:
+            rows.append({
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "description": row.get("description"),
+                "dpskGuid": row.get("dpskGuid"),
+                "vlan": row.get("vlan"),
+            })
+        if not batch or (isinstance(payload, dict) and payload.get("last")):
+            break
+    if total is None:
+        total = len(rows)
+    return {"rows": rows, "total": total, "complete": len(rows) >= total}
 
 
 def radius_group_assignments(r1, tenant_id: Optional[str], group_id: str) -> List[Dict[str, Any]]:

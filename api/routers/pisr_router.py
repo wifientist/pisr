@@ -29,7 +29,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,12 +39,13 @@ from weasyprint import HTML as WeasyHTML
 
 import sections as section_catalogue
 import visibility
-from auth import role_of
+from auth import require_admin, role_of
 from r1_client import build_r1_client, get_controller, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
 import scrub as secret_scrub
 from services.pisr import fetch as fetch_module
 from services.pisr import shape as shape_module
+from services.pisr import trace as trace_module
 from services.pisr.fetch import ap_groups as fetch_ap_groups
 from reports.pisr import build_context as build_pdf_context
 from services.pisr import checks as check_registry
@@ -359,6 +360,115 @@ async def get_config_detail(request: Request,
     # loginPassword and is never called — but this is a raw config dump and the
     # guarantee should not rest on that staying true.
     return secret_scrub.scrub_report(detail)
+
+
+@router.get("/{controller_id}/identity/trace",
+            dependencies=[Depends(require_admin)])
+async def get_identity_trace(request: Request,
+                             controller_id: int,
+                             venue_id: str = Query(..., description="Venue to trace"),
+                             tenant_id: Optional[str] = Query(None)):
+    """
+    Every DPSK username on this venue, followed through its adaptive policy's
+    conditions to the network, AP groups and APs it lands on.
+
+    ADMIN ONLY, and that is the control rather than a courtesy. The rows name
+    residents' DPSK usernames — the thing `shape._dpsk_safe` refuses to put in
+    a report, for a report is handed to install crews. This is a diagnostic an
+    admin runs, returned once and never stored; `require_admin` is the gate.
+
+    Separate from the report for the same reason as config/detail: the
+    conditions are one R1 call per policy, and a per-unit MDU puts a thousand
+    policies in one venue's set. Everything the report route does, this does
+    too — scope check and scrub — because it is another path to R1 data.
+
+    THREE WAVES. The listings; then the set members and every scoped pool's
+    usernames; then every member policy's conditions. Each wave needs the one
+    before, and each is one gather on the default executor, so the R1
+    connection pool's bound holds.
+    """
+    cfg = get_controller(controller_id)
+    override = resolve_tenant(cfg, tenant_id)
+    _require_scope(request, override, venue_id)
+
+    r1 = build_r1_client(cfg)
+    f = fetch_module
+    (pools, groups, sets, policies, networks, activations, ap_groups, aps,
+     radius_groups) = \
+        await asyncio.gather(
+            asyncio.to_thread(f.dpsk_pools, r1, override),
+            asyncio.to_thread(f.identity_groups_all, r1, override),
+            asyncio.to_thread(f.policy_sets, r1, override),
+            asyncio.to_thread(f.adaptive_policies, r1, override),
+            asyncio.to_thread(f.wifi_networks, r1, override),
+            asyncio.to_thread(f.venue_activations, r1, override, venue_id),
+            asyncio.to_thread(fetch_ap_groups, r1, override, venue_id),
+            asyncio.to_thread(f.access_points, r1, override, venue_id),
+            asyncio.to_thread(f.radius_attribute_groups, r1, override))
+
+    # The report's own scoping, so the trace covers exactly the pools and sets
+    # the Identity tab shows. Pure; the passphrase counts it would take are not
+    # needed here.
+    dpsk = shape_module.dpsk_card(pools, groups, activations, networks,
+                                  venue_id, None, {})
+    scoped_set_ids = shape_module.scoped_policy_set_ids(
+        dpsk["pools"], dpsk.get("otherIdentityGroups") or [], sets)
+    pool_ids = [row["id"] for row in dpsk["pools"] if row.get("id")]
+    set_ids = sorted(scoped_set_ids)
+    group_ids = sorted({g.get("id") for row in dpsk["pools"]
+                        for g in row.get("identityGroups") or [] if g.get("id")})
+
+    wave2 = await asyncio.gather(
+        *(asyncio.to_thread(f.policy_set_members, r1, override, sid) for sid in set_ids),
+        *(asyncio.to_thread(f.dpsk_usernames, r1, override, pid) for pid in pool_ids),
+        *(asyncio.to_thread(f.identity_details, r1, override, gid) for gid in group_ids),
+        return_exceptions=True)
+    n_sets, n_pools = len(set_ids), len(pool_ids)
+    set_members: Dict[str, Any] = {}
+    usernames: Dict[str, Any] = {}
+    identities: Dict[str, Any] = {}
+    for sid, result in zip(set_ids, wave2[:n_sets]):
+        set_members[sid] = [] if isinstance(result, Exception) else result
+    for pid, result in zip(pool_ids, wave2[n_sets:n_sets + n_pools]):
+        if isinstance(result, Exception):
+            logger.warning("pisr: trace usernames failed for pool %s: %s", pid, result)
+            result = {"rows": [], "total": 0, "complete": False}
+        usernames[pid] = result
+    for gid, result in zip(group_ids, wave2[n_sets + n_pools:]):
+        if isinstance(result, Exception):
+            # Names and descriptions only; the trace itself does not need them.
+            logger.warning("pisr: trace identities failed for group %s: %s", gid, result)
+            result = {"rows": [], "total": 0, "complete": False}
+        identities[gid] = result
+
+    policy_type = {p.get("id"): p.get("policyType") for p in policies}
+    wanted = list(dict.fromkeys(
+        m.get("policyId") for sid in set_ids for m in set_members[sid]
+        if m.get("policyId") in policy_type))
+    capped = wanted[:f.POLICY_CONDITION_LIMIT]
+    results = await asyncio.gather(
+        *(asyncio.to_thread(f.policy_conditions, r1, override, pid, policy_type[pid])
+          for pid in capped),
+        return_exceptions=True)
+    conditions = {pid: (None if isinstance(r, Exception) else r)
+                  for pid, r in zip(capped, results)}
+
+    payload = trace_module.identity_trace(
+        pool_rows=dpsk["pools"], raw_pools=pools, usernames=usernames,
+        identities=identities, radius_groups=radius_groups,
+        sets=sets, scoped_set_ids=scoped_set_ids, set_members=set_members,
+        policies=policies, conditions=conditions, conditions_wanted=len(wanted),
+        networks=networks, activations=activations,
+        aps=shape_module.ap_views(aps, ap_groups), ap_groups=ap_groups)
+
+    # Logged without a single username, deliberately: the container log is not
+    # somewhere residents' names should accumulate.
+    logger.info("pisr: identity trace for venue=%s user=%s (%d username(s), "
+                "%d policy/policies, %d condition read(s)) — %s",
+                venue_id, getattr(request.state, "pisr_user", "-"),
+                payload["summary"]["total"], len(wanted), len(capped),
+                payload["summary"]["byStatus"])
+    return secret_scrub.scrub_report(payload)
 
 
 @router.get("/{controller_id}/checks")

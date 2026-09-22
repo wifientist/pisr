@@ -702,6 +702,62 @@ an upstream.
   is a decision about the whole tool. The honest workaround is exporting the
   PDF at the end of each visit.
 
+- **Identity trace** — `api/services/pisr/trace.py`, route
+  `/pisr/{cid}/identity/trace`, the "Trace identities" button at the bottom of
+  the Identity tab. Follows every DPSK username → the policy its username
+  regex selects (in priority order) → that policy's SSID regex → the network →
+  activated here? → AP groups → APs. Built for the per-unit MDU pattern (one
+  policy per resident, conditions `^username$` and `^SSID$`); it also reads a
+  tiered set correctly (a handful of suffix policies, no SSID condition).
+
+  **Admin-only, and that is the control.** It names residents' usernames,
+  which `shape._dpsk_safe` refuses to put in a report. `require_admin` gates
+  the route; it is never in `build_report`, the PDF, or a section id. Widening
+  it to users is a policy decision, not a visibility toggle.
+
+  **The regex is checked against the DPSK PASSPHRASE's `username`, not the
+  identity's `name`.** They differ for some rows on about half the tenants
+  probed (2026-09-22). So `fetch.dpsk_usernames` reads the passphrase rows —
+  which carry the passphrase — and reduces each to `{id, username,
+  identityGroupId, identityId}` inside the function. Do not widen that
+  allowlist. `fetch.identity_details` does the same to the Identity DTO (which
+  also carries the passphrase, email and phone): `{id, name, description,
+  dpskGuid}` only, for the trace's identity name and description columns.
+
+  Conditions are `GET /policyTemplates/{t}/policies/{p}/conditions`, one per
+  policy, template from `policyType` (DPSK → 100, verified live). The machine
+  names to match on are `attributeTextMatch` `Dpsk_Username` and `SSID`; ids
+  are template-specific. ~9ms each effective at 24 workers; a 569-resident
+  venue traces in ~10s. Capped at `fetch.POLICY_CONDITION_LIMIT`.
+
+  **VLAN is resolved passphrase → identity → network default** (the venue
+  activation's override, else the network's own VLAN), per the operator. A
+  device record has NO VLAN field in the spec, so devices are counted by the
+  VLAN their passphrase resolves to, per last-connected network. Device lists
+  live on the PASSPHRASE — `identity.devices` is empty and `deviceCount` 0 on
+  every identity seen — and each device carries `devicePassphrase`, so only a
+  count per network is kept. `online` is always null and `deviceConnectivity`
+  always "CONNECTED", so no online/offline claim is made. `passphraseVlan` is
+  in `scrub.SAFE_KEYS`; without it the compound "passphrase" rule blanks it.
+
+  **A user no policy selects gets THEIR network's default, never the pool's.**
+  On a per-unit venue the pool backs hundreds of SSIDs, and unioning their
+  defaults put 280 VLANs on one row. `their_networks` uses, in order: the
+  networks their devices last connected on, the SSID of the policy named for
+  them, the pool's only network here — else "could not be determined". A
+  reject-by-default pool's unmatched users get no VLAN at all.
+
+  **`/policyTemplates/policies` must be walked SORTED** (`sort=id,asc`).
+  Unsorted, its order shifts between page requests under load: one run in
+  three returned 2,456 rows but 2,076 unique ids, and the dedupe silently
+  dropped a page. It read as a per-unit set "losing" half its policies between
+  traces, and as phantom policy-chain links in the report. The walk is checked
+  against `paging.totalCount`.
+
+  A miss is split on the pool's `policyDefaultAccess`: accept (351/357 pools
+  live) → warning "falls through to default"; reject → error. A regex Python
+  cannot compile is "unverified", never a verdict — R1's is Java's.
+
 - **Mesh fallback, uptime and tags on APs** — `meshRole`, `uptime` and `tags`
   were fetched and shaped from the beginning and rendered nowhere. A meshing AP
   is the install defect that passes every other check in the report: online,

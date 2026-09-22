@@ -77,6 +77,9 @@ SAFE_KEYS = frozenset({
     # these on the pool row, and without them here the compound "passphrase"
     # rule deletes real content — the exact false positive this list is for.
     "passphraseformat", "passphraselength",
+    # The identity trace's VLAN id carried on a passphrase — an integer, read
+    # through fetch.dpsk_usernames' allowlist, which never keeps the value.
+    "passphrasevlan",
     "secretconfigured", "tokenexpiry", "keytype", "keymanagement",
     "keyexchange", "dpsk", "dpskenabled", "dpskpoolid", "dpskssids",
 })

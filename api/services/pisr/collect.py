@@ -26,7 +26,16 @@ async def list_venues(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     aggregates. Counts are best-effort — `aggregatedApStatus` is a per-build
     shape, so it is normalised defensively and omitted rather than guessed.
     """
-    rows = await asyncio.to_thread(fetch.venue_rows, r1, tenant_id)
+    rows, tag_map = await asyncio.gather(
+        asyncio.to_thread(fetch.venue_rows, r1, tenant_id),
+        asyncio.to_thread(fetch.venue_tag_map, r1, tenant_id),
+        return_exceptions=True)
+    if isinstance(rows, Exception):
+        raise rows
+    if isinstance(tag_map, Exception):
+        # Tags are a convenience on the picker; the picker must work without them.
+        logger.warning("pisr: venue tags unavailable: %s", tag_map)
+        tag_map = {}
 
     venues = []
     for row in rows:
@@ -42,6 +51,9 @@ async def list_venues(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
             "clients": _int_or_none(row.get("clients")),
             "networks": _count_of(row.get("networks")),
             "firmwareUpToDate": row.get("isApFirmwareUpToDate"),
+            # The row itself carries tags only when venue_rows fell back to
+            # GET /venues; otherwise they come from the separate map.
+            "tags": shape.venue_tags(row.get("tags") or tag_map.get(row.get("id"))),
         })
     venues.sort(key=lambda v: (v["name"] or "").lower())
     return venues
@@ -234,16 +246,8 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
     # Policy detail is a third, smaller round: it needs the scoped policy sets
     # from the DPSK card above, and only those sets' members and RADIUS groups
     # are worth fetching.
-    scoped_set_ids = {row["policySetId"] for row in dpsk["pools"] if row.get("policySetId")}
-    for group in dpsk.get("otherIdentityGroups") or []:
-        if group.get("policySetId"):
-            scoped_set_ids.add(group["policySetId"])
-    pool_ids = {row["id"] for row in dpsk["pools"]}
-    for policy_set in raw["policySets"]:
-        for assignment in policy_set.get("externalAssignments") or []:
-            # identityId is a LIST on this DTO despite the singular name.
-            if pool_ids & set(shape._assignment_identity_ids(assignment)):
-                scoped_set_ids.add(policy_set.get("id"))
+    scoped_set_ids = shape.scoped_policy_set_ids(
+        dpsk["pools"], dpsk.get("otherIdentityGroups") or [], raw["policySets"])
 
     set_members: Dict[str, Any] = {}
     group_assignments: Dict[str, Any] = {}

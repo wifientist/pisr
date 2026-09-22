@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2, RefreshCw, ChevronRight, AlertTriangle, AlertOctagon, Info,
   CheckCircle2, MinusCircle, Wifi, Cable, Network, Zap, Server, Users,
@@ -48,6 +48,24 @@ interface VenueRow {
   clients: number | null;
   networks: number | null;
   firmwareUpToDate: boolean | null;
+  // R1 venue tags, already split on commas and de-duplicated server-side.
+  tags?: string[];
+}
+
+/** A venue's tags as small chips — the hint of what a site has underneath. */
+function VenueTags({ tags }: { tags?: string[] }) {
+  if (!tags?.length) return null;
+  return (
+    <div className="flex min-w-0 flex-wrap gap-1">
+      {tags.map((tag) => (
+        <span key={tag}
+              className="inline-flex max-w-full items-center rounded border border-gray-200 bg-gray-50
+                         px-1.5 py-0.5 text-[11px] text-gray-600 break-all">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 const SEVERITY: Record<string, {
@@ -663,7 +681,7 @@ export default function PISR() {
     const needle = venueFilter.trim().toLowerCase();
     if (!needle) return venues;
     return venues.filter((v) =>
-      [v.name, v.addressLine, v.city, v.country].filter(Boolean)
+      [v.name, v.addressLine, v.city, v.country, ...(v.tags || [])].filter(Boolean)
         .join(" ").toLowerCase().includes(needle));
   }, [venues, venueFilter]);
 
@@ -761,6 +779,7 @@ export default function PISR() {
                     {row.clients !== null && <Pill tone="blue">{row.clients} clients</Pill>}
                     {row.networks !== null && <Pill tone="purple">{row.networks} SSIDs</Pill>}
                   </div>
+                  {!!row.tags?.length && <div className="mt-1.5"><VenueTags tags={row.tags} /></div>}
                 </button>
               ))}
             </div>
@@ -801,7 +820,7 @@ export default function PISR() {
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <button onClick={() => { setVenue(null); setReport(null); }}
                     className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 mb-1">
               <ArrowLeft size={13} /> All venues
@@ -816,6 +835,8 @@ export default function PISR() {
                 report?.venue?.address?.country || venue.country].filter(Boolean).join(", ") || "No address"}
               {report?.venue?.address?.timezone ? ` · ${report.venue.address.timezone}` : ""}
             </p>
+            {/* The report's own read wins; the picker's copy shows while it loads. */}
+            <div className="mt-1.5"><VenueTags tags={report?.venue?.tags || venue.tags} /></div>
           </div>
           <div className="text-right">
             <button onClick={downloadPdf} disabled={!report || exporting}
@@ -870,7 +891,7 @@ export default function PISR() {
           {tab === "wired" && <Wired report={report} />}
           {tab === "poe" && <Poe report={report} />}
           {tab === "addressing" && <Addressing report={report} />}
-          {tab === "identity" && <Dpsk report={report} />}
+          {tab === "identity" && <Dpsk report={report} base={base} qs={qs} />}
           {tab === "devices" && (
             <Devices report={report} filter={deviceFilter} onFilter={setDeviceFilter} />
           )}
@@ -2953,7 +2974,9 @@ function Addressing({ report }: { report: any }) {
  * builds it from an allowlist and raises rather than emit a forbidden key
  * (shape._dpsk_safe), so there is nothing sensitive here to render.
  */
-function Dpsk({ report }: { report: any }) {
+function Dpsk({ report, base, qs }: {
+  report: any; base: string; qs: (extra?: Record<string, string>) => string;
+}) {
   const dpsk = report.dpsk || {};
   const pools: any[] = dpsk.pools || [];
 
@@ -3113,6 +3136,647 @@ function Dpsk({ report }: { report: any }) {
       )}
 
       <PolicyChain report={report} />
+      <IdentityTrace report={report} base={base} qs={qs} />
+    </div>
+  );
+}
+
+const TRACE_STATUS: Record<string, { tone: string; label: string }> = {
+  error: { tone: "red", label: "Broken" },
+  warning: { tone: "amber", label: "Warning" },
+  unknown: { tone: "gray", label: "Unverified" },
+  ok: { tone: "green", label: "Clean" },
+};
+
+// Rows rendered before "show more". A per-unit MDU has a thousand usernames,
+// and the default filter (problems only) usually leaves a handful — this only
+// bounds the DOM when someone asks for everything.
+const TRACE_PAGE = 150;
+// APs listed per AP group before "+N more". A per-unit group has one or two;
+// a venue-wide SSID lands on every AP in the building.
+const TRACE_AP_PREVIEW = 5;
+
+/**
+ * Identity trace: every DPSK username followed through its policy's
+ * conditions to the network, AP groups and APs it lands on.
+ *
+ * ADMIN ONLY — the server refuses anyone else, and this is not rendered for
+ * them. It names residents' DPSK usernames, which the report itself never
+ * does. Loaded on request: the conditions are one R1 call per policy.
+ *
+ * The payload is normalised (policies/networks/apGroups/aps are maps, rows
+ * name them by id), so expanding a row and "+N more" are joins here, not
+ * another request.
+ */
+function IdentityTrace({ report, base, qs }: {
+  report: any; base: string; qs: (extra?: Record<string, string>) => string;
+}) {
+  const { isAdmin } = useAuth();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  // "all", not "problems": rows arrive worst-first, so problems are already on
+  // top, and defaulting to problems-only hid every correctly built resident —
+  // including the one you typed into the filter to look up.
+  const [status, setStatus] = useState<string>("all");
+  const [issue, setIssue] = useState<string>("");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [limit, setLimit] = useState(TRACE_PAGE);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const res = await apiFetch(
+        `${base}/identity/trace${qs({ venue_id: report.meta?.venueId })}`,
+        { credentials: "include" });
+      if (!res.ok) {
+        throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      }
+      setData(await res.json());
+    } catch (e: any) {
+      setError(e.message || "Could not trace identities");
+    } finally {
+      setLoading(false);
+    }
+  }, [base, qs, report]);
+
+  if (!isAdmin) return null;
+
+  const sets: any[] = report.policy?.sets || [];
+  const policyCount = sets.reduce((n, s) => n + (s.policies?.length || 0), 0);
+
+  if (!data) {
+    return (
+      <Card title="Identity trace" icon={<Search size={17} className="text-gray-400" />}
+            titleBadge={<Pill tone="purple">admin</Pill>}
+            hint="Each DPSK username → the policy its username regex selects → that policy's SSID
+                  regex → the network → the AP groups and APs it broadcasts on.">
+        <p className="text-sm text-gray-600 mb-3">
+          Reads every username in {fmtNum(report.dpsk?.poolCount || 0)} pool(s) and the conditions
+          of {fmtNum(policyCount)} policy/policies — about {fmtNum(policyCount + sets.length + 8)}{" "}
+          requests to RUCKUS ONE. Shows residents' usernames, so it is only offered to admins and is
+          never part of the report or the PDF.
+        </p>
+        <button onClick={load} disabled={loading}
+                className="inline-flex items-center gap-1.5 rounded bg-blue-600 px-3 py-2
+                           text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+          {loading && <Loader2 size={14} className="animate-spin" />}
+          {loading ? "Reading RUCKUS ONE…" : "Trace identities"}
+        </button>
+        {error && (
+          <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        )}
+      </Card>
+    );
+  }
+
+  const rows: any[] = data.rows || [];
+  const policies = data.policies || {};
+  const networks = data.networks || {};
+  const issues = data.issues || {};
+  const byStatus = data.summary?.byStatus || {};
+  const byIssue = data.summary?.byIssue || {};
+
+  const q = query.trim().toLowerCase();
+  const textHit = (row: any) => {
+    if (!q) return true;
+    const policy = policies[row.policyId];
+    return [row.username, row.pool, policy?.name, row.identityGroup, vlanText(row.vlan),
+            ...row.networkIds.map((nid: string) => networks[nid]?.ssid)]
+      .some((v) => String(v ?? "").toLowerCase().includes(q));
+  };
+  const statusHit = (row: any) =>
+    status === "all" ? true
+    : status === "problems" ? row.status !== "ok"
+    : row.status === status;
+  const textMatches = rows.filter(textHit);
+  const shown = textMatches.filter((r) => statusHit(r) && (!issue || r.issues.includes(issue)));
+  // Matches the status/issue filter is hiding — said out loud, because a
+  // filtered-to-nothing table otherwise reads as "this user does not exist".
+  const hiddenByFilter = textMatches.length - shown.length;
+  // One row left is the "tell me everything about this user" view — open it.
+  const single = shown.length === 1 ? rowKey(shown[0]) : null;
+
+  const toggle = (key: string) => setOpen((cur) => {
+    const next = new Set(cur);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  const limits = data.limits || {};
+  const issueCodes = Object.keys(byIssue).sort((a, b) =>
+    (SEVERITY_ORDER[issues[a]?.severity] ?? 9) - (SEVERITY_ORDER[issues[b]?.severity] ?? 9)
+    || byIssue[b] - byIssue[a]);
+
+  return (
+    <Card title="Identity trace" icon={<Search size={17} className="text-gray-400" />}
+          titleBadge={<Pill tone="purple">admin</Pill>}
+          hint={`${fmtNum(rows.length)} username(s) across ${data.sets?.length || 0} policy set(s)
+                 — a snapshot from when you pressed the button.`}
+          right={
+            <button onClick={load} disabled={loading}
+                    className="inline-flex shrink-0 items-center gap-1 text-xs text-blue-700 hover:underline disabled:opacity-50">
+              {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Re-trace
+            </button>
+          }>
+      {/* Summary: one chip per status, then one per issue — each is a filter. */}
+      <div className="flex flex-wrap gap-2 mb-2">
+        {(["error", "warning", "unknown", "ok"] as const).filter((k) => byStatus[k]).map((k) => (
+          <button key={k} onClick={() => { setStatus(status === k ? "all" : k); setIssue(""); }}
+                  className={`rounded ${status === k ? "ring-2 ring-blue-400" : ""}`}>
+            <Pill tone={TRACE_STATUS[k].tone}>{fmtNum(byStatus[k])} {TRACE_STATUS[k].label.toLowerCase()}</Pill>
+          </button>
+        ))}
+      </div>
+      {!!issueCodes.length && (
+        <ul className="mb-3 space-y-0.5 text-xs">
+          {issueCodes.map((code) => (
+            <li key={code}>
+              <button onClick={() => { setIssue(issue === code ? "" : code); setStatus("all"); }}
+                      className={`text-left hover:underline ${issue === code ? "font-semibold" : ""}`}>
+                <span className={TRACE_TEXT[issues[code]?.severity] || "text-gray-600"}>
+                  {fmtNum(byIssue[code])} × {issues[code]?.label || code}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(!limits.usernames?.complete
+        || (limits.conditions && limits.conditions.read < limits.conditions.wanted)) && (
+        <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Partial trace: {fmtNum(limits.usernames?.shown)} of {fmtNum(limits.usernames?.total)}{" "}
+          username(s) and {fmtNum(limits.conditions?.read)} of {fmtNum(limits.conditions?.wanted)}{" "}
+          policies' conditions were read. Rows touching the rest say "could not be read".
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <input value={query} onChange={(e) => { setQuery(e.target.value); setLimit(TRACE_PAGE); }}
+               placeholder="Filter by username, group, policy, SSID or VLAN"
+               className="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1 text-sm" />
+        <select value={status} onChange={(e) => { setStatus(e.target.value); setIssue(""); }}
+                className="rounded border border-gray-300 px-2 py-1 text-sm">
+          <option value="problems">Problems only</option>
+          <option value="all">All</option>
+          <option value="error">Broken</option>
+          <option value="warning">Warnings</option>
+          <option value="unknown">Unverified</option>
+          <option value="ok">Clean</option>
+        </select>
+        <span className="text-xs text-gray-500">
+          {fmtNum(shown.length)} of {fmtNum(rows.length)} shown
+          {!!hiddenByFilter && shown.length > 0 && (
+            <> · <button onClick={() => { setStatus("all"); setIssue(""); }}
+                         className="text-blue-700 hover:underline">
+              {fmtNum(hiddenByFilter)} more hidden by filter</button></>
+          )}
+        </span>
+      </div>
+
+      {!shown.length ? (
+        <p className="text-sm text-gray-400">
+          {!rows.length ? "No DPSK usernames on this venue's pools."
+            : hiddenByFilter ? <>
+                {fmtNum(hiddenByFilter)} match{hiddenByFilter === 1 ? "es" : ""} but{" "}
+                {hiddenByFilter === 1 ? "is" : "are"} hidden by the status filter.{" "}
+                <button onClick={() => { setStatus("all"); setIssue(""); }}
+                        className="text-blue-700 hover:underline">Show all</button>
+              </>
+            : "No username, policy or SSID matches this filter."}
+        </p>
+      ) : (
+        <div className="min-w-0 overflow-auto border border-gray-200 rounded" style={{ maxHeight: "32rem" }}>
+          <table className="min-w-full w-max text-sm">
+            <thead className="bg-gray-50 sticky top-0 z-10">
+              <tr>
+                {TRACE_COLUMNS.map((h) => (
+                  <th key={h} className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.slice(0, limit).map((row) => {
+                const key = rowKey(row);
+                const expanded = single === key || open.has(key);
+                return (
+                  <TraceRow key={key} row={row} data={data} expanded={expanded}
+                            onToggle={() => toggle(key)} />
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {shown.length > limit && (
+        <button onClick={() => setLimit(limit + TRACE_PAGE * 4)}
+                className="mt-2 text-xs text-blue-700 hover:underline">
+          Show {fmtNum(Math.min(TRACE_PAGE * 4, shown.length - limit))} more of{" "}
+          {fmtNum(shown.length - limit)} remaining
+        </button>
+      )}
+
+      {!!data.unclaimedPolicyIds?.length && (
+        <details className="mt-4 text-sm">
+          <summary className="cursor-pointer text-gray-700">
+            {fmtNum(data.unclaimedPolicyIds.length)} policy/policies no username selects
+            <span className="text-xs text-gray-500"> — usually a resident who has moved out, or a
+            username regex with a typo{!limits.usernames?.complete && " (the username list is partial, so some may be claimed)"}</span>
+          </summary>
+          <ul className="mt-2 max-h-48 overflow-auto rounded border border-gray-200 p-2 font-mono text-xs">
+            {data.unclaimedPolicyIds.map((pid: string) => (
+              <li key={pid} className="break-all">
+                {policies[pid]?.name}{" "}
+                <span className="text-gray-400">{(policies[pid]?.usernameRegex || []).join(" ∧ ")}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Card>
+  );
+}
+
+const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, unknown: 2, note: 3 };
+const TRACE_TEXT: Record<string, string> = {
+  error: "text-red-700", warning: "text-amber-800", unknown: "text-gray-600", note: "text-gray-500",
+};
+
+const rowKey = (row: any) => `${row.poolId}:${row.username}`;
+
+const TRACE_COLUMNS = ["", "Username", "Identity group", "Description", "Passphrases",
+                       "VLAN", "Devices", "Policy", "RADIUS group", "SSID", "AP groups", "APs"];
+
+// Where a VLAN came from, in R1's order of precedence.
+const VLAN_SOURCE: Record<string, string> = {
+  passphrase: "passphrase", identity: "identity", network: "network default",
+};
+const vlanText = (v: any) => v?.vlans?.length ? v.vlans.join(" / ") : null;
+
+// How the network behind a "network default" VLAN was identified. A user no
+// policy selects has no policy SSID, so the trace works out THEIR network from
+// evidence rather than listing every network the pool backs.
+const VLAN_BASIS: Record<string, string> = {
+  policy: "of the network their policy's SSID condition names",
+  devices: "of the network their devices last connected on",
+  "named-policy": "of the network named by the policy called after them",
+  "only-network": "of the pool's only network on this venue",
+};
+
+/**
+ * A VLAN list that stays small. A user who falls through to the pool default
+ * can join every SSID the pool backs, and on a per-unit venue each of those
+ * has its own VLAN — hundreds of them — so a naive join fills the row.
+ *
+ * `compact` (the table): one VLAN as-is, more as "N VLANs" with the full list
+ * in the tooltip. Otherwise (the detail): the first `preview`, then an
+ * expandable "+N more".
+ */
+function VlanList({ vlans, compact, preview = 2 }: {
+  vlans: (number | string)[] | undefined; compact?: boolean; preview?: number;
+}) {
+  const [all, setAll] = useState(false);
+  const list = vlans || [];
+  if (!list.length) return null;
+  if (list.length === 1) return <>{list[0]}</>;
+  if (compact) {
+    return <span title={`VLANs ${list.join(", ")}`} className="cursor-help underline decoration-dotted">
+      {fmtNum(list.length)} VLANs</span>;
+  }
+  const shown = all ? list : list.slice(0, preview);
+  return (
+    <>
+      {shown.join(", ")}
+      {list.length > preview && (
+        <button onClick={() => setAll(!all)} className="ml-1 text-blue-700 hover:underline">
+          {all ? "show fewer" : `+${fmtNum(list.length - preview)} more`}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** "100 / 20 Mbps" from a policy's rate limits, or null when it sets none. */
+const rateText = (limits: any[] | undefined) =>
+  (limits || []).filter((r) => r.mbps).map((r) => `${r.mbps} Mbps`).join(" / ") || null;
+
+/** A ✓ / ✗ / ? mark for one link in the chain. */
+function Tick({ ok, title }: { ok: boolean | null; title?: string }) {
+  if (ok === null) return <span title={title} className="text-gray-400">?</span>;
+  return ok
+    ? <CheckCircle2 size={13} className="inline text-green-600" aria-label={title} />
+    : <AlertOctagon size={13} className="inline text-red-600" aria-label={title} />;
+}
+
+function TraceRow({ row, data, expanded, onToggle }: {
+  row: any; data: any; expanded: boolean; onToggle: () => void;
+}) {
+  const policies = data.policies || {};
+  const networks = data.networks || {};
+  const groups = data.apGroups || {};
+  const policy = policies[row.policyId];
+  const nets = row.networkIds.map((nid: string) => ({ id: nid, ...networks[nid] }));
+  const here = nets.filter((n: any) => n.activated);
+  const groupIds: string[] = Array.from(new Set(here.flatMap((n: any) => n.apGroupIds || [])));
+  const allGroups = here.some((n: any) => n.allApGroups);
+  const apCount = groupIds.reduce((sum, gid) => sum + (groups[gid]?.apSerials?.length || 0), 0);
+  const st = TRACE_STATUS[row.status] || TRACE_STATUS.unknown;
+
+  return (
+    <>
+      <tr onClick={onToggle}
+          className={`border-t border-gray-100 cursor-pointer hover:bg-gray-50 ${expanded ? "bg-blue-50/40" : ""}`}>
+        <td className="px-3 py-1.5 whitespace-nowrap">
+          {expanded ? <ChevronDown size={13} className="inline text-gray-400" />
+                    : <ChevronRight size={13} className="inline text-gray-400" />}{" "}
+          <Pill tone={st.tone}>{st.label}</Pill>
+        </td>
+        <td className="px-3 py-1.5 font-mono text-xs text-gray-800">{row.username || "—"}</td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {row.identityGroup || <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 text-center">
+          {row.description
+            ? <CheckCircle2 size={13} className="inline text-green-600" aria-label="description set" />
+            : <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 text-center text-gray-700">
+          {row.identityId ? fmtNum(row.passphraseCount) : <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 whitespace-nowrap text-gray-700">
+          {vlanText(row.vlan)
+            ? <><VlanList vlans={row.vlan.vlans} compact />{" "}
+                <span className="text-[11px] text-gray-400">{VLAN_SOURCE[row.vlan.source]}</span></>
+            : <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 text-center text-gray-700">
+          {row.deviceCount ? fmtNum(row.deviceCount) : <span className="text-gray-300">0</span>}
+        </td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {policy ? <>{policy.name} <Tick ok={true} title="username regex matches" /></>
+                  : <span className="text-red-700">none</span>}
+          {!!row.shadows?.length && <span className="ml-1 text-xs text-amber-700">+{row.shadows.length} shadowed</span>}
+        </td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {!policy ? <span className="text-gray-300">—</span>
+            : policy.radiusGroupMissing ? <span className="text-red-700">deleted</span>
+            : policy.radiusGroup || <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {!policy ? <span className="text-gray-300">—</span>
+            : !policy.ssidRegex?.length ? <span className="text-xs text-gray-500">any SSID</span>
+            : !nets.length ? <span className="text-red-700">no network</span>
+            : <>{nets.map((n: any) => n.ssid).slice(0, 2).join(", ")}{nets.length > 2 && ` +${nets.length - 2}`}{" "}
+                <Tick ok={here.length > 0} title={here.length ? "activated here" : "not activated on this venue"} /></>}
+        </td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {allGroups ? "all" : groupIds.length ? groupIds.length === 1 ? groups[groupIds[0]]?.name : fmtNum(groupIds.length)
+            : <span className="text-gray-300">—</span>}
+        </td>
+        <td className="px-3 py-1.5 text-gray-700">
+          {here.length ? (apCount ? fmtNum(apCount) : <span className="text-amber-700">0</span>)
+                       : <span className="text-gray-300">—</span>}
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="bg-blue-50/40">
+          <td colSpan={TRACE_COLUMNS.length} className="px-4 pb-3 pt-1">
+            <TraceDetail row={row} data={data} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/** Everything the trace knows about one username, link by link. */
+function TraceDetail({ row, data }: { row: any; data: any }) {
+  const policies = data.policies || {};
+  const networks = data.networks || {};
+  const groups = data.apGroups || {};
+  const aps = data.aps || {};
+  const issues = data.issues || {};
+  const [allAps, setAllAps] = useState(false);
+  const policy = policies[row.policyId];
+  // Network default at this venue. When it is what the user gets, the server
+  // already resolved it (including the fall-through case, over every network
+  // the pool backs); otherwise it is the matched networks activated here.
+  const networkDefault: number[] = row.vlan?.source === "network"
+    ? row.vlan.vlans
+    : Array.from(new Set<number>(
+        row.networkIds.filter((nid: string) => networks[nid]?.activated)
+          .flatMap((nid: string) => networks[nid]?.defaultVlans || []))).sort((x, y) => x - y);
+  const siblings = row.identityId
+    ? (data.rows || []).filter((r: any) => r.identityId === row.identityId) : [row];
+  // Every AP the user can land on, across all matched networks that are
+  // activated here — de-duplicated, since two SSIDs on one group share APs.
+  const apSerials: string[] = Array.from(new Set(
+    row.networkIds
+      .filter((nid: string) => networks[nid]?.activated)
+      .flatMap((nid: string) => networks[nid]?.apGroupIds || [])
+      .flatMap((gid: string) => groups[gid]?.apSerials || [])));
+  const apList = allAps ? apSerials : apSerials.slice(0, TRACE_AP_PREVIEW);
+  const named = row.namedPolicyId && row.namedPolicyId !== row.policyId
+    ? policies[row.namedPolicyId] : null;
+  const set = (data.sets || []).find((s: any) => s.id === row.setId);
+
+  const regexLine = (patterns: string[]) => patterns.length
+    ? <code className="break-all rounded bg-white px-1 text-xs">{patterns.join("  ∧  ")}</code>
+    : <span className="text-xs text-gray-500">no condition</span>;
+
+  return (
+    <div className="min-w-0 max-w-3xl space-y-2 whitespace-normal text-sm">
+      {!!row.issues.length && (
+        <ul className="space-y-0.5 text-xs">
+          {row.issues.map((code: string) => (
+            <li key={code} className={TRACE_TEXT[issues[code]?.severity] || ""}>
+              • {issues[code]?.label || code}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-xs">
+        {row.identityName && row.identityName !== row.username && <>
+          <dt className="text-gray-500">Identity name</dt>
+          <dd className="min-w-0">{row.identityName}
+            <span className="ml-1 text-gray-500">(differs from the DPSK username the regex tests)</span>
+          </dd>
+        </>}
+        <dt className="text-gray-500">Description</dt>
+        <dd className="min-w-0 whitespace-pre-wrap break-words">
+          {row.description || <span className="text-gray-400">none set</span>}
+        </dd>
+        <dt className="text-gray-500">Identity group</dt>
+        <dd className="min-w-0">{row.identityGroup || <span className="text-gray-400">unknown</span>}</dd>
+        <dt className="text-gray-500">DPSK pool</dt><dd className="min-w-0">{row.pool}</dd>
+
+        <dt className="text-gray-500">VLAN</dt>
+        <dd className="min-w-0">
+          {vlanText(row.vlan)
+            ? <><strong><VlanList vlans={row.vlan.vlans} /></strong>
+                <span className="text-gray-500"> — {VLAN_SOURCE[row.vlan.source]}
+                  {row.vlan.basis && ` ${VLAN_BASIS[row.vlan.basis] || ""}`}</span></>
+            : row.issues.includes("rejected")
+              ? <span className="text-red-700">none — the pool rejects this user</span>
+              : <span className="text-amber-700">
+                  could not be determined
+                  {!row.policyId && " — no policy selects this user, and neither their devices nor a policy named for them says which of the pool's networks is theirs"}
+                </span>}
+          <div className="text-gray-500">
+            passphrase {row.passphraseVlan ?? <span className="text-gray-400">blank</span>}
+            {" → "}identity {row.identityVlan ?? <span className="text-gray-400">blank</span>}
+            {" → "}network default {networkDefault.length
+              ? <VlanList vlans={networkDefault} />
+              : <span className="text-gray-400">unknown</span>}
+          </div>
+          {policy?.radiusVlan != null && (
+            <div className="text-amber-800">
+              The policy's RADIUS group also returns VLAN {policy.radiusVlan}, which may override this.
+            </div>
+          )}
+        </dd>
+
+        <dt className="text-gray-500">Devices</dt>
+        <dd className="min-w-0">
+          {!row.deviceCount ? <span className="text-gray-400">none have used this passphrase</span> : <>
+            {fmtNum(row.deviceCount)}
+            {!!row.devicesByVlan?.length && <span className="text-gray-500"> — </span>}
+            {(row.devicesByVlan || []).map((b: any, i: number) => (
+              <Fragment key={i}>
+                {i > 0 && ", "}
+                {fmtNum(b.count)} on {b.vlans?.length
+                  ? <>{b.vlans.length === 1 ? "VLAN " : ""}<VlanList vlans={b.vlans} compact /></>
+                  : "an unknown VLAN"}
+                {b.source && <span className="text-gray-400"> ({VLAN_SOURCE[b.source]})</span>}
+              </Fragment>
+            ))}
+          </>}
+        </dd>
+
+        {row.passphraseCount > 1 && <>
+          <dt className="text-gray-500">Identity's passphrases</dt>
+          <dd className="min-w-0">
+            {fmtNum(row.passphraseCount)} on this identity:
+            <ul className="mt-0.5">
+              {siblings.map((sib: any, i: number) => (
+                <li key={i} className={sib === row ? "font-medium" : ""}>
+                  <span className="font-mono">{sib.username}</span>
+                  <span className="text-gray-500"> · {sib.vlan?.vlans?.length === 1 ? "VLAN " : ""}
+                    {sib.vlan?.vlans?.length ? <VlanList vlans={sib.vlan.vlans} compact /> : "VLAN —"}
+                    {sib.vlan?.source && ` (${VLAN_SOURCE[sib.vlan.source]})`}
+                    {" "}· {fmtNum(sib.deviceCount)} device(s)</span>
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </>}
+        <dt className="text-gray-500">Policy set</dt>
+        <dd className="min-w-0">{set?.name || <span className="text-red-700">none</span>}</dd>
+
+        <dt className="text-gray-500">Policy</dt>
+        <dd className="min-w-0">
+          {policy ? <>{policy.name} <span className="text-gray-500">· priority {policy.priority ?? "—"}</span></>
+                  : <span className="text-red-700">no policy selects this username</span>}
+        </dd>
+        {policy && <>
+          <dt className="text-gray-500">Username regex</dt>
+          <dd className="min-w-0">{regexLine(policy.usernameRegex || [])}{" "}
+            {!!policy.usernameRegex?.length && <Tick ok={true} title="matches" />}
+            {policy.name && policy.name.toLowerCase() !== String(row.username).toLowerCase() && (
+              <span className="ml-1 text-gray-500">(policy name differs from username)</span>)}
+          </dd>
+          <dt className="text-gray-500">SSID regex</dt>
+          <dd className="min-w-0">{regexLine(policy.ssidRegex || [])}</dd>
+          {(policy.otherConditions || []).map((c: any, i: number) => (
+            <Fragment key={i}>
+              <dt className="text-gray-500">{c.attribute}</dt>
+              <dd className="min-w-0">{regexLine(c.regex != null ? [c.regex] : [])}</dd>
+            </Fragment>
+          ))}
+          <dt className="text-gray-500">RADIUS group</dt>
+          <dd className="min-w-0">
+            {policy.radiusGroupMissing
+              ? <span className="text-red-700">the policy names a RADIUS attribute group that no longer exists</span>
+              : policy.radiusGroup
+                ? <>{policy.radiusGroup}
+                    {rateText(policy.rateLimits) && <span className="text-gray-500"> · {rateText(policy.rateLimits)}</span>}
+                    {(policy.rateLimits || []).filter((r: any) => !r.mbps).map((r: any, i: number) => (
+                      <span key={i} className="ml-2 font-mono text-gray-500">{r.attribute} {r.operator || "="} {r.value}</span>
+                    ))}</>
+                : <span className="text-gray-400">none — the policy returns no attributes</span>}
+          </dd>
+        </>}
+        {named && <>
+          <dt className="text-gray-500">Named policy</dt>
+          <dd className="min-w-0 text-red-700">
+            "{named.name}" exists but its username regex {regexLine(named.usernameRegex || [])} does
+            not match this username
+          </dd>
+        </>}
+        {!!row.shadows?.length && <>
+          <dt className="text-gray-500">Also matched</dt>
+          <dd className="min-w-0 text-amber-800">
+            {row.shadows.map((pid: string) => `${policies[pid]?.name} (priority ${policies[pid]?.priority ?? "—"})`).join(", ")}
+            {" "}— never applied, a higher-priority policy wins
+          </dd>
+        </>}
+        {!!row.networkIds.length && <>
+          <dt className="text-gray-500">Access points</dt>
+          <dd className="min-w-0">
+            {!apSerials.length ? <span className="text-amber-700">none</span> : <>
+              <span className="text-gray-500">{fmtNum(apSerials.length)}: </span>
+              {apList.map((serial, i) => (
+                <Fragment key={serial}>
+                  {i > 0 && ", "}
+                  <span className={aps[serial]?.state === "online" ? "text-gray-800" : "text-red-700"}
+                        title={`${serial} · ${aps[serial]?.model || ""} · ${aps[serial]?.status || ""}`}>
+                    {aps[serial]?.name || serial}
+                  </span>
+                </Fragment>
+              ))}
+              {apSerials.length > TRACE_AP_PREVIEW && (
+                <button onClick={() => setAllAps(!allAps)} className="ml-2 text-blue-700 hover:underline">
+                  {allAps ? "show fewer" : `+${fmtNum(apSerials.length - TRACE_AP_PREVIEW)} more`}
+                </button>
+              )}
+            </>}
+          </dd>
+        </>}
+      </dl>
+
+      {row.networkIds.map((nid: string) => {
+        const net = networks[nid] || {};
+        const gids: string[] = net.apGroupIds || [];
+        return (
+          <div key={nid} className="rounded border border-gray-200 bg-white p-2 text-xs">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Wifi size={13} className="text-gray-400" />
+              <span className="font-medium text-gray-800">{net.ssid}</span>
+              {net.activated ? <Pill tone="green">activated here</Pill>
+                             : <Pill tone="red">not activated on this venue</Pill>}
+              {net.allApGroups && <Pill>all AP groups</Pill>}
+            </div>
+            {net.activated && !gids.length && <p className="text-amber-700">No AP group carries it.</p>}
+            {!!gids.length && (
+              <p className="text-gray-600">
+                <span className="text-gray-500">AP groups: </span>
+                {gids.map((gid, i) => (
+                  <Fragment key={gid}>
+                    {i > 0 && ", "}
+                    <span className={groups[gid]?.apSerials?.length ? "" : "text-amber-700"}>
+                      {groups[gid]?.name || gid} ({fmtNum(groups[gid]?.apSerials?.length || 0)})
+                    </span>
+                  </Fragment>
+                ))}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
