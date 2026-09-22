@@ -84,7 +84,7 @@ function AuthCard({ children, onSubmit }: {
           <h1 className="font-semibold">PISR</h1>
         </div>
         <p className="mt-1 text-sm text-gray-500">
-          Property Install Status Report
+          Property Installation Status Report
         </p>
         {children}
       </form>
@@ -581,7 +581,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         Top right, because that is where a browser user looks for whoever they
         are signed in as. It overlays PISR.tsx's own header row, which is left
         aligned and so has the space — except on a narrow phone, where the
-        Alpha and Read-only pills reach far enough right to collide. There the
+        Read-only pill reaches far enough right to collide. There the
         label is dropped and the icon stands alone.
       */}
       {(() => {

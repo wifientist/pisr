@@ -1,5 +1,5 @@
 """
-PISR — Property Install Status Report.
+PISR — Property Installation Status Report.
 
 A read-only poll of one venue: what was installed, what is online, how it is
 addressed, what VLANs and PoE it uses, which SSIDs are activated, and which of

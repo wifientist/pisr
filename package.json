@@ -2,7 +2,7 @@
   "name": "pisr",
   "version": "1.0.0",
   "private": true,
-  "description": "Property Install Status Report — a read-only poll of one RUCKUS ONE venue",
+  "description": "Property Installation Status Report — a read-only poll of one RUCKUS ONE venue",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

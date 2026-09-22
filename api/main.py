@@ -1,5 +1,5 @@
 """
-PISR — Property Install Status Report.
+PISR — Property Installation Status Report.
 
 One process serves both the API and the built single-page app. There is no
 database, no user accounts, no Redis, no scheduler and no background work: the
@@ -40,7 +40,7 @@ import visibility  # noqa: E402
 app = FastAPI(
     title="PISR",
     version="1.0.0",
-    description="Property Install Status Report — a read-only poll of one venue.",
+    description="Property Installation Status Report — a read-only poll of one venue.",
 )
 
 # Normally empty and normally unnecessary: the SPA is served from this same

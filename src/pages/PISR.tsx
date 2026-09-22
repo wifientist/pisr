@@ -15,7 +15,7 @@ import { apiFetch } from "@/utils/api";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 /**
- * PISR — Property Install Status Report.
+ * PISR — Property Installation Status Report.
  *
  * A read-only poll of one venue: what got installed, what is online, how it is
  * addressed, what VLANs and PoE it uses, and which SSIDs are demonstrably
@@ -910,7 +910,6 @@ function Header({ ec, onChangeEc }: { ec?: string | null; onChangeEc?: () => voi
     <div className="mb-4">
       <div className="flex items-center gap-2 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">PISR</h1>
-        <Pill tone="purple">Alpha</Pill>
         <Pill tone="green">Read-only</Pill>
         {ec && (
           <span className="text-sm text-gray-500">
@@ -922,7 +921,7 @@ function Header({ ec, onChangeEc }: { ec?: string | null; onChangeEc?: () => voi
         )}
       </div>
       <p className="text-sm text-gray-500 mt-0.5">
-        Property Install Status Report — one venue, polled on demand. PISR only reads: it never
+        Property Installation Status Report — one venue, polled on demand. PISR only reads: it never
         changes configuration, and it stores nothing between refreshes.
       </p>
     </div>
