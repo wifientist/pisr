@@ -52,7 +52,12 @@ services:
         PISR_BUILD_SHA: ${PISR_BUILD_SHA:-unknown}
         PISR_BUILD_TIME: ${PISR_BUILD_TIME:-}
     container_name: pisr
-    restart: unless-stopped
+    # `always`, not `unless-stopped`: rootless podman has no daemon, so the
+    # policy only matters at boot, where podman-restart.service starts
+    # `--filter restart-policy=always` and nothing else. `unless-stopped` left
+    # PISR down after an LXC reboot (2026-10-15). Needs, once per box:
+    #   systemctl --user enable podman-restart.service
+    restart: always
     env_file: ${PISR_ENV_FILE:-.env}
     ports:
       # Defaults to every interface, which is what makes PISR reachable from

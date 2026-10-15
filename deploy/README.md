@@ -71,6 +71,13 @@ mkdir -p ~/.config/systemd/user
 cp ~/app/deploy/pisr-update.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now pisr-update.timer
+
+# 4. Start PISR again after a reboot. Rootless podman has no daemon to honour a
+#    restart policy; this unit does it at boot, and ONLY for containers with
+#    `restart: always` (it runs `start --all --filter restart-policy=always`).
+#    Miss this and a reboot leaves PISR down with the tunnel reporting healthy,
+#    a Cloudflare 502, and a deploy timer that never notices.
+systemctl --user enable podman-restart.service
 ```
 
 The unit's `ExecStart` is `%h/app/deploy/pisr-update.sh`, so it assumes the
