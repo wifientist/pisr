@@ -39,7 +39,7 @@ from weasyprint import HTML as WeasyHTML
 
 import sections as section_catalogue
 import visibility
-from auth import require_admin, role_of
+from auth import generated_by, require_admin, role_of
 from r1_client import build_r1_client, get_controller, require_id, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
 import scrub as secret_scrub
@@ -247,6 +247,7 @@ async def get_report_pdf(request: Request,
         **context,
         **redact_helpers(hidden),
         report_visibility=report.get("visibility"),
+        generated_by=generated_by(request),
     )).write_pdf()
 
     venue_name = (report.get("venue") or {}).get("name") or venue_id

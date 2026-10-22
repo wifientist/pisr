@@ -725,6 +725,18 @@ def role_of(request: Request) -> str:
     return getattr(request.state, "pisr_role", None) or ROLE_USER
 
 
+def generated_by(request: Request) -> str:
+    """
+    Who to name on a PDF as having generated it. Every PDF route asks here.
+
+    Passphrase mode has no identity — a shared secret names nobody — so it
+    says which door was used rather than inventing a person. The role is the
+    one the gate decided, so nobody is labelled an admin who is not one.
+    """
+    return (getattr(request.state, "pisr_user", None)
+            or f"{role_of(request)} (shared passphrase)")
+
+
 def require_admin(request: Request) -> str:
     """
     FastAPI dependency: 403 unless this caller is an admin.

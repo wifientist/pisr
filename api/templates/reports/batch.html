@@ -105,7 +105,8 @@
   <h1>Batch roll-up</h1>
   <div class="subtitle">{{ title }}</div>
   <div class="timestamp">
-    Generated {{ generated_at }} from the batch record — no venue was polled to
+    Generated {{ generated_at }}
+    {%- if generated_by %} by {{ generated_by }}{% endif %} from the batch record — no venue was polled to
     make this. Each count is as of that venue's last complete check.
     “Fresh” means checked completely in the last {{ days_label }} day(s).
     {% if detail_severities %}

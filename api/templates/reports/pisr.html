@@ -198,6 +198,7 @@
   <div class="timestamp">
     {{ controller_name }}{% if tenant_label %} · {{ tenant_label }}{% endif %}
     · generated {{ generated_at }}
+    {%- if generated_by %} by {{ generated_by }}{% endif %}
     {%- if venue_timezone %} · venue timezone {{ venue_timezone }}{% endif %}
   </div>
 </div>

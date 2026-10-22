@@ -44,7 +44,7 @@ from pydantic import BaseModel, Field
 from weasyprint import HTML as WeasyHTML
 
 import batch_runs
-from auth import require_admin
+from auth import generated_by, require_admin
 from config import CONTROLLER
 from r1_client import build_r1_client, require_id, resolve_tenant
 from redact import redact
@@ -383,7 +383,7 @@ async def get_rollup_pdf(tenant_id: Optional[str] = Query(None),
     html = _jinja().get_template("reports/batch.html").render(
         title=title, overall=overall, tenants=tenants,
         days_label=f"{window:g}",
-        generated_at=generated, categories=[
+        generated_at=generated, generated_by=generated_by(request), categories=[
             {"key": k, "label": rollup.CATEGORY_LABELS[k]} for k in rollup.CATEGORY_KEYS],
         detail_severities=severities, has_links=bool(link_base))
     pdf = WeasyHTML(string=html).write_pdf()
