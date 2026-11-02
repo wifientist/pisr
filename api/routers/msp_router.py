@@ -11,7 +11,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 import visibility
-from auth import role_of
+from auth import role_of, scope_of
 from r1_client import build_r1_client, get_controller
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ async def get_msp_ecs(request: Request, controller_id: int):
     r1 = build_r1_client(cfg)
     rows = await r1.msp.get_msp_ecs()
 
-    allowed = visibility.scope_for(role_of(request))
+    allowed = scope_of(request)
     if allowed.unrestricted:
         return rows
 

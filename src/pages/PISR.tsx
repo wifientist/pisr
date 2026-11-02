@@ -2042,6 +2042,11 @@ function Config({ report, base, qs }: {
   // per-unit MDU has hundreds of groups and APs and finding one by scrolling is
   // hopeless. Empty = show everything.
   const [detailFilter, setDetailFilter] = useState("");
+  // The `config.detail` GRANT. The report's config CARDS are section
+  // visibility and a different thing entirely; this is the deeper READ behind
+  // the button — hundreds of R1 calls, and it can carry guest-portal secrets.
+  const { can } = useAuth();
+  const canLoadDetail = can("config.detail");
 
   const loadDetail = useCallback(async () => {
     setLoading(true); setError("");
@@ -2157,7 +2162,18 @@ function Config({ report, base, qs }: {
             icon={<SlidersHorizontal size={17} className="text-gray-400" />}
             hint="Loaded on request. Each group and each AP is a separate call to
                   RUCKUS ONE, so this is not fetched with the report.">
-        {!detail ? (
+        {!canLoadDetail ? (
+          // Said rather than silently omitted. The button vanishing from a
+          // card that describes what it would fetch reads as a broken tool;
+          // naming the feature is how somebody knows what to ask for. The
+          // route refuses it either way — `require_grant` is the control.
+          <p className="text-sm text-gray-600">
+            This venue has {fmtNum(config.groupTotal || 0)} AP group(s) and{" "}
+            {fmtNum(config.apTotal || 0)} AP(s). Reading their individual
+            settings needs the <b>AP-group and network configuration</b>{" "}
+            feature, which this account does not have.
+          </p>
+        ) : !detail ? (
           <>
             <p className="text-sm text-gray-600 mb-3">
               This venue has {fmtNum(config.groupTotal || 0)} AP group(s) and{" "}
@@ -3200,7 +3216,11 @@ const TRACE_AP_PREVIEW = 5;
 function IdentityTrace({ report, base, qs }: {
   report: any; base: string; qs: (extra?: Record<string, string>) => string;
 }) {
-  const { isAdmin } = useAuth();
+  // The `identity.trace` GRANT, not the admin role. It was admin-only until
+  // grants existed; it is in no tag and no default, so somebody has to be
+  // given it by name — which is the point, because this names RESIDENTS and a
+  // report will not show them.
+  const { can } = useAuth();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -3230,7 +3250,7 @@ function IdentityTrace({ report, base, qs }: {
     }
   }, [base, qs, report]);
 
-  if (!isAdmin) return null;
+  if (!can("identity.trace")) return null;
 
   const sets: any[] = report.policy?.sets || [];
   const policyCount = sets.reduce((n, s) => n + (s.policies?.length || 0), 0);

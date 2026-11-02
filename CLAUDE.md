@@ -43,13 +43,29 @@ upstream copy. It is not.
   Nothing is emailed, deliberately and permanently: if a future change makes
   sign-in depend on mail arriving, it has reintroduced the exact fault this
   replaced.
-- **Two roles, `admin` and `user`.** In proxy mode the role comes from the
-  verified identity against `PISR_ADMIN_EMAILS`; in accounts mode it is stored
-  per account; in passphrase mode it comes from which of two passphrases signed
-  the cookie. An admin sets a policy — which report sections a user is shown,
-  and which MSP-ECs and venues a user may reach — stored as one JSON file. Both
-  roles are fully authenticated; the role decides what a report contains, not
-  whether you may have one.
+- **ONE ROLE PER PERSON, and the role is the only thing assigned.** A person
+  holds exactly one role; the role names its CAPABILITIES (what tools exist
+  for them) and its VISIBLE ELEMENTS (what a report contains for them). There
+  are no tags and no second bundle — see "RBAC: one concept, and why" below for
+  what was collapsed and why. `admin` and `user` ship compiled into
+  `roles._BUILTINS`; everything else is data an admin builds. In proxy mode the
+  role comes from the verified identity against `PISR_ADMIN_EMAILS` or the
+  policy's per-person map; in accounts mode it is stored per account; in
+  passphrase mode it comes from which of two passphrases signed the cookie.
+- **A CAPABILITY IS A LENS, NEVER A KEY.** It decides which VIEW exists, and
+  changes nothing about which venues are in it:
+
+      what a caller sees = redact(poll(scope(role) ∩ requested), hidden_for(role))
+
+  So somebody holding `msp.rollup` gets the estate roll-up of the ECs their
+  scope already allowed, with the checks their role already hid still hidden,
+  and the DENOMINATOR narrowed too — "48 of 58" handed to someone who may
+  reach fourteen venues discloses an estate they were not told about, and
+  discloses it as a number, which no amount of hiding names would catch.
+  Nothing is implied by holding `admin.portal`: an administrator without
+  `msp.rollup` does not get the views. `PISR_MSP_EMAILS` and `PISR_MSP_ROLES`
+  are GONE and inert if still set; `.env.example` says so at length, because an
+  upgraded deployment will still have them.
 - **External API**: RuckusONE only. R1 has a 15-SSID-per-AP-Group limit, which
   `checks.py` asserts on.
 
@@ -101,9 +117,41 @@ upstream copy. It is not.
 
 ## Batch runs
 
-Admin-only (`/api/admin/batch`, the "Batch" chip, `src/pages/AdminBatch.tsx`).
-Check every venue of one tenant, keep the counts, roll them up
-MSP → tenant (MSP-EC) → venue.
+The "Batch" chip, `src/pages/AdminBatch.tsx`. Check every venue of one tenant,
+keep the counts, roll them up MSP → tenant (MSP-EC) → venue.
+
+- **SPLIT BY PRIVILEGE, into THREE routers in one file**, because reading a
+  roll-up, polling a live customer network, and doing either across every
+  tenant at once are three different acts:
+
+  - `batch_router.router` — `/api/batch/runs*`, the WRITES, behind
+    `batch.run`. "Polls every venue of a live customer network" is a
+    capability worth naming rather than a side effect of being an admin.
+  - `batch_router.read_router` — `/api/batch/{state,rollup.pdf}`, behind
+    `tenant.rollup`. One named customer's record.
+  - `batch_router.estate_router` — `/api/batch/estate/*`, behind `msp.rollup`.
+    Every tenant at once. `POST /batch/sweeps` additionally needs `msp.batch`.
+
+  **None of them is under `/api/admin`, and the move is the point rather than
+  tidiness** — `test_access.py::test_the_admin_namespace_is_all_admin` pins
+  that namespace to `require_admin` in both directions, and a path that says
+  "admin" for a route an ordinary user may hold is a lie the next reader has to
+  discover.
+- **The read routes NARROW THE RECORD, via `rollup.restrict`, and that is the
+  thing to get right here.** The record is written by an admin, whose scope is
+  unrestricted, so it holds every venue of every tenant ever batched; the read
+  routes were admin-only when written and so never had to narrow anything.
+  `restrict` is applied to the SNAPSHOT before any roll-up reads it, so every
+  figure downstream — `venueCount`, `checked`, `clean`, the totals, the
+  per-tenant rows, `attach_detail`'s three lists — is narrowed by construction.
+  Filter any of them individually instead and the next figure somebody adds is
+  the one that escapes. It also strips hidden check ids (listing them by
+  catalogue label to someone whose policy hides them is the way around
+  `redact._filter_findings`) but LEAVES THE COUNTS ALONE: section visibility is
+  de-cluttering, and reporting a venue as cleaner than it is to the people sent
+  to fix it would be worse than a shorter list. Run history is DROPPED rather
+  than narrowed for a scoped caller — three chances to get a denominator wrong,
+  for a list they cannot act on.
 
 - **The browser is the loop.** It starts a run (`POST /runs` with the
   tenant's WHOLE venue list — the denominator of "48 of 58" — and the ids to
@@ -172,6 +220,85 @@ MSP → tenant (MSP-EC) → venue.
 - **Single uvicorn worker assumed.** The store's lock is in-process. More
   workers would need `AccountStore`'s mtime re-read.
 
+## RBAC: one concept, and why
+
+`api/roles.py`, `api/grants.py`, the **Roles** chip (`src/pages/AdminRoles.tsx`).
+
+An earlier design had THREE ways to hold a capability — a binary admin/user
+role, per-account tags, and a bundle called a "profile" — and the arbitrary
+split between them was what everybody tripped over ("I have the MSP tag, so why
+can I not run a batch?"). There is now exactly one answer to "how did they get
+that": **the role they were assigned**.
+
+- **CAPABILITY** — fixed, ships with the release. Eleven, ordered by the level
+  each operates at: `msp.batch`, `msp.rollup`, `msp.fleet` (across every
+  tenant); `tenant.rollup`, `batch.run` (one tenant); `venue.report`,
+  `config.detail`, `identity.trace` (one venue); `admin.portal`,
+  `admin.accounts`, `admin.roles` (administering PISR itself). A route names
+  one in code, so a capability an admin could invent would be enforced by
+  nothing. `grants.ALL_GRANTS` is the list and `test_access.py` holds every
+  route to naming one from it.
+- **ROLE** — data an admin builds: a label, a set of capabilities, a set of
+  hidden elements. `admin` and `user` ship; `install_user` and `tenant_leader`
+  are things somebody makes. Adding a capability is a release; adding a job is
+  a Tuesday.
+- **FEATURE** — a tool and the capabilities it needs, `grants._FEATURES`.
+  **ALL-OF, NEVER ANY-OF**: a feature naming three is shown only to somebody
+  holding all three, and hidden entirely otherwise — not greyed, not
+  shown-and-refused. Both the API (`require_grants`) and the SPA (`can()`)
+  read that one list, so a control cannot appear for people the server refuses.
+- **SCOPE** stays PER PERSON, not on the role. On the role you would need
+  `tenant_leader_north` and `tenant_leader_south`, and the role list would grow
+  with the org chart rather than with the kinds of work people do. The role
+  carries a default; the person carries their territory.
+
+- **ADMIN-NESS IS A CAPABILITY** (`admin.portal`), which is what makes
+  `install_user` first-class beside `admin` rather than second-class. It also
+  removed the old "admins are never subject to the policy" short-circuit — so
+  the lockout protection had to move.
+- **THE BUILT-INS ARE COMPILED IN, NOT SEEDED.** `roles._BUILTINS` holds
+  `admin` and `user` in CODE; a policy file may override them by id, and a
+  policy file that cannot be READ falls back to them. That is the whole lockout
+  story now that admin-ness is data. Same pattern as `baselines/ruckus.json`:
+  ships in the repo, overridable on the volume. An account already said
+  `"role": "admin"`, so collapsing the old binary into a role id migrated
+  nobody.
+- **A DELETED ROLE CONFERS NOTHING — not even the defaults.** No role assigned
+  means the built-in `user`; a role that was DELETED means its holder was
+  deliberately given a job, and losing the definition must not promote them
+  back to what everybody else gets.
+- **A pre-roles `hidden: {"user": [...]}` block is read forward onto the role
+  of that id** (`PolicyStore._migrate_hidden`). Those ids are somebody's
+  deliberate curation, often dozens, and quietly dropping them would show every
+  user forty cards an admin had decided they should not see.
+- **`save()` must apply every step `_load()` does.** It refreshes the cache in
+  place and advances `_stamp`, so a step it skips is correct on disk and wrong
+  in memory until the container restarts. `_people` was that bug once and
+  `_migrate_hidden` was it a second time.
+
+### The super tier
+
+`admin.roles` — the one capability that can grant others. Enforced in handlers,
+not by dependencies, because both rules compare a SUBMITTED document against
+the STORED one:
+
+- **RULE 1** — editing the role catalogue needs it. Keyed on what CHANGED, not
+  on the field being present, and compared RESOLVED-to-RESOLVED so a portal
+  echoing the built-ins back does not read as having deleted them.
+- **RULE 2** — nobody may add or remove a capability they do not hold.
+  `auth.may_grant` is the predicate, and it is enforced in TWO places:
+  `admin_router` for the policy document, and **`accounts_router` for the
+  account's `role` field**. Assignment moved onto the account when roles
+  collapsed, so guarding only the policy would have left the super role a
+  dropdown away for any administrator.
+- **THE BOOTSTRAP RULE** — the tier does not exist until somebody holds it;
+  until then every admin may edit roles. Same shape as `scope.py`'s
+  "unrestricted is the default". It also means the tier cannot exist in
+  passphrase mode, which has no identities.
+- **THE LAST-SUPER GUARD** guards ORPHANING, not DISMANTLING: a document still
+  defining a super role but assigning it to nobody is refused; one defining
+  none is the tier being deliberately turned off, which only a super can do.
+
 ## The role policy, in four files
 
 Read them in this order; each explains the next.
@@ -196,11 +323,75 @@ Read them in this order; each explains the next.
   Three primitives: `_blank_path` (a section's dotted paths), `_filter_findings`
   (checks, fed the union of section-owned and individually-hidden check ids), and
   `_blank_column` (one field in every row of a list — the SSID table's VLAN is
-  the worked example). Section-hiding still fails OPEN; the column and check
-  levels ride the same fail-open resolution.
+  the worked example). **ALL THREE LEVELS NOW FAIL CLOSED**, because the role's
+  `visible` list is an ALLOW list: `roles.hidden_of` turns it into a deny set at
+  the boundary, so an element nobody named is withheld. That is a deliberate
+  reversal of the old deny-list, which failed open. Two things keep it from
+  going dark — the built-in `admin` role's list is COMPUTED from the catalogue,
+  so at least one role always sees everything, and the portal and startup log
+  NAME elements no role allows, so a card added in a release is visibly
+  ungranted rather than quietly missing. **That is also the standing tax: a new
+  card or capability is in nobody's stored role until somebody grants it.**
 - `api/scope.py` — which MSP-ECs and venues a role may reach. A different kind
-  of control with different rules; see the trap below.
+  of control with different rules; see the trap below. **Scope resolves PER
+  PERSON before per role**: an identity with an entry under
+  `visibility.PEOPLE_KEY` gets that entry INSTEAD of their role's, never in
+  addition to it. Two regional leaders with identical duties and different
+  territories is the case it exists for; a union rule would have handed each of
+  them their own ECs plus every one the role could already reach. Ask through
+  `auth.scope_of(request)` — never `visibility.scope_for` directly, which has
+  no default for `identity` precisely so a call site that forgets it is a
+  TypeError rather than a silent widening.
 - `api/visibility.py` — the file on disk, holding both halves.
+
+## Testing the role model
+
+    docker compose -f docker-compose.dev.yml run --rm --no-deps \
+      -v "$PWD:/repo" -w /repo/api backend python tests/run_all.py
+
+Seven suites, no pytest — each is a plain script counting its own failures, and
+`run_all.py` exits non-zero if any does. **`test_role_redaction.py` is the one
+to understand before adding a card or a capability.**
+
+- **It is DIFFERENTIAL and EXHAUSTIVE at the single-element level.** For every
+  element it builds a role allowing only that one, and a role allowing
+  everything except that one, plus 200 seeded random combinations and both
+  extremes — about 430 role variants. `redact(report, hidden)` is a pure
+  function and the single enforcement point both the JSON and PDF routes pass
+  through, so this polls R1 ZERO times and runs in about a second.
+- **The fixture is GENERATED FROM `sections.py`, never captured.** A real
+  report cannot live in this repository — PISR stores no report, and a
+  captured one is a customer's network in git. Generating it means a card
+  added next release is covered the day it is added: 113 elements became 115
+  and 226 roles became 230, with no edit to the test.
+- **BOTH DIRECTIONS ARE ASSERTED.** Under-redaction is a leak; over-redaction
+  is a blank page, and under an allow list that is the likelier one because an
+  element nobody named is withheld by default and a coupling bug takes its
+  neighbours with it.
+- **A CHECK APPEARS ONLY IF ITS OWNING CARD DOES.** `redact`'s long-standing
+  rule stated the other way up — a finding pointing at a card nobody can see is
+  a dangling reference. Under an allow list it reads as: ticking a check alone
+  does nothing until the card it belongs to is ticked too. The exhaustive pass
+  found this on its first role, which is what it is for.
+- **`test_the_harness_is_not_passing_vacuously` is load-bearing.** Every pass
+  is a loop over `ALL_ELEMENT_IDS`, and a loop over an empty set passes; so
+  does a fixture where nothing was planted. It checks a floor on the catalogue
+  and that every declared path actually carries a value, because the failure
+  mode otherwise is four hundred green ticks asserting nothing.
+- **What it CANNOT prove**: that `sections.py` declares the right paths for a
+  real payload. A section pointing at a key the shapers never emit passes here
+  and hides nothing in production. `test_sections.py` holds the id lists
+  together; a live PDF render catches the rest.
+- **Verified by mutation**, not by trust: making `_blank_column` a no-op and
+  making `_blank_path` delete instead of empty each failed three suites. The
+  second is the one worth having — it is the documented "empties, never
+  deletes" trap, it crashes both renderers rather than leaking, and no status
+  code or browser test would surface it.
+
+The end-to-end suite in `~/code/playwright_e2e_testbed` covers the other half —
+which ROUTES a role may reach — and generates its expectations from
+`api/scripts/access_surface.py` so a route added with an access decision is
+covered on the next run with nothing edited.
 
 ## Traps
 
@@ -218,8 +409,43 @@ Read them in this order; each explains the next.
   move this check into `fetch`: that layer is called with ids PISR read back
   from R1, and the boundary is where a value stops being input.
 
+- **THE ROLE ID IS IN THE SESSION KEY, but what the role CONFERS is read
+  live.** `auth._account_key` folds the role id in, so reassigning somebody to
+  a different role kills their cookie. But `auth.grants_of` resolves the
+  role's capabilities through `visibility.grants_for` on EVERY request, so
+  EDITING a role takes effect on its holders' next request with no sign-out.
+  That asymmetry is what makes the role editor usable at all — otherwise every
+  tick would need everybody to sign in again before anyone could tell whether
+  it had worked. Practical consequence for testing: a spec that CHANGES a
+  person's role must sign in again, and one that edits a role need not.
+
+- **`PolicyStore.save` refreshes its cache IN PLACE, so every field `_load`
+  sets must be set there too.** It advances `_stamp` as well, so `_load` will
+  not re-read and correct it. A field left out is written to disk correctly and
+  then ignored until the container restarts — which presents as a save that
+  silently did nothing, with the value sitting in the file in plain sight.
+  `_people` was exactly that, and no unit test could have caught it: the store
+  read the file perfectly when constructed fresh. It took a save and a read in
+  one process. `test_a_saved_scope_takes_effect_without_a_restart` is what says
+  so now.
+
+- **`api/scripts/access_surface.py` is the DERIVED access surface**, and the
+  only thing that should ever answer "who can reach what". It reads
+  `main.app.routes` for the role and grant each route needs, and AST-scans the
+  routers for the scope check — which is a call inside a function body and
+  invisible on the route object. Two consumers, one derivation: the admin
+  capability matrix, and the end-to-end suite in
+  `~/code/playwright_e2e_testbed`, which GENERATES its allow/deny expectations
+  from it rather than listing routes by hand. Do not write a fourth list
+  describing the access rules; that is the `test_sections.py` trap one layer
+  up. Note it reports THREE states, not two — a route can be reachable AND
+  narrowed, and a matrix that renders a bare tick where scope applies says a
+  grant widened somebody's reach, which is the opposite of the rule.
+
 - **`api/tests/test_access.py` pins the access surface, in BOTH directions.**
-  The public path list and the admin route list are exact sets, so a new route
+  The public path list, the admin route list and the grant-gated route list
+  (with WHICH GRANT each names — a route quietly moving to a grant more people
+  hold is the change nothing else would notice) are exact sets, so a new route
   fails the test until someone decides which it is. It also holds every
   R1-reaching route to calling `_require_scope` (or being admin-only) and to
   validating its ids, because those are calls inside a function body that
@@ -278,13 +504,26 @@ Read them in this order; each explains the next.
   by reading `X-Forwarded-Host` would believe a header from any peer, which is
   precisely what `auth.py` is careful never to do.
 
-- **`PISR_AUTH_ADMIN_PASSPHRASE` is break-glass in `accounts` mode**, and that
-  is a deliberate exception to proxy mode's rule that a shared secret must not
-  be a way around the identity system. The difference is where identity lives:
-  proxy mode's IDP is external and is still there when the volume is not,
-  whereas accounts live ON that volume. Losing it, or deleting the last admin,
-  would otherwise need an SSH session to a box that is deliberately awkward to
-  SSH into. `main.py` warns about it at every startup on purpose.
+- **There is NO break-glass door in `accounts` mode, and that was a deliberate
+  removal.** `PISR_AUTH_ADMIN_PASSPHRASE` once opened one; it now decides
+  nothing there and `main.py` warns at startup if it is still set, because an
+  operator who has one believes they have a way in that does not exist. It
+  REMAINS passphrase mode's admin door, which is a different job — there the
+  two roles ARE the two secrets.
+
+  Two things undid it. The lockout it was mainly justified by, deleting the
+  last admin, `accounts.py` refuses outright in three places. And every other
+  recovery it offered, the CLI offers better: `pisr_admin.py invite <name>`
+  mints a single-use, expiring link attributed to a named person, which is the
+  same flow the portal's reset button uses. The one thing it did that the CLI
+  cannot is recover WITHOUT SHELL ACCESS — and rotating a leaked passphrase
+  needed shell anyway, so it could not repair itself. Against that, a standing
+  shared secret that bypassed per-person revocation and the audit trail.
+
+  **Keep two admins enrolled.** That is now the first line of recovery, and
+  `main.py` says so at every start. If you ever reintroduce a passphrase door
+  here, `test_there_is_no_passphrase_door_in_accounts_mode` is what will stop
+  you doing it by accident.
 
 - **The accounts file fails CLOSED; the visibility policy fails OPEN.** Same
   volume, same shape, opposite rules, for the reason the existing section-vs-

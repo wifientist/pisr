@@ -22,6 +22,7 @@ here wins. Each test gets its own accounts file under a temp directory, so
 nothing here can touch a real deployment's /data.
 """
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -51,6 +52,15 @@ import auth                           # noqa: E402
 from config import AUTH               # noqa: E402
 
 GOOD_PASSWORD = "a-perfectly-ordinary-long-passphrase"
+
+
+def _request_for_login():
+    """A bare signed-out request, enough for the login and status handlers."""
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "POST", "path": "/api/login",
+                    "headers": [], "query_string": b"", "scheme": "http",
+                    "client": ("10.0.0.1", 5000), "server": ("test", 80),
+                    "state": {}})
 
 
 def _fresh() -> accounts.AccountStore:
@@ -275,6 +285,67 @@ def test_the_last_admin_cannot_be_deleted_demoted_or_disabled():
             raise AssertionError(f"{action} stranded the instance")
 
 
+def _with_custom_admin_role(role_id="install_admin"):
+    """
+    Point `visibility.STORE` at a policy defining a custom administrator role.
+
+    Returns the role id. The store is global, like `accounts.STORE`, so the
+    caller is borrowing it for the length of one test — which is the same
+    bargain `_fresh` already makes.
+    """
+    import json
+    import visibility
+    path = _TMP / f"visibility-{time.time_ns()}.json"
+    path.write_text(json.dumps({"version": 2, "roles": {role_id: {
+        "label": "Install administrator",
+        "grants": ["admin.portal", "venue.report"],
+        "visible": [],
+    }}}))
+    visibility.STORE = visibility.PolicyStore(str(path))
+    return role_id
+
+
+def test_the_last_admin_guard_counts_the_capability_not_the_role_name():
+    """
+    The guard must fire for a CUSTOM administrator role, not only for `admin`.
+
+    `_admin_count_in` was fixed to count the `admin.portal` capability while
+    the three guards that TRIGGER it still compared against the literal id
+    "admin" — so an instance whose only administrator held a role somebody had
+    built could have that person demoted, disabled or deleted, and the counter
+    that was supposed to stop it was never consulted. Worse than neither half
+    being fixed, because the two disagreed.
+
+    Both halves ask `accounts.administers` now, and this is what says so.
+    """
+    import visibility
+    before = visibility.STORE
+    try:
+        role_id = _with_custom_admin_role()
+        for action in ("delete", "demote", "disable"):
+            store = _fresh()
+            admin = _enrolled_admin(store, name="chris")
+            store.update(admin.id, actor="test", role=role_id)
+            assert accounts.administers(store.by_id(admin.id)), (
+                "the fixture's role should administer")
+            try:
+                if action == "delete":
+                    store.delete(admin.id, actor="test")
+                elif action == "demote":
+                    store.update(admin.id, actor="test",
+                                 role=accounts.ROLE_USER)
+                else:
+                    store.update(admin.id, actor="test", disabled=True)
+            except accounts.AccountsError as exc:
+                assert "only administrator" in str(exc), str(exc)
+            else:
+                raise AssertionError(
+                    f"{action} stranded an instance whose only admin held "
+                    f"{role_id!r}")
+    finally:
+        visibility.STORE = before
+
+
 def test_an_admin_can_go_once_another_can_sign_in():
     store = _fresh()
     first = _enrolled_admin(store, "alice")
@@ -468,23 +539,43 @@ def test_a_role_change_invalidates_the_old_cookie():
     assert auth._valid_account(cookie) is None, "a demoted admin kept an admin cookie"
 
 
-def test_break_glass_cookie_works_and_dies_with_the_passphrase():
+def test_there_is_no_passphrase_door_in_accounts_mode():
+    """
+    The break-glass door is GONE, and this is what stops it coming back.
+
+    It once signed in as an admin with no account: a standing shared secret
+    that bypassed per-person revocation and left no name in the audit trail,
+    rotatable only by editing the env file on the box — which needs the shell
+    access it existed to avoid. The lockout it was mainly justified by,
+    deleting the last admin, `accounts.py` refuses outright.
+
+    Note the environment here still SETS PISR_AUTH_ADMIN_PASSPHRASE (see the
+    top of this file), because in passphrase mode it is the legitimate admin
+    door. Being set must not open anything here.
+    """
     _fresh()
-    cookie = auth._mint_breakglass()
-    assert auth._valid_account(cookie) == (auth.BREAKGLASS_NAME, "admin")
+    assert AUTH.admin_passphrase, "this test is meaningless without one set"
 
-    original = AUTH.admin_passphrase
-    try:
-        object.__setattr__(AUTH, "admin_passphrase", "")
-        assert auth._valid_account(cookie) is None, \
-            "withdrawing the passphrase must end its sessions"
-    finally:
-        object.__setattr__(AUTH, "admin_passphrase", original)
+    # Nothing mints one any more.
+    assert not hasattr(auth, "_mint_breakglass")
+    assert not hasattr(auth, "BREAKGLASS_ID")
+
+    # And the login route says so plainly rather than 401-ing somebody into
+    # hunting for a typo in a secret that no longer opens anything.
+    body = auth.LoginBody(passphrase=AUTH.admin_passphrase)
+    # Synchronous: the scrypt verification is CPU work, so this handler is a
+    # plain `def` that FastAPI runs in a thread.
+    response = auth._login_with_account(body, _request_for_login(), "10.0.0.1")
+    assert response.status_code == 400, response.status_code
 
 
-def test_break_glass_id_cannot_collide_with_a_real_account():
-    assert accounts.username_error(auth.BREAKGLASS_ID) is not None
-    assert not auth.BREAKGLASS_ID.startswith("u_")
+def test_the_status_endpoint_offers_no_passphrase_field():
+    """
+    The login form renders a passphrase field off this. A stale `breakGlass`
+    key would put a door on screen that the server no longer opens.
+    """
+    body = asyncio.run(auth.auth_status(_request_for_login()))
+    assert "breakGlass" not in body, "auth/status still advertises break-glass"
 
 
 # ── Throttle ─────────────────────────────────────────────────────────

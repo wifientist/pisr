@@ -1,12 +1,13 @@
 import {
-  createContext, useCallback, useContext, useEffect, useState, type ReactNode,
+  createContext, useCallback, useContext, useEffect, useMemo, useState,
+  type ReactNode,
 } from "react";
-import { Layers, Lock, LogOut, ShieldAlert, SlidersHorizontal, Target, Users } from "lucide-react";
+import { Layers, Lock, LogOut, ShieldAlert, ShieldCheck, Target, Users } from "lucide-react";
 import { UNAUTHENTICATED_EVENT } from "@/utils/api";
-import AdminVisibility from "@/pages/AdminVisibility";
 import AdminAccounts from "@/pages/AdminAccounts";
 import AdminBaseline from "@/pages/AdminBaseline";
 import AdminBatch from "@/pages/AdminBatch";
+import AdminRoles from "@/pages/AdminRoles";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -27,7 +28,20 @@ interface AuthContextType {
   controllers: ControllerRow[];
   /** See AuthStatus.role — presentation only. */
   role: "admin" | "user" | null;
+  /** Holds `admin.portal` — the capability, not a role called "admin". */
   isAdmin: boolean;
+  /** Capabilities this caller's role confers. Presentation only. */
+  grants: string[];
+  /**
+   * Whether a FEATURE is available — every capability it needs, held.
+   *
+   * ALL-OF, and the list comes from the server (`grants.features()`) so both
+   * sides gate on one rule. Render controls with this, never by comparing
+   * capabilities by hand: a feature needing three and checked for one is a
+   * button that appears and then 403s, which reads as a broken tool rather
+   * than as a privilege somebody does not have.
+   */
+  can: (featureId: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -45,8 +59,6 @@ interface AuthStatus {
   user: string | null;
   /** accounts mode only: no accounts exist yet, so nobody can sign in. */
   setupNeeded?: boolean;
-  /** accounts mode only: whether a break-glass passphrase is configured. */
-  breakGlass?: boolean;
   /**
    * "admin" or "user", or null when not signed in.
    *
@@ -58,6 +70,23 @@ interface AuthStatus {
    * whatever this says.
    */
   role: "admin" | "user" | null;
+  /**
+   * The capabilities this caller's role confers, and the FEATURES that
+   * unlocks — the ids of every tool they hold every capability for.
+   *
+   * RENDER AGAINST `features`, NOT `grants`. The mapping from a tool to what
+   * it costs lives in api/grants.py precisely so that a feature growing a
+   * second requirement is a server-side edit; a control checked against one
+   * capability by hand would have to be found and changed.
+   *
+   * Presentation only, on the same terms as `role`: this bundle is served
+   * unauthenticated, so anyone can read that a feature exists and call its
+   * route directly. `require_grants` on the route is what refuses them.
+   */
+  grants?: string[];
+  features?: string[];
+  /** The label of the role they hold, for the sign-in chip. */
+  roleLabel?: string | null;
   logoutUrl: string | null;
 }
 
@@ -102,10 +131,11 @@ function AuthCard({ children, onSubmit }: {
  * does name the tenant, is behind the gate with everything else.
  *
  * In ACCOUNTS mode it asks for a username and password; in passphrase mode,
- * one passphrase. The break-glass passphrase gets a link rather than a third
- * field, because it is a recovery door and a form that offers it as an equal
- * option invites people to use it as one — which throws away the audit trail
- * and the revocation that accounts mode exists for.
+ * one passphrase. THERE IS NO THIRD OPTION: accounts mode once offered a
+ * break-glass passphrase behind a link, and that door has been removed —
+ * recovery is another admin, or `pisr_admin.py invite <name>` on the box,
+ * which mints a single-use link attributed to a named person instead of
+ * handing out a standing secret that leaves no name in the audit trail.
  */
 function LoginScreen({ status, onSignedIn }: {
   status: AuthStatus | null;
@@ -115,11 +145,10 @@ function LoginScreen({ status, onSignedIn }: {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [passphrase, setPassphrase] = useState("");
-  const [breakGlass, setBreakGlass] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const usingPassphrase = !accounts || breakGlass;
+  const usingPassphrase = !accounts;
   const ready = usingPassphrase ? Boolean(passphrase) : Boolean(username && password);
 
   const submit = async (e: React.FormEvent) => {
@@ -190,20 +219,13 @@ function LoginScreen({ status, onSignedIn }: {
         <>
           <label htmlFor="pisr-passphrase"
                  className="mt-6 block text-sm font-medium text-gray-700">
-            {breakGlass ? "Break-glass passphrase" : "Passphrase"}
+            Passphrase
           </label>
           <input id="pisr-passphrase" type="password" autoFocus
                  autoComplete="current-password"
                  value={passphrase}
                  onChange={(e) => setPassphrase(e.target.value)}
                  className={FIELD} />
-          {breakGlass && (
-            <p className="mt-2 text-xs text-gray-500">
-              This is the recovery door. It signs in as an administrator without
-              an account, so it leaves no name in the audit trail — use it to
-              get back in and fix things, not day to day.
-            </p>
-          )}
         </>
       )}
 
@@ -217,18 +239,7 @@ function LoginScreen({ status, onSignedIn }: {
         {busy ? "Signing in…" : "Sign in"}
       </button>
 
-      {accounts && status?.breakGlass && (
-        <button
-          type="button"
-          onClick={() => { setBreakGlass(!breakGlass); setError(null); }}
-          className="mt-3 w-full text-center text-xs text-gray-500 hover:text-gray-800"
-        >
-          {breakGlass ? "Sign in with an account instead"
-                      : "Use the break-glass passphrase"}
-        </button>
-      )}
-
-      {accounts && !breakGlass && (
+      {accounts && (
         <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-500">
           Forgotten your password? Ask an administrator to send you a reset
           link — PISR cannot email you one.
@@ -423,10 +434,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [controller, setController] = useState<ControllerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [portalOpen, setPortalOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [baselineOpen, setBaselineOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
 
   // UP HERE WITH THE OTHER HOOKS, DELIBERATELY. This component returns early
   // three times below, and a useState added under one of those is called only
@@ -438,6 +449,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // initial navigation and nothing else ever puts one there.
   const [enrollToken, setEnrollToken] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get("enroll"));
+
+  // Up here with the other hooks for the same reason, and memoised so that
+  // `can` is a stable identity — it goes into the context value, which
+  // every consumer re-renders on.
+  //
+  // An OLDER SERVER SENDS NO `grants` KEY, and the reading of that is NO
+  // GRANTS rather than all of them. It is the fail-closed direction, matching
+  // api/grants.py, and it is also the honest one: the route would refuse
+  // anyway, so offering a chip that 403s would be worse than not offering it.
+  const grants = useMemo(() => status?.grants ?? [], [status]);
+  const features = useMemo(() => status?.features ?? [], [status]);
+  const can = useCallback(
+    (featureId: string) => features.includes(featureId), [features]);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -566,10 +590,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         activeControllerSubtype: controller.controller_subtype,
         controllers: [controller],
         role: status?.role ?? null,
+        grants,
+        can,
         // A gate-disabled instance reports mode "disabled" and role "admin";
         // treating a missing role as admin as well would promote every caller
         // the moment /api/auth/status changed shape, so this asks for the word.
-        isAdmin: status?.role === "admin",
+        // The CAPABILITY, not the role name. "Administrator" is a role
+        // somebody builds and could be renamed or replaced; what decides
+        // whether the portals are offered is whether they hold the capability
+        // those portals are gated on.
+        isAdmin: (status?.features ?? []).includes("admin.portal"),
       }}
     >
       {children}
@@ -598,25 +628,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // a convenience only: this bundle is served unauthenticated, so anyone
         // can read that the portal exists and call its routes directly —
         // require_admin on the router is what refuses them.
-        const isAdmin = status?.role === "admin";
-        if (!status?.required && !isAdmin) return null;
+        // EVERY CHIP GATES ON A FEATURE, never on a role name. "Administrator"
+        // is a role somebody builds, so asking whether they hold one would be
+        // asking the wrong question — what matters is whether they hold every
+        // capability the tool behind the chip needs.
+        const isAdmin = can("admin.portal");
+        const canRollUp = can("batch.view");
+        if (!status?.required && !isAdmin && !canRollUp) return null;
         return (
           <div className="fixed top-3 right-3 z-50 flex items-center gap-2">
-            {isAdmin && (
-              <button
-                onClick={() => setPortalOpen(true)}
-                title="Choose which report sections users see"
-                className={`${shell} hover:bg-white hover:text-gray-900`}
-              >
-                <SlidersHorizontal size={13} className="shrink-0" />
-                <span className="hidden sm:inline">Sections</span>
-              </button>
-            )}
             {/* Offered only in the mode that has accounts to manage. In proxy
                 mode the identities live in the IDP and in passphrase mode
                 there are none, so a portal listing nothing would be a puzzle
                 rather than a feature. */}
-            {isAdmin && status?.mode === "accounts" && (
+            {/* The People portal needs `admin.portal` AND `admin.accounts` —
+                creating a login is not the same act as curating a report, and
+                an organisation may want somebody who does the second and not
+                the first. Offered only in the mode that HAS accounts: in proxy
+                mode the identities live in the IDP and a portal listing
+                nothing would be a puzzle rather than a feature. */}
+            {can("admin.people") && status?.mode === "accounts" && (
               <button
                 onClick={() => setAccountsOpen(true)}
                 title="Add people, issue enrolment links, revoke access"
@@ -624,6 +655,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               >
                 <Users size={13} className="shrink-0" />
                 <span className="hidden sm:inline">People</span>
+              </button>
+            )}
+            {/* The RBAC page. Gated on the role editor's OWN feature, which
+                needs admin.portal AND admin.roles — the all-of rule. Somebody
+                who can administer but not build roles does not get the chip at
+                all, rather than a page that refuses to save. */}
+            {can("admin.roles") && (
+              <button
+                onClick={() => setRolesOpen(true)}
+                title="Roles, capabilities and who holds what"
+                className={`${shell} hover:bg-white hover:text-gray-900`}
+              >
+                <ShieldCheck size={13} className="shrink-0" />
+                <span className="hidden sm:inline">Roles</span>
               </button>
             )}
             {isAdmin && (
@@ -636,10 +681,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">Baselines</span>
               </button>
             )}
-            {isAdmin && (
+            {canRollUp && (
               <button
                 onClick={() => setBatchOpen(true)}
-                title="Check many venues at once and see when each was last checked"
+                title={isAdmin
+                  ? "Check many venues at once and see when each was last checked"
+                  : "See when each venue was last checked"}
                 className={`${shell} hover:bg-white hover:text-gray-900`}
               >
                 <Layers size={13} className="shrink-0" />
@@ -673,7 +720,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         do, since a preview rendered by the same bundle that hides things is a
         preview of the bundle, not of the server's answer.
       */}
-      {portalOpen && <AdminVisibility onClose={() => setPortalOpen(false)} />}
       {/*
         Closing this one DOES have a consequence for the admin's own session —
         they can demote or disable themselves — but the server re-checks the
@@ -681,15 +727,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         component needing to guess. Deleting your own account signs you out at
         the next request, which is the honest outcome.
       */}
-      {accountsOpen && <AdminAccounts onClose={() => setAccountsOpen(false)} />}
+      {accountsOpen && (
+        <AdminAccounts heldGrants={grants}
+                       onClose={() => setAccountsOpen(false)} />
+      )}
       {baselineOpen && <AdminBaseline onClose={() => setBaselineOpen(false)} />}
       {/*
         The batch runs in this component's own loop, so closing it stops the
         batch — it confirms first when one is in flight. See AdminBatch.tsx.
       */}
+      {rolesOpen && <AdminRoles onClose={() => setRolesOpen(false)} />}
       {batchOpen && (
         <AdminBatch controllerId={controller.id}
                     isMsp={controller.controller_subtype === "MSP"}
+                    canRun={can("batch.run")}
                     onClose={() => setBatchOpen(false)} />
       )}
     </AuthContext.Provider>

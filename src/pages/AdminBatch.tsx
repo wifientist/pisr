@@ -20,8 +20,26 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * api/services/pisr/rollup.py. Never a finding's own words: for those, and for
  * the devices behind them, every venue row links to the live report.
  *
- * Admin only. The chip is offered on the server's role; `require_admin` on
- * /api/admin/batch is the control.
+ * TWO PRIVILEGES IN ONE DIALOG, and the split is the thing to hold on to.
+ *
+ *   READING — the roll-up, the venue rows, the PDF — needs the `msp.rollup`
+ *   grant. Those routes NARROW the record to the caller's scope: they see the
+ *   ECs and venues they could already open one at a time, with the checks
+ *   their policy hides still hidden, and a denominator to match.
+ *
+ *   RUNNING — starting a batch, checking a venue, finishing — needs
+ *   `batch.run`, because polling every venue of a live customer network is a
+ *   capability worth naming rather than a side effect of being an
+ *   administrator. It narrows by scope too, which it never had to when only
+ *   unrestricted admins could reach it.
+ *
+ * Both live under /api/batch and are told apart by grant, not by prefix.
+ *
+ * So the run controls are drawn only for somebody holding `batch.run`. That is
+ * presentation, not the control: `require_grant` on those routes is, and this
+ * bundle is served unauthenticated besides. Drawing them for everybody would
+ * mean a Run button that 403s, which reads as a broken tool rather than as a
+ * privilege somebody does not have.
  */
 
 interface Summary {
@@ -212,9 +230,19 @@ async function errorOf(res: Response): Promise<string> {
   return body?.detail || `HTTP ${res.status}`;
 }
 
-export default function AdminBatch({ controllerId, isMsp, onClose }: {
+export default function AdminBatch({ controllerId, isMsp, canRun, onClose }: {
   controllerId: number;
   isMsp: boolean;
+  /**
+   * Whether this caller may START a batch — the `batch.run` grant, not the
+   * `msp.rollup` one that got them into this dialog. Two grants over one
+   * feature, because reading what a batch recorded and making one poll a live
+   * customer network are different privileges.
+   *
+   * Passed in rather than read from `useAuth`, because AuthContext renders
+   * this component and importing back out of it would close an import cycle.
+   */
+  canRun: boolean;
   onClose: () => void;
 }) {
   const [days, setDays] = useState(7);
@@ -242,7 +270,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
 
   const loadState = useCallback(async () => {
     try {
-      const res = await apiFetch(`${API_BASE_URL}/admin/batch/state?${tenantQs}days=${days}`);
+      const res = await apiFetch(`${API_BASE_URL}/batch/state?${tenantQs}days=${days}`);
       if (!res.ok) throw new Error(await errorOf(res));
       setState(await res.json());
     } catch (e) {
@@ -329,7 +357,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
     stopRef.current = false;
     let run: Run;
     try {
-      const res = await apiFetch(`${API_BASE_URL}/admin/batch/runs`, {
+      const res = await apiFetch(`${API_BASE_URL}/batch/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -365,7 +393,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
         let summary: Summary | null = null;
         try {
           const res = await apiFetch(
-            `${API_BASE_URL}/admin/batch/runs/${run.id}/venues/${encodeURIComponent(venueId)}`,
+            `${API_BASE_URL}/batch/runs/${run.id}/venues/${encodeURIComponent(venueId)}`,
             { method: "POST" });
           if (res.ok) {
             const body = await res.json();
@@ -391,7 +419,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
     };
     await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
 
-    await apiFetch(`${API_BASE_URL}/admin/batch/runs/${run.id}/finish`, {
+    await apiFetch(`${API_BASE_URL}/batch/runs/${run.id}/finish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ stopped: stopRef.current || Boolean(halted) }),
@@ -425,7 +453,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
       const wanted = SEVERITIES.filter((sev) => detail.has(sev));
       if (wanted.length) params.set("detail", wanted.join(","));
       if (scopeTenant && tenant?.id) params.set("tenant_id", tenant.id);
-      const res = await apiFetch(`${API_BASE_URL}/admin/batch/rollup.pdf?${params}`);
+      const res = await apiFetch(`${API_BASE_URL}/batch/rollup.pdf?${params}`);
       if (!res.ok) throw new Error(await errorOf(res));
       const blob = await res.blob();
       const name = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1]
@@ -560,33 +588,37 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
                    className="w-14 rounded border border-gray-300 px-1.5 py-1 text-right" />
             days
           </label>
-          <button className={btn} disabled={running || !staleIds.length}
-                  onClick={() => setSelected(new Set(staleIds))}>
-            Select not fresh ({staleIds.length})
-          </button>
-          <button className={btn} disabled={running || !venues?.length}
-                  onClick={() => setSelected(new Set((venues || []).map((v) => v.id)))}>
-            All
-          </button>
-          <button className={btn} disabled={running || !selected.size}
-                  onClick={() => setSelected(new Set())}>
-            None
-          </button>
-          <label className="flex items-center gap-1 text-gray-600">
-            At once
-            <select value={concurrency} disabled={running}
-                    onChange={(e) => setConcurrency(Number(e.target.value))}
-                    className="rounded border border-gray-300 px-1 py-1">
-              {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
-          </label>
+          {canRun && (
+            <>
+              <button className={btn} disabled={running || !staleIds.length}
+                      onClick={() => setSelected(new Set(staleIds))}>
+                Select not fresh ({staleIds.length})
+              </button>
+              <button className={btn} disabled={running || !venues?.length}
+                      onClick={() => setSelected(new Set((venues || []).map((v) => v.id)))}>
+                All
+              </button>
+              <button className={btn} disabled={running || !selected.size}
+                      onClick={() => setSelected(new Set())}>
+                None
+              </button>
+              <label className="flex items-center gap-1 text-gray-600">
+                At once
+                <select value={concurrency} disabled={running}
+                        onChange={(e) => setConcurrency(Number(e.target.value))}
+                        className="rounded border border-gray-300 px-1 py-1">
+                  {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+            </>
+          )}
           <span className="flex-1" />
           <DetailPicker value={detail} onChange={setDetail} />
           <button className={btn} disabled={exporting || running} onClick={() => downloadPdf(true)}>
             {exporting ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
             Tenant PDF
           </button>
-          {running ? (
+          {canRun && (running ? (
             <button onClick={stop} disabled={progress?.stopping}
                     className={`${btn} border-red-300 text-red-700 hover:bg-red-50`}>
               <Square size={13} /> {progress?.stopping ? "Stopping…" : "Stop"}
@@ -600,7 +632,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
                          disabled:cursor-not-allowed disabled:bg-gray-300">
               <Play size={13} /> Run {selected.size || ""} venue{selected.size === 1 ? "" : "s"}
             </button>
-          )}
+          ))}
         </div>
 
         {progress && (
@@ -663,7 +695,7 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
             <table className="w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-gray-500">
                 <tr className="border-b border-gray-200">
-                  <th className="w-6 px-2 py-1.5" />
+                  {canRun && <th className="w-6 px-2 py-1.5" />}
                   <th className="px-2 py-1.5">Venue</th>
                   <th className="px-2 py-1.5">Last checked</th>
                   <th className="px-2 py-1.5 text-right">Crit</th>
@@ -683,10 +715,12 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
                   const attempt = now?.status ?? rec?.lastAttemptStatus ?? null;
                   return (
                     <tr key={row.id} className="border-b border-gray-100">
-                      <td className="px-2 py-1.5">
-                        <input type="checkbox" disabled={!row.listed || running}
-                               checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
-                      </td>
+                      {canRun && (
+                        <td className="px-2 py-1.5">
+                          <input type="checkbox" disabled={!row.listed || running}
+                                 checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
+                        </td>
+                      )}
                       <td className="min-w-0 px-2 py-1.5">
                         <span className="break-words text-gray-900">{row.name}</span>
                         {!row.listed && (
@@ -770,7 +804,10 @@ export default function AdminBatch({ controllerId, isMsp, onClose }: {
         {error && (
           <p className="m-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
-        {cannotWrite && (
+        {/* A run concern: it says why a batch could not be RECORDED. A reader
+            who cannot start one would be told about a volume they have no
+            part in. */}
+        {canRun && cannotWrite && (
           <p className="m-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <b>Runs cannot be recorded.</b>{" "}
             {state?.broken

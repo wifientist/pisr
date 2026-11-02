@@ -60,9 +60,11 @@ An account with neither cannot sign in and cannot enrol — reissue an invite.
 
 FAILS CLOSED, unlike the visibility half of the policy file. That one is
 de-cluttering and a corrupt file resolves to "hide nothing"; this one is the
-gate itself, and a file that cannot be read means nobody signs in. The recovery
-path is deliberate and documented: PISR_AUTH_ADMIN_PASSPHRASE in the
-environment, which needs no file at all. See auth.py.
+gate itself, and a file that cannot be read means nobody signs in — there is
+no passphrase door behind it any more. The recovery path is this module's own
+CLI on the box: `scripts/pisr_admin.py invite <name>` mints a single-use,
+expiring link attributed to a named person. KEEP TWO ADMINS ENROLLED so the
+first line of recovery is the other one. See auth.py.
 
 TWO WRITERS, WHICH IS THE ONE REAL DIFFERENCE FROM visibility.py. That file is
 only ever written by the admin portal, inside this process. This one is also
@@ -95,6 +97,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import grants as grant_rules
 from config import AUTH
 
 logger = logging.getLogger(__name__)
@@ -103,7 +106,29 @@ FORMAT_VERSION = 1
 
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
+#: The two roles that ship with PISR. Any number of others may exist — an
+#: administrator builds them — so this is a floor rather than the vocabulary.
 ROLES: Tuple[str, ...] = (ROLE_ADMIN, ROLE_USER)
+
+
+def known_role(role_id: str) -> bool:
+    """
+    Whether a role id names something that resolves.
+
+    Asked of `visibility`, locally imported, because the vocabulary is data an
+    administrator edits rather than a constant this module can hold. Falls back
+    to the built-ins if the policy cannot be read, which is the same
+    fail-safe `roles.resolve` gives everywhere else: an unreadable file must
+    not make it impossible to create an administrator.
+    """
+    if not isinstance(role_id, str) or not role_id:
+        return False
+    try:
+        import visibility
+        return role_id in visibility.STORE.role_map()
+    except Exception:  # noqa: BLE001
+        import roles as role_rules
+        return role_id in role_rules.builtins()
 
 
 # ── Password hashing ─────────────────────────────────────────────────
@@ -362,14 +387,17 @@ def _account_from_raw(raw: Any) -> Optional[Account]:
                         issued_at=invite_raw.get("issuedAt"),
                         expires_at=invite_raw.get("expiresAt"))
 
-    # An unrecognised role reads as `user`, never as admin. A typo in a
-    # hand-edited file should cost someone the portal, not hand it to them.
+    # THE ROLE IS AN ID AND IS KEPT AS WRITTEN. It named one of two fixed
+    # values before roles existed; now it names any role an administrator has
+    # built, so this module cannot know the vocabulary and must not guess.
+    #
+    # An id naming a role that no longer exists is left alone rather than
+    # downgraded to `user`: it fails CLOSED at resolution (no such role, no
+    # capabilities) and is surfaced to an admin, where a silent downgrade
+    # would quietly hand somebody the ordinary user's access instead of
+    # showing that their job has gone missing.
     role = raw.get("role")
-    if role not in ROLES:
-        if role is not None:
-            logger.warning(
-                "accounts: %r has unknown role %r; treating as %r.",
-                username, role, ROLE_USER)
+    if not isinstance(role, str) or not role.strip():
         role = ROLE_USER
 
     return Account(
@@ -455,8 +483,10 @@ class AccountStore:
 
         Distinct from "no file yet", which is the ordinary state of a fresh
         deployment. This one means sign-in is impossible for everyone and the
-        break-glass passphrase is the way back — so main.py says so at startup
-        rather than leaving it to be discovered at a login prompt.
+        means sign-in is impossible for EVERYONE — there is no passphrase
+        door any more — so main.py says so at startup rather than leaving it
+        to be discovered at a login prompt. The way back is repairing the file
+        on the box with scripts/pisr_admin.py.
         """
         with self._lock:
             self._load()
@@ -507,8 +537,10 @@ class AccountStore:
             # process lived.
             logger.error(
                 "accounts: could not read %s (%s). NOBODY CAN SIGN IN until "
-                "this is fixed. Use PISR_AUTH_ADMIN_PASSPHRASE to get back in, "
-                "then repair or delete the file.", self.path, exc)
+                "it is repaired or deleted — there is no passphrase door that "
+                "gets in meanwhile. It is left untouched so a damaged but "
+                "recoverable file is not replaced by our idea of what was in "
+                "it.", self.path, exc)
             self._users = []
             self._stamp = stamp   # do not re-read a file we know is broken
             self._loaded = True
@@ -579,7 +611,7 @@ class AccountStore:
         with self._lock:
             self._load()
             return sum(1 for a in self._users
-                       if a.role == ROLE_ADMIN and a.can_sign_in and a.id != exclude_id)
+                       if administers(a) and a.can_sign_in and a.id != exclude_id)
 
     def find_by_invite(self, token: str) -> Optional[Account]:
         """
@@ -679,8 +711,7 @@ class AccountStore:
             if self._broken:
                 raise AccountsError(
                     f"{self.path} exists but could not be read, so it will not "
-                    "be overwritten — repair or move it first. Sign in with "
-                    "PISR_AUTH_ADMIN_PASSPHRASE in the meantime.")
+                    "be overwritten — repair or move it first.")
             users = list(self._users)
             result = change(users)
             self._write(users)
@@ -702,8 +733,8 @@ class AccountStore:
         problem = username_error(username)
         if problem:
             raise AccountsError(problem)
-        if role not in ROLES:
-            raise AccountsError(f"Role must be one of {', '.join(ROLES)}.")
+        if not known_role(role):
+            raise AccountsError(f"There is no role called {role!r}.")
 
         token = secrets.token_urlsafe(32)
 
@@ -725,8 +756,8 @@ class AccountStore:
             return account
 
         account = self._mutate(change)
-        logger.info("accounts: %s created %r as %s", actor or "unknown",
-                    account.username, account.role)
+        logger.info("accounts: %s created %r with role %s",
+                    actor or "unknown", account.username, account.role)
         return account, token
 
     @staticmethod
@@ -843,21 +874,32 @@ class AccountStore:
                role: Optional[str] = None,
                disabled: Optional[bool] = None) -> Account:
         """
-        Change a role or enable/disable. Refuses to remove the last admin.
+        Change a role or enable/disable. Refuses to strand the last admin.
+
+        `role=None` means "leave it alone" rather than "clear it", and so does
+        `disabled=None`, which is why neither defaults to a falsy value that
+        could be confused with a deliberate change.
+
+        THE GUARD ASKS `administers`, not whether the role is spelled "admin" —
+        see that function. It fires on losing the LAST person who can reach the
+        portal, whatever their role is called, and a demotion counts as losing
+        them just as a disable does.
 
         The guard is the same principle as `admin_router`'s "admins are never
         subject to the policy": there must be no state an admin can reach that
         only an SSH session can get them out of, and this box is deliberately
         awkward to SSH into.
         """
-        if role is not None and role not in ROLES:
-            raise AccountsError(f"Role must be one of {', '.join(ROLES)}.")
+        if role is not None and not known_role(role):
+            raise AccountsError(f"There is no role called {role!r}.")
 
         def change(users: List[Account]) -> Account:
             index, existing = _find(users, uid)
-            losing_admin = (
-                existing.role == ROLE_ADMIN and existing.can_sign_in
-                and ((role is not None and role != ROLE_ADMIN) or disabled is True))
+            would_administer = (
+                administers(_replace(existing, role=role)) if role is not None
+                else administers(existing))
+            losing_admin = (administers(existing) and existing.can_sign_in
+                            and (not would_administer or disabled is True))
             if losing_admin and self._admin_count_in(users, exclude_id=uid) == 0:
                 raise AccountsError(
                     f"{existing.username} is the only administrator who can "
@@ -871,15 +913,15 @@ class AccountStore:
 
         account = self._mutate(change)
         logger.info("accounts: %s updated %r — role=%s disabled=%s",
-                    actor or "unknown", account.username,
-                    account.role, account.disabled)
+                    actor or "unknown", account.username, account.role,
+                    account.disabled)
         return account
 
     def delete(self, uid: str, actor: Optional[str]) -> Account:
         """Remove an account. Refuses to remove the last admin."""
         def change(users: List[Account]) -> Account:
             index, existing = _find(users, uid)
-            if (existing.role == ROLE_ADMIN and existing.can_sign_in
+            if (administers(existing) and existing.can_sign_in
                     and self._admin_count_in(users, exclude_id=uid) == 0):
                 raise AccountsError(
                     f"{existing.username} is the only administrator who can "
@@ -893,8 +935,9 @@ class AccountStore:
 
     @staticmethod
     def _admin_count_in(users: List[Account], exclude_id: Optional[str]) -> int:
+        """How many people could still reach the admin portals."""
         return sum(1 for a in users
-                   if a.role == ROLE_ADMIN and a.can_sign_in and a.id != exclude_id)
+                   if administers(a) and a.can_sign_in and a.id != exclude_id)
 
     # ── reporting ────────────────────────────────────────────────────
 
@@ -904,7 +947,9 @@ class AccountStore:
             self._load()
             return {
                 "users": [a.public() for a in sorted(self._users, key=lambda a: a.username)],
-                "roles": list(ROLES),
+                # Every role in force, so the portal's dropdown offers exactly
+                # what can be assigned rather than a hardcoded pair.
+                "roles": _assignable_roles(),
                 "writable": self.writable,
                 "broken": self._broken,
                 "path": str(self.path) if self.path else None,
@@ -912,6 +957,53 @@ class AccountStore:
                 "minPasswordLength": AUTH.min_password_length,
                 "inviteDays": AUTH.invite_days,
             }
+
+
+def _assignable_roles() -> List[Dict[str, Any]]:
+    """Every role in force, as {id, label}, for the People portal."""
+    try:
+        import visibility
+        # The capabilities ride along so the portal can bound its own
+        # dropdown to roles this administrator could actually grant. The
+        # server refuses the rest either way; this stops the form offering a
+        # save that will be refused.
+        return [{"id": r.id, "label": r.label, "grants": list(r.grants)}
+                for r in sorted(visibility.STORE.roles(),
+                                key=lambda r: r.label.lower())]
+    except Exception:  # noqa: BLE001
+        import roles as role_rules
+        return [{"id": r.id, "label": r.label, "grants": list(r.grants)}
+                for r in role_rules.builtins().values()]
+
+
+def administers(account: "Account") -> bool:
+    """
+    Could this person reach the admin portals?
+
+    COUNTS THE CAPABILITY, NOT THE ROLE NAME. It used to compare against the
+    literal id "admin", which was right when that was one of two fixed values
+    and silently wrong the moment somebody built their own administrator role:
+    the last-admin guards would then let the last person who can administer be
+    demoted or deleted, because the role they hold is not spelled "admin".
+
+    ONE TEST FOR THE COUNTER AND THE TRIGGERS. The counter was fixed first and
+    the three guards that trigger it were not, which is worse than neither
+    being fixed — a guard that fires on a condition its own counter does not
+    recognise. Both halves ask here now.
+
+    Falls back to the literal comparison if the policy cannot be read. That is
+    this module's rule everywhere: the accounts file fails CLOSED, so the safe
+    reading of "we cannot tell" is that this person IS an administrator and the
+    guard should fire.
+    """
+    try:
+        import roles as role_rules
+        import visibility
+        resolved = visibility.STORE.role_map()
+        return grant_rules.GRANT_ADMIN_PORTAL in role_rules.grants_of(
+            resolved.get(account.role))
+    except Exception:  # noqa: BLE001
+        return account.role == ROLE_ADMIN
 
 
 def _find(users: List[Account], uid: str) -> Tuple[int, Account]:

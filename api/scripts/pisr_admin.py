@@ -89,8 +89,9 @@ def cmd_list(args) -> None:
         print("    pisr_admin.py add-user <name> --admin")
         return
 
-    width = max(len(a.username) for a in people)
-    print(f"{'USERNAME'.ljust(width)}  ROLE   STATE")
+    width = max([len(a.username) for a in people] + [len("USERNAME")])
+    rolew = max([len(a.role) for a in people] + [len("ROLE")])
+    print(f"{'USERNAME'.ljust(width)}  {'ROLE'.ljust(rolew)}  STATE")
     for account in people:
         if account.disabled:
             state = "disabled"
@@ -100,7 +101,8 @@ def cmd_list(args) -> None:
                      else "NO PASSWORD AND NO INVITE — run `invite`")
         else:
             state = "ok"
-        print(f"{account.username.ljust(width)}  {account.role.ljust(5)}  {state}")
+        print(f"{account.username.ljust(width)}  "
+              f"{account.role.ljust(rolew)}  {state}")
 
     admins = sum(1 for a in people if a.role == "admin" and a.can_sign_in)
     if not admins:
@@ -115,7 +117,7 @@ def cmd_add_user(args) -> None:
         account, token = store.create(args.username, role, actor="cli")
     except accounts.AccountsError as exc:
         _die(str(exc))
-    print(f"Created {account.username} as {account.role}.")
+    print(f"Created {account.username} with role {account.role}.")
     _print_link(token)
 
 
@@ -132,12 +134,17 @@ def cmd_invite(args) -> None:
 
 
 def cmd_set_role(args) -> None:
+    """
+    Assign a role. Roles are data an administrator builds in the portal, so
+    the valid ids are whatever exists — `list` shows what each account holds,
+    and `admin` and `user` always resolve because they ship with PISR.
+    """
     account = _find(args.username)
     try:
         account = _store().update(account.id, actor="cli", role=args.role)
     except accounts.AccountsError as exc:
         _die(str(exc))
-    print(f"{account.username} is now {account.role}.")
+    print(f"{account.username} now holds the {account.role} role.")
 
 
 def cmd_disable(args) -> None:
@@ -195,9 +202,12 @@ def main() -> None:
     inv.add_argument("username")
     inv.set_defaults(func=cmd_invite)
 
-    role = sub.add_parser("set-role", help="change somebody's role")
+    role = sub.add_parser("set-role", help="assign a role")
     role.add_argument("username")
-    role.add_argument("role", choices=list(accounts.ROLES))
+    # No `choices`: roles are data an administrator builds, so the set is not
+    # known at parse time. `accounts.known_role` refuses an id that does not
+    # resolve, with a message naming it.
+    role.add_argument("role")
     role.set_defaults(func=cmd_set_role)
 
     dis = sub.add_parser("disable", help="stop somebody signing in, reversibly")

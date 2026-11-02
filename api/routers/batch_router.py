@@ -2,10 +2,30 @@
 Batch runs: check every venue of a tenant, one venue per request, and keep the
 counts.
 
-ADMIN ONLY. The whole router is behind `require_admin`. A batch reads every
-venue of a customer and writes to the volume; neither is something a `user`
-role does, and the roll-up it produces crosses venue boundaries that a user's
-scope may not.
+TWO ROUTERS, SPLIT BY PRIVILEGE. Reading an estate roll-up and polling every
+venue of a live customer network are not the same act, so they are not behind
+the same check:
+
+  WRITES need the `batch.run` GRANT (`router`). Starting a run polls every
+  venue of a live customer network and writes to the volume — a capability
+  worth naming rather than a side effect of being an administrator.
+
+  READS need the `msp.rollup` GRANT (`read_router`). Reading what a previous
+  poll recorded is not the same act as making one.
+
+Both live under /api/batch. NEITHER is under /api/admin any more: that
+namespace is pinned to `require_admin` in both directions by test_access.py,
+and a path saying "admin" for a route an ordinary user may hold is a lie the
+next reader has to discover.
+
+WHICH MAKES THE READ ROUTES NARROW THE RECORD, and it is the one thing to get
+right in this file. The record is written by an admin, whose scope is
+unrestricted, so it holds every venue of every tenant ever batched. A grant is
+a lens and never a key: an `msp`-tagged user gets the roll-up of the ECs their
+scope already allows, with the checks their policy already hides still hidden,
+and the DENOMINATOR narrowed too — "48 of 58" tells a caller an estate of 58
+exists. `rollup.restrict` does all of it, applied to the snapshot before any
+roll-up reads it, so every figure downstream is narrowed by construction.
 
 HUMAN-TRIGGERED, NOT SCHEDULED. There is no timer, no background task and no
 queue here. An admin clicks Run in the browser and the BROWSER walks the venue
@@ -22,11 +42,11 @@ WHAT IS KEPT. Counts only — see `services/pisr/rollup.summarise`, which is the
 allowlist, and `batch_runs.py`, which explains why this file is the one place
 PISR keeps anything read off a customer's network.
 
-  GET  /api/admin/batch/state          history, roll-ups and runs for the dialog
-  POST /api/admin/batch/runs           start a run over a list of venues
-  POST /api/admin/batch/runs/{id}/venues/{venueId}   check one venue, record it
-  POST /api/admin/batch/runs/{id}/finish             close the run
-  GET  /api/admin/batch/rollup.pdf     the roll-up, from the record — no re-poll
+  GET  /api/batch/state                history, roll-ups and runs for the dialog
+  GET  /api/batch/rollup.pdf           the roll-up, from the record — no re-poll
+  POST /api/batch/runs                 start a run over a list of venues
+  POST /api/batch/runs/{id}/venues/{venueId}         check one venue, record it
+  POST /api/batch/runs/{id}/finish                   close the run
 
 Every R1 call made here is `build_report`'s, so the read-only guarantee is the
 report's own. Nothing in this file talks to R1 except through it and the
@@ -44,8 +64,14 @@ from pydantic import BaseModel, Field
 from weasyprint import HTML as WeasyHTML
 
 import batch_runs
-from auth import generated_by, require_admin
+import sections as section_catalogue
+import visibility
+import grants as grant_catalogue
+from auth import (generated_by, grants_of, hidden_of, require_admin,
+                  require_grants, role_of, scope_of)
 from config import CONTROLLER
+from grants import (GRANT_BATCH_RUN, GRANT_MSP_BATCH, GRANT_MSP_ROLLUP,
+                    GRANT_TENANT_ROLLUP)
 from r1_client import build_r1_client, require_id, resolve_tenant
 from redact import redact
 from services.pisr import rollup
@@ -53,8 +79,41 @@ from services.pisr.collect import build_report
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin/batch", tags=["Batch"],
-                   dependencies=[Depends(require_admin)])
+#: The write half. ADMIN-ONLY UNTIL R4; now behind `batch.run`, because
+#: "polls every venue of a live customer network" is a capability worth naming
+#: rather than a side effect of being an administrator. It is in no default,
+#: so nobody holds it until somebody is given a role that names it.
+#:
+#: NOT under /api/admin any more, and the move is the point rather than
+#: tidiness: that namespace is pinned to `require_admin` in both directions by
+#: `test_access.py`, and a path that says "admin" for a route an ordinary user
+#: may hold is a lie the next reader has to discover. Both halves of batch now
+#: sit under /api/batch and are told apart by the grant they need, not by the
+#: prefix.
+router = APIRouter(prefix="/batch", tags=["Batch"],
+                   dependencies=[Depends(require_grants(GRANT_BATCH_RUN))])
+
+#: The read half. Same prefix as the writes, different grant: reading what a
+#: batch recorded and starting one that polls a live customer network are
+#: different privileges over the same feature, and the grant is what says so.
+#: ONE TENANT's roll-up — the desk's view of one customer.
+read_router = APIRouter(prefix="/batch", tags=["Batch"],
+                        dependencies=[Depends(require_grants(GRANT_TENANT_ROLLUP))])
+
+#: THE ESTATE — every tenant at once, summed.
+#:
+#: A SEPARATE ROUTER RATHER THAN A CONDITIONAL on the same one, and the reason
+#: is the oracle. `api/access_surface.py` reads capabilities off route
+#: DEPENDENCIES, so a route that decides which capability it needs by looking
+#: at a query parameter is invisible to it — and the capability matrix, the
+#: preview and the generated end-to-end expectations all read that. A rule
+#: nothing can see is a rule nothing can check.
+#:
+#: It reads better too: "how is the estate doing" and "how is this customer
+#: doing" are different questions asked by different people, and giving them
+#: different addresses says so.
+estate_router = APIRouter(prefix="/batch/estate", tags=["Batch"],
+                          dependencies=[Depends(require_grants(GRANT_MSP_ROLLUP))])
 
 # Generous: the biggest MSP-EC seen has a few hundred venues. The limit exists
 # so a malformed body cannot write a megabyte of ids into the run record.
@@ -102,11 +161,42 @@ def _days(days: float) -> float:
     return max(0.0, min(float(days), 3650.0))
 
 
+def _readable(request: Request) -> Dict[str, Any]:
+    """
+    The record as THIS caller may read it, plus the scope that narrowed it.
+
+    Both read routes start here. The scope comes back too because the routes
+    still have to REFUSE a tenant outside it — narrowing a response is the
+    courtesy, a 403 at the route is the control, and `pisr_router._require_scope`
+    makes the same distinction for the same reason. A caller who names a
+    tenant they may not reach gets told so, rather than being handed a roll-up
+    of nothing and left to wonder whether the batch ever ran.
+    """
+    role = role_of(request)
+    allowed = scope_of(request)
+    hidden = section_catalogue.checks_for(hidden_of(request))
+    return {
+        "scope": allowed,
+        "snapshot": rollup.restrict(batch_runs.STORE.snapshot(), allowed, hidden),
+    }
+
+
+def _require_ec(request: Request, allowed, tenant_key: str) -> None:
+    """403 if this caller is not scoped to the tenant they named."""
+    if not allowed.allows_ec(tenant_key):
+        logger.warning("scope: refused batch tenant=%s to user=%s role=%s",
+                       tenant_key, getattr(request.state, "pisr_user", "-"),
+                       role_of(request))
+        raise HTTPException(
+            403, "This account is not scoped to that RUCKUS ONE customer.")
+
+
 # ── reading ─────────────────────────────────────────────────────────
 
 
-@router.get("/state")
-async def get_state(tenant_id: Optional[str] = Query(None),
+@read_router.get("/state")
+async def get_state(request: Request,
+                    tenant_id: Optional[str] = Query(None),
                     days: float = Query(7, description="A venue checked completely "
                                                        "within this many days is fresh.")):
     """
@@ -119,7 +209,8 @@ async def get_state(tenant_id: Optional[str] = Query(None),
     record.
     """
     store = batch_runs.STORE
-    snap = store.snapshot()
+    readable = _readable(request)
+    snap = readable["snapshot"]
     window = _days(days)
     is_msp = CONTROLLER.ec_type == "MSP"
 
@@ -131,6 +222,7 @@ async def get_state(tenant_id: Optional[str] = Query(None),
     runs: List[Dict[str, Any]] = snap["runs"]
     if tenant_id or not is_msp:
         key = _tenant_key(tenant_id)
+        _require_ec(request, readable["scope"], key)
         tenant = rollup.tenant_rollup(snap, key, window)
         runs = [r for r in runs if r.get("tenantId") == key]
 
@@ -174,17 +266,71 @@ class FinishBody(BaseModel):
     stopped: bool = False
 
 
+@router.post("/sweeps", dependencies=[Depends(require_grants(GRANT_MSP_BATCH))])
+async def plan_sweep(request: Request):
+    """
+    The tenants a multi-tenant sweep would cover, in order — scope-filtered.
+
+    SWEEPING IS ITS OWN OPERATION, and this is where it is authorised. Polling
+    one customer's estate because they asked is a different act from kicking
+    off a poll across every company on the account, and an organisation may
+    well let its desk do the first and not the second.
+
+    WHICH tenants remains the scope's business, exactly as everywhere else —
+    `msp.batch` says the sweep may be started, `filter_ecs` says what is in it.
+    A caller scoped to one customer gets a one-tenant sweep, which is the
+    correct and unremarkable answer rather than a refusal.
+
+    HONEST ABOUT ITS LIMIT: the browser still starts one run per tenant
+    afterwards, and each of those needs only `batch.run`. So somebody holding
+    `batch.run` and not `msp.batch` could loop the single-tenant endpoint
+    themselves rather than asking here. Closing that means the run endpoint
+    accepting a list of tenants and refusing more than one without this
+    capability — a change to the record's shape, and worth doing deliberately
+    rather than as a side effect of this route.
+    """
+    if CONTROLLER.ec_type != "MSP":
+        raise HTTPException(
+            400, "This controller serves one tenant, so there is nothing to "
+                 "sweep across. Run it directly.")
+    allowed = scope_of(request)
+    rows = await _live_ec_names()
+    tenants = allowed.filter_ecs(
+        [{"id": tid, "name": name} for tid, name in rows.items()])
+    logger.info("batch: sweep planned over %d tenant(s) for user=%s",
+                len(tenants), getattr(request.state, "pisr_user", "-"))
+    return {"tenants": sorted(tenants, key=lambda r: str(r["name"]).lower())}
+
+
 @router.post("/runs")
 async def start_run(body: StartBody, request: Request):
     _require_store()
     if len(body.venues) > MAX_VENUES or len(body.venueIds) > MAX_VENUES:
         raise HTTPException(413, f"At most {MAX_VENUES} venues per run.")
     key = _tenant_key(body.tenantId)
-    # Admin-only, but these ids are written to the record and later
-    # interpolated into R1 paths by `check_venue`, so they are checked on the
-    # way in like any other caller id. See r1_client.require_id.
+    # These ids are written to the record and later interpolated into R1 paths
+    # by `check_venue`, so they are checked on the way in like any other
+    # caller id. See r1_client.require_id.
     for venue in body.venues:
         require_id(venue.id, "venue id")
+
+    # SCOPE, AND IT IS NEW HERE FOR A REASON. This route was admin-only until
+    # `batch.run` existed, and an admin is unrestricted by construction, so it
+    # never needed to narrow anything. A grant can be held by a scoped user,
+    # and a grant is a lens and never a key — so a batch may only cover the
+    # venues its runner could already open one at a time. Refused rather than
+    # filtered: silently dropping venues from a run would report "48 of 58"
+    # against a list the caller never chose, and the denominator is the
+    # disclosure.
+    allowed = scope_of(request)
+    _require_ec(request, allowed, key)
+    beyond = [vid for vid in body.venueIds if not allowed.allows_venue(key, vid)]
+    if beyond:
+        logger.warning("scope: refused %d venue(s) in a batch for user=%s",
+                       len(beyond), getattr(request.state, "pisr_user", "-"))
+        raise HTTPException(
+            403, f"{len(beyond)} of those venues are outside this account's "
+                 "scope. Run the ones it covers, or ask for wider access.")
     known = {v.id for v in body.venues}
     unknown = [vid for vid in body.venueIds if vid not in known]
     if unknown:
@@ -216,6 +362,10 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
     """
     _require_store()
     require_id(venue_id, "venue id")
+    # Checked again here and not only in `start_run`: a run id and a venue id
+    # both come from the caller, so this is an independent path to polling one
+    # venue of one tenant and has to stand on its own. The PDF route taught
+    # that lesson already.
     run = batch_runs.STORE.get_run(run_id)
     if run is None:
         raise HTTPException(404, "No such run.")
@@ -223,6 +373,11 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
         raise HTTPException(400, "That venue is not part of this run.")
     if run["finishedAt"]:
         raise HTTPException(409, "This run has already finished. Start another.")
+    _require_ec(request, scope_of(request), run.get("tenantId") or "")
+    if not scope_of(request).allows_venue(run.get("tenantId"), venue_id):
+        logger.warning("scope: refused batch venue=%s to user=%s", venue_id,
+                       getattr(request.state, "pisr_user", "-"))
+        raise HTTPException(403, "This account is not scoped to that venue.")
 
     tenant_key = run["tenantId"]
     override = _override_for(tenant_key)
@@ -259,8 +414,17 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
 
 
 @router.post("/runs/{run_id}/finish")
-async def finish_run(run_id: str, body: FinishBody):
+async def finish_run(run_id: str, body: FinishBody, request: Request):
     _require_store()
+    # A run id is a caller's id like any other, so this is a third independent
+    # path into the record and checks scope on its own. Closing somebody
+    # else's run is a nuisance rather than a disclosure, but "it only does
+    # something harmless" is not a reason for a route to skip the check —
+    # that is how the one that does something harmful gets added next to it.
+    run = batch_runs.STORE.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, "No such run.")
+    _require_ec(request, scope_of(request), run.get("tenantId") or "")
     try:
         return batch_runs.STORE.finish_run(run_id, body.stopped)
     except KeyError:
@@ -327,8 +491,26 @@ def _filename(label: str) -> str:
     return f"batch-rollup-{safe}-{stamp}.pdf"
 
 
-@router.get("/rollup.pdf")
-async def get_rollup_pdf(tenant_id: Optional[str] = Query(None),
+@estate_router.get("/state")
+async def get_estate_state(request: Request,
+                           days: float = Query(7)):
+    """The MSP-wide roll-up: every tenant, summed. No tenant named."""
+    return await get_state(request, tenant_id=None, days=days)
+
+
+@estate_router.get("/rollup.pdf")
+async def get_estate_pdf(request: Request,
+                         days: float = Query(7),
+                         detail: Optional[str] = Query(None, max_length=100),
+                         origin: Optional[str] = Query(None, max_length=300)):
+    """The estate roll-up as a PDF. Every tenant in scope, on its own page."""
+    return await get_rollup_pdf(request, tenant_id=None, days=days,
+                                detail=detail, origin=origin)
+
+
+@read_router.get("/rollup.pdf")
+async def get_rollup_pdf(request: Request,
+                         tenant_id: Optional[str] = Query(None),
                          days: float = Query(7),
                          detail: Optional[str] = Query(
                              None, max_length=100,
@@ -351,16 +533,25 @@ async def get_rollup_pdf(tenant_id: Optional[str] = Query(None),
 
     window = _days(days)
     link_base = _origin(origin)
-    snap = batch_runs.STORE.snapshot()
+    readable = _readable(request)
+    snap, allowed = readable["snapshot"], readable["scope"]
     is_msp = CONTROLLER.ec_type == "MSP"
 
     if tenant_id or not is_msp:
         key = _tenant_key(tenant_id)
+        _require_ec(request, allowed, key)
         tenants = [rollup.tenant_rollup(snap, key, window)]
         overall = None
         title = tenants[0]["name"]
     else:
+        # The live EC list is the OTHER way a tenant id reaches this document —
+        # `tenant_ids` makes an EC that has never been batched appear as zero
+        # venues rather than not at all. It comes from R1, not the record, so
+        # `restrict` never saw it and it has to be filtered here or the
+        # narrowing has a second door. `filter_ecs` reads a list of rows.
         names = await _live_ec_names()
+        names = {row["id"]: row["name"] for row in allowed.filter_ecs(
+            [{"id": tid, "name": name} for tid, name in names.items()])}
         overall = rollup.msp_rollup(snap, window, names=names, tenant_ids=names)
         tenants = overall["tenants"]
         title = CONTROLLER.name

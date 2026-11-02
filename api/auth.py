@@ -88,14 +88,22 @@ about what it is allowed to hold.
   this was the inner one. In accounts mode there is one, so the throttle below
   is load-bearing rather than a nicety — read its comment before changing it.
 
-  BREAK-GLASS. PISR_AUTH_ADMIN_PASSPHRASE still signs in as an admin in this
-  mode, and that is a deliberate exception to the rule proxy mode states above
-  ("leaving both doors open makes the shared secret a way around SSO"). The
-  difference is where the identity lives. Proxy mode's IDP is external and is
-  still there when PISR's volume is not; accounts mode's identities are a file
-  ON that volume, so losing it — or deleting the last admin — would otherwise
-  need an SSH session to a box that is deliberately awkward to SSH into. It is
-  optional, off unless set, and main.py says so loudly at every startup.
+  NO BREAK-GLASS, AND THAT WAS A DELIBERATE REMOVAL. This mode once honoured
+  PISR_AUTH_ADMIN_PASSPHRASE as an emergency admin, on the argument that
+  accounts live on a volume that could be lost. Two things undid it. The
+  lockout it was mainly justified by — deleting the last admin — `accounts.py`
+  refuses outright. And every remaining recovery path it offered, the CLI also
+  offers: `pisr_admin.py invite <name>` mints a single-use, expiring link
+  attributed to a named person. The only thing break-glass did that the CLI
+  cannot is recover WITHOUT SHELL ACCESS — and rotating a leaked passphrase
+  needed shell anyway, so it could not even repair itself.
+
+  What it cost was a standing shared secret that bypassed the account system,
+  per-person revocation and the audit trail, warned about at every startup by
+  a line nobody reads twice. In this mode PISR_AUTH_ADMIN_PASSPHRASE now
+  decides nothing; main.py says so once if it is still set. IT REMAINS THE
+  ADMIN DOOR IN PASSPHRASE MODE, which is a different job — there the two
+  roles ARE the two secrets.
 
 Everything under /api (and /docs, /redoc, /openapi.json) requires proof in
 whichever form the mode calls for. The static SPA bundle is deliberately NOT
@@ -109,15 +117,17 @@ import hmac
 import ipaddress
 import logging
 import time
+from dataclasses import dataclass
 from hashlib import sha256
 from threading import Lock
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import grants
 from config import AUTH
 
 logger = logging.getLogger(__name__)
@@ -223,13 +233,6 @@ def _role_keys() -> Tuple[Tuple[str, bytes], ...]:
     return ((ROLE_ADMIN, _signing_key(AUTH.passphrase)),)
 
 
-# The account id the break-glass passphrase signs in as. Reserved: real ids are
-# "u_" + a random suffix and usernames cannot contain "!", so nothing in the
-# accounts file can collide with it.
-BREAKGLASS_ID = "!breakglass"
-BREAKGLASS_NAME = "break-glass (passphrase)"
-
-
 def _account_key(account) -> bytes:
     """
     The key that signs one person's session.
@@ -262,22 +265,20 @@ def _mint_account(account, now: Optional[float] = None) -> str:
     return f"{payload}.{sig}"
 
 
-def _mint_breakglass(now: Optional[float] = None) -> str:
-    """A session cookie for the env-configured emergency admin."""
-    expires = int((now or time.time()) + AUTH.session_seconds)
-    payload = f"{BREAKGLASS_ID}.{expires}"
-    key = _signing_key(AUTH.admin_passphrase)
-    sig = hmac.new(key, payload.encode(), sha256).hexdigest()
-    return f"{payload}.{sig}"
-
-
 def _valid_account(token: str) -> Optional[Tuple[str, str]]:
     """
-    The (identity, role) this cookie proves in accounts mode, or None.
+    The (identity, role id) this cookie proves in accounts mode, or None.
 
     Every failure is None and none of them are distinguished to the caller: a
     malformed cookie, an unknown id, a deleted account, a disabled one, a
     rotated password and an expired session all mean "sign in again".
+
+    THERE IS NO SECOND DOOR. Accounts mode once honoured
+    PISR_AUTH_ADMIN_PASSPHRASE as a break-glass admin; it does not any more.
+    Recovery is `scripts/pisr_admin.py invite <name>`, which mints a
+    single-use, expiring link attributed to a named person — better than a
+    standing shared secret on every axis that matters, and the same flow the
+    portal's password reset already uses.
 
     Note that the account is looked up BEFORE the signature can be checked,
     because the account is where the key comes from. That is not a
@@ -294,21 +295,18 @@ def _valid_account(token: str) -> Optional[Tuple[str, str]]:
     if not uid or not expires_raw or not sig:
         return None
 
-    if uid == BREAKGLASS_ID:
-        if not AUTH.admin_passphrase:
-            # The passphrase was withdrawn while a cookie was outstanding.
-            # Withdrawing it has to end those sessions, or it withdraws
-            # nothing.
-            return None
-        key = _signing_key(AUTH.admin_passphrase)
-        identity, role = BREAKGLASS_NAME, ROLE_ADMIN
-    else:
-        import accounts  # local: config is validated before this module loads
-        account = accounts.STORE.by_id(uid)
-        if account is None or not account.can_sign_in:
-            return None
-        key = _account_key(account)
-        identity, role = account.username, account.role
+    import accounts  # local: config is validated before this module loads
+    account = accounts.STORE.by_id(uid)
+    if account is None or not account.can_sign_in:
+        return None
+    key = _account_key(account)
+    # THE ACCOUNT'S `role` FIELD IS A ROLE ID. It held "admin" or "user"
+    # before roles existed, and those are exactly the ids of the two built-in
+    # roles, so collapsing the old binary into an id migrated nobody. It is
+    # also what `_account_key` signs, so reassigning somebody's role ends their
+    # sessions rather than leaving them running on the old one until it
+    # expires.
+    identity, role = account.username, account.role
 
     expected = hmac.new(key, rest.encode(), sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
@@ -679,37 +677,85 @@ def _role_for_identity(identity: Optional[str]) -> str:
     return ROLE_ADMIN if identity.casefold() in AUTH.admin_emails else ROLE_USER
 
 
-def identity_and_role(request: Request) -> Optional[Tuple[Optional[str], str]]:
+@dataclass(frozen=True)
+class Principal:
     """
-    Who this request is and what they may see, or None if it is not signed in.
+    Who this request is and what role it holds. There is no third field, and
+    that is the point of the paragraph below.
+
+    ONE SOURCE OF CAPABILITY, DELIBERATELY. An earlier design had three — a
+    binary admin/user role, per-account tags, and a bundle called a "profile" —
+    and the arbitrary split between them was what everybody tripped over ("I
+    have the MSP tag, so why can I not run a batch?"). There is now one answer
+    to "how did they get that": the role they were assigned.
+
+    The role decides which CAPABILITIES they hold and which report elements
+    they are shown. Scope — which customers and venues — is separate and per
+    person, because two leaders doing identical work in different territories
+    must not need two roles. See api/grants.py for the invariant that a
+    capability is a lens and never a key.
+
+    The identity is None in passphrase mode by definition: a shared secret
+    proves someone knew it, never who.
+    """
+
+    identity: Optional[str]
+    #: The id of the ROLE this caller holds — "admin", "user", or one an
+    #: administrator created. Where it comes from depends on the mode; see
+    #: `visibility.PolicyStore.role_for`, which is the one place that resolves
+    #: an id into capabilities.
+    role: str
+
+    @property
+    def grants(self) -> FrozenSet[str]:
+        """Resolved on read, never stored. One source: the role."""
+        import visibility
+        return visibility.grants_for(self.identity, self.role)
+
+
+def resolve_principal(request: Request) -> Optional[Principal]:
+    """
+    Who this request is, or None if it is not signed in.
 
     The single answer to that question — the middleware, /api/auth/status and
     the admin routes all come through here, so there is no second opinion to
-    drift. The identity is None in passphrase mode by definition: a shared
-    secret proves someone knew it, never who.
+    drift.
     """
     if not AUTH.enabled:
         # PISR_AUTH_DISABLED. One caller, who is standing at the machine;
         # giving them the user role would hide sections from the only person
-        # in a position to unhide them.
-        return (None, ROLE_ADMIN)
+        # in a position to unhide them, and withholding a capability would hide
+        # the feature from the only person who could turn it on.
+        return Principal(None, ROLE_ADMIN)
 
     if AUTH.mode == "proxy":
         identity = _proxy_identity(request)
         if not identity:
             return None
-        return (identity, _role_for_identity(identity))
+        # Proxy mode has an identity but no account record, so the role
+        # assignment lives in the policy's per-person map. PISR_ADMIN_EMAILS
+        # is the fallback for anybody it does not name, which keeps an SSO
+        # deployment working before anybody has assigned a single role.
+        import visibility
+        assigned = visibility.STORE.role_for(identity)
+        return Principal(identity,
+                         assigned.id if assigned is not None
+                         else _role_for_identity(identity))
 
     if AUTH.mode == "accounts":
         # Names a real person, so the audit trail this returns is worth
         # something for the first time outside proxy mode — `updatedBy` on a
         # policy save, and the line naming who ran a report.
-        return _valid_account(request.cookies.get(COOKIE_NAME, ""))
+        resolved = _valid_account(request.cookies.get(COOKIE_NAME, ""))
+        if resolved is None:
+            return None
+        identity, role = resolved
+        return Principal(identity, role)
 
     role = _valid(request.cookies.get(COOKIE_NAME, ""))
     if not role:
         return None
-    return (None, role)
+    return Principal(None, role)
 
 
 def role_of(request: Request) -> str:
@@ -737,24 +783,151 @@ def generated_by(request: Request) -> str:
             or f"{role_of(request)} (shared passphrase)")
 
 
-def require_admin(request: Request) -> str:
+def require_grants(*needed: str) -> Callable[[Request], str]:
     """
-    FastAPI dependency: 403 unless this caller is an admin.
+    FastAPI dependency factory: 403 unless this caller holds ALL of `needed`.
 
-    403 and not 404. Hiding the route's existence would be pointless — it is in
-    the SPA bundle, which is served unauthenticated — and a plain "you are not
-    an admin" is what stops someone spending an afternoon on a bug that is
-    actually a missing entry in PISR_ADMIN_EMAILS.
+    ALL-OF, NEVER ANY-OF. A route naming three capabilities is reachable only
+    by somebody holding all three, and the frontend hides the control on the
+    same rule — see `grants.features()`, which both sides read. A control that
+    appears and then 403s reads as a broken tool rather than as a privilege
+    somebody does not have, and a half-working screen is worse than an absent
+    one.
+
+    ROUTES NAME CAPABILITIES, NEVER ROLES. `require_grants("admin.portal")`
+    and not `require_admin`, because "admin" is now a role somebody builds
+    rather than a flag in the auth layer — which is what makes `install_user`
+    and `tenant_leader` first-class beside it. The names are checked against
+    the vocabulary at IMPORT time; a typo would otherwise produce a route
+    nobody can reach and no error anywhere.
+
+    THIS IS NOT A SUBSTITUTE FOR `_require_scope`. A capability says which view
+    a caller may open; scope says which customers may be in it. A route holding
+    one and not the other hands a scoped user somebody else's estate — see the
+    invariant at the top of grants.py. `test_access.py` pins both.
+
+    403 and not 404: the route is named in a bundle served unauthenticated, so
+    hiding its existence buys nothing and costs somebody an afternoon.
     """
-    role = role_of(request)
-    if role != ROLE_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="This needs the admin role. In SSO mode that means being "
-                   "named in PISR_ADMIN_EMAILS; in accounts mode it means an "
-                   "account whose role is admin; in passphrase mode it means "
-                   "signing in with PISR_AUTH_ADMIN_PASSPHRASE.")
-    return role
+    unknown = [g for g in needed if g not in grants.ALL_GRANTS]
+    if unknown or not needed:
+        raise ValueError(
+            f"require_grants{needed!r}: unknown or empty; grants.py knows "
+            f"{list(grants.ALL_GRANTS)}")
+
+    wanted = frozenset(needed)
+
+    def dependency(request: Request) -> str:
+        missing = sorted(wanted - grants_of(request))
+        if missing:
+            names = ", ".join(repr(grants.label(g)) for g in missing)
+            raise HTTPException(
+                status_code=403,
+                detail=f"This needs {names}, which this account's role does "
+                       "not include. An administrator can change it.")
+        return ",".join(sorted(wanted))
+
+    # So `test_access.py` can read the surface back off the app.
+    dependency.__name__ = "require_grants"
+    dependency.pisr_grants = tuple(sorted(wanted))
+    return dependency
+
+
+#: Reaching the admin portals. A plain alias so the seventeen call sites that
+#: said `require_admin` still read naturally — it is the same check every other
+#: route makes, against a capability that happens to be about administering
+#: PISR rather than about reading a customer's network.
+require_admin = require_grants(grants.GRANT_ADMIN_PORTAL)
+
+
+def role_id_of(request: Request) -> str:
+    """
+    The id of the role the gate decided for this request.
+
+    Read back from request.state rather than recomputed: the middleware has
+    already resolved it, and a route that re-derived it could disagree with the
+    gate that let the request through. Falls back to the built-in `user` role —
+    the least that can be done — for the case that should not happen, a gated
+    route somehow reached without the middleware having run.
+    """
+    return getattr(request.state, "pisr_role", None) or ROLE_USER
+
+
+def grants_of(request: Request) -> FrozenSet[str]:
+    """
+    Every capability this caller holds. ONE SOURCE: their role.
+
+    Resolved per request rather than signed into the cookie, so an admin
+    editing a role changes what its holders can reach on their very next
+    request, with no sign-out. That is also why the role editor is usable at
+    all — otherwise every change would need everybody to sign in again before
+    anyone could tell whether it had worked.
+    """
+    import visibility
+    return visibility.grants_for(
+        getattr(request.state, "pisr_user", None), role_id_of(request))
+
+
+def hidden_of(request: Request):
+    """
+    Which report elements this caller does not see. THE ONE WAY TO ASK.
+
+    The companion to `scope_of`, and for the same reason: resolution needs two
+    facts about a caller, and a route that composes them itself will one day
+    compose one. Here that would serve somebody the WRONG ROLE's hidden list —
+    usually a shorter one, so more than they should see, which is the wrong
+    direction even for a control that fails open.
+    """
+    import visibility
+    return visibility.hidden_for(getattr(request.state, "pisr_user", None),
+                                 role_id_of(request))
+
+
+def may_grant(request: Request, wanted) -> Tuple[bool, list]:
+    """
+    Whether this caller may hand out (or take away) `wanted`, and what is
+    beyond them.
+
+    RULE 2 OF THE SUPER TIER, and it has to be enforced wherever a role is
+    ASSIGNED — which is two endpoints, not one. The role catalogue lives in the
+    policy, but in accounts mode the ASSIGNMENT lives on the account record, so
+    `PATCH /api/admin/accounts/{id}` is a second door onto the same
+    escalation: pick the super role from the dropdown and you are super.
+    Guarding only the policy endpoint would have left it wide open.
+
+    Somebody holding `admin.roles` is exempt, and that is not a loophole: they
+    can put any capability into any role and then assign it, so enforcing this
+    on them is theatre they bypass with one extra save. It is also what lets a
+    fresh instance make its first super.
+    """
+    held = grants_of(request)
+    if grants.GRANT_ADMIN_ROLES in held:
+        return True, []
+    beyond = sorted(set(wanted) - held)
+    return (not beyond), beyond
+
+
+def scope_of(request: Request):
+    """
+    Which customers and venues this caller may reach. THE ONE WAY TO ASK.
+
+    Scope now resolves per person before per role (regional leaders: identical
+    duties, different territories), which means every lookup needs TWO facts
+    about the caller and a call site that remembers one of them silently widens
+    somebody to their whole role's reach. So no route composes those two facts
+    itself — it asks here, with the request it already has.
+
+    `visibility.scope_for` refuses to be called with a role alone for the same
+    reason. This is the convenience that makes obeying it easy; that is the
+    guard that makes disobeying it fail loudly.
+
+    Imported locally, matching `_valid_account`'s reason for doing the same:
+    keeping the module graph acyclic, and config validated before either side
+    of it loads.
+    """
+    import visibility
+    return visibility.scope_for(getattr(request.state, "pisr_user", None),
+                                role_id_of(request))
 
 
 def proxy_preview(request: Request) -> dict:
@@ -846,20 +1019,21 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
         if not gated or path in _PUBLIC_PATHS or _is_public_enroll(path):
             return await call_next(request)
 
-        resolved = identity_and_role(request)
-        if resolved is None:
+        principal = resolve_principal(request)
+        if principal is None:
             return _denied("Not signed in — no identity from the proxy."
                            if AUTH.mode == "proxy" else "Not signed in.")
 
-        identity, role = resolved
         # Read back by pisr_router to name who ran a report. This is the audit
         # trail that a shared passphrase cannot give you.
-        request.state.pisr_user = identity
+        request.state.pisr_user = principal.identity
         # And read back by every route that renders a report, to decide which
         # sections that report is allowed to contain. Set HERE rather than in
         # each route so that a router added later is role-aware by existing,
         # the same way it is gated by existing.
-        request.state.pisr_role = role
+        request.state.pisr_role = principal.role
+        # Same argument, for features. A grant-gated router added later reads
+        # these through `grants_of` and never re-resolves them.
         return await call_next(request)
 
 
@@ -1033,22 +1207,47 @@ async def auth_status(request: Request):
     """
     if not AUTH.enabled:
         return {"mode": "disabled", "required": False, "authenticated": True,
-                "user": None, "role": ROLE_ADMIN, "logoutUrl": None}
+                "user": None, "role": ROLE_ADMIN, "roleLabel": "Administrator",
+                "grants": sorted(grants.ALL_GRANTS),
+                "features": [f["id"] for f in grants.features()],
+                "logoutUrl": None}
 
-    resolved = identity_and_role(request)
-    identity, role = resolved if resolved else (None, None)
+    import visibility
+    principal = resolve_principal(request)
+    identity = principal.identity if principal else None
+    role = principal.role if principal else None
+    assigned = (visibility.STORE.role_for(principal.identity, principal.role)
+                if principal else None)
+
+    # The same answer `grants_of` gives a route, resolved the same way, so a
+    # control is never offered for something the route will refuse. A
+    # CONVENIENCE, not a control: this bundle is served unauthenticated, so
+    # anyone can read that a feature exists, and `require_grants` on the route
+    # is what refuses them.
+    held = sorted(principal.grants) if principal else []
+
+    # WHICH FEATURES TO SHOW, decided here rather than in the bundle.
+    # ALL-OF: a feature naming three capabilities is listed only for somebody
+    # holding all three, and omitted entirely otherwise — not greyed, not
+    # shown-and-refused. A control that appears and then 403s reads as a broken
+    # tool rather than as a privilege somebody does not have.
+    shown = [f["id"] for f in grants.features()
+             if set(f["requires"]) <= set(held)]
 
     if AUTH.mode == "proxy":
         return {
             "mode": "proxy",
             "required": True,
-            "authenticated": resolved is not None,
+            "authenticated": principal is not None,
             "user": identity,
             # The SPA shows the admin portal on the strength of this. It is a
             # convenience, not a control: the bundle is served unauthenticated
             # and anyone can read what it would render. require_admin on the
             # route is what actually decides.
             "role": role,
+            "grants": held,
+            "features": shown,
+            "roleLabel": (assigned.label if assigned else None),
             # oauth2-proxy's own sign-out, if the operator pointed us at it.
             # PISR cannot end an SSO session itself — it never held one.
             "logoutUrl": AUTH.proxy_logout_url or None,
@@ -1059,11 +1258,14 @@ async def auth_status(request: Request):
         return {
             "mode": "accounts",
             "required": True,
-            "authenticated": resolved is not None,
+            "authenticated": principal is not None,
             # A real name, in a mode that has one. This is what the sign-out
             # chip shows and what the audit lines record.
             "user": identity,
             "role": role,
+            "grants": held,
+            "features": shown,
+            "roleLabel": (assigned.label if assigned else None),
             "logoutUrl": None,
             # So the login form can say "no accounts exist yet, run the CLI"
             # rather than letting somebody guess at a username on a fresh
@@ -1072,18 +1274,17 @@ async def auth_status(request: Request):
             # whether the instance has been set up at all.
             "setupNeeded": (not accounts.STORE.broken
                             and not accounts.STORE.list()),
-            # Whether there is a break-glass door to offer. Not a secret: the
-            # form has to know whether to show a passphrase field, and its
-            # absence is inferable from the field's absence anyway.
-            "breakGlass": bool(AUTH.admin_passphrase),
         }
 
     return {
         "mode": "passphrase",
         "required": True,
-        "authenticated": resolved is not None,
+        "authenticated": principal is not None,
         "user": None,
         "role": role,
+        "grants": held,
+        "features": shown,
+        "roleLabel": (assigned.label if assigned else None),
         "logoutUrl": None,
     }
 
@@ -1164,7 +1365,20 @@ _SIGNIN_FAILED = ("Incorrect username or password.")
 
 def _login_with_account(body: LoginBody, request: Request, ip: str):
     """
-    Accounts mode's sign-in. Also the break-glass passphrase's door.
+    Accounts mode's sign-in. A username and a password, and nothing else.
+
+    THERE IS NO SECOND DOOR HERE ANY MORE. PISR_AUTH_ADMIN_PASSPHRASE used to
+    open one, on the argument that accounts live on a volume that could be
+    lost. It bought one thing that the CLI does not — recovery WITHOUT SHELL
+    ACCESS — and cost a standing shared secret that bypassed the account
+    system, per-person revocation and the audit trail, and that could only be
+    rotated by editing the env file on the box, which needs the shell access
+    it existed to avoid.
+
+    Recovery is `scripts/pisr_admin.py invite <name>`: a single-use, expiring
+    link attributed to a named person, which is the same flow the portal's own
+    password reset uses. The lockout it was mainly justified by — deleting the
+    last admin — `accounts.py` refuses outright in three places.
 
     Ordered so that every path costs about the same: the throttle is checked
     first, then exactly one scrypt verification happens — against the real hash
@@ -1174,26 +1388,14 @@ def _login_with_account(body: LoginBody, request: Request, ip: str):
     """
     import accounts  # local: config is validated before this module loads
 
-    # Break-glass, checked before the accounts file is consulted at all — the
-    # whole point of it is to work when that file is missing or unreadable.
-    if AUTH.admin_passphrase and body.passphrase:
-        throttled = _throttled((f"ip:{ip}",))
-        if throttled is not None:
-            return throttled
-        if hmac.compare_digest(body.passphrase.encode(),
-                               AUTH.admin_passphrase.encode()):
-            _clear_failures(f"ip:{ip}")
-            logger.warning(
-                "BREAK-GLASS sign-in from %s using PISR_AUTH_ADMIN_PASSPHRASE. "
-                "This bypasses the accounts file entirely. If this was not you, "
-                "rotate that passphrase now.", ip)
-            signed_in = Response(status_code=204)
-            _write_session_cookie(signed_in, request, _mint_breakglass())
-            return signed_in
-        _record_failure(f"ip:{ip}")
-        logger.warning("Failed break-glass login from %s", ip)
-        return JSONResponse(status_code=401,
-                            content={"detail": _SIGNIN_FAILED, "error": _SIGNIN_FAILED})
+    # A body carrying only a passphrase is somebody using a form from before
+    # break-glass was removed, or a script that still knows the old door. Told
+    # plainly rather than answered with a 401, which would send them hunting
+    # for a typo in a secret that no longer opens anything.
+    if body.passphrase and not (body.username or body.password):
+        return JSONResponse(status_code=400, content={
+            "detail": "This instance signs in with a username and password.",
+            "error": "This instance signs in with a username and password."})
 
     username = accounts.normalise_username(body.username or "")
     password = body.password or ""
@@ -1367,13 +1569,6 @@ async def change_password(body: PasswordBody, request: Request):
     import accounts
 
     identity = getattr(request.state, "pisr_user", None)
-    if identity == BREAKGLASS_NAME:
-        raise HTTPException(
-            status_code=400,
-            detail="The break-glass session has no account to change. It is "
-                   "PISR_AUTH_ADMIN_PASSPHRASE in the environment; change it "
-                   "there.")
-
     account = accounts.STORE.by_username(identity or "")
     if account is None:
         raise HTTPException(status_code=404, detail="No such account.")

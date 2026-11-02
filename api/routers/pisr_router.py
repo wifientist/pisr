@@ -39,7 +39,10 @@ from weasyprint import HTML as WeasyHTML
 
 import sections as section_catalogue
 import visibility
-from auth import generated_by, require_admin, role_of
+from auth import (generated_by, hidden_of, require_admin, require_grants,
+                  role_of, scope_of)
+from grants import (GRANT_CONFIG_DETAIL, GRANT_IDENTITY_TRACE,
+                    GRANT_VENUE_REPORT)
 from r1_client import build_r1_client, get_controller, require_id, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
 import scrub as secret_scrub
@@ -121,7 +124,7 @@ def _require_scope(request: Request, tenant_id, venue_id=None) -> None:
     if venue_id is not None:
         require_id(venue_id, "venue id")
 
-    allowed = visibility.scope_for(role_of(request))
+    allowed = scope_of(request)
     if not allowed.allows_ec(tenant_id):
         logger.warning("scope: refused tenant=%s to user=%s role=%s",
                        tenant_id, getattr(request.state, "pisr_user", "-"),
@@ -167,12 +170,13 @@ async def get_venues(request: Request,
     _require_scope(request, override)
     r1 = build_r1_client(cfg)
     venues = await list_venues(r1, override)
-    allowed = visibility.scope_for(role_of(request))
+    allowed = scope_of(request)
     return {"tenantId": override or cfg.tenant_id,
             "venues": allowed.filter_venues(override, venues)}
 
 
-@router.get("/{controller_id}/report")
+@router.get("/{controller_id}/report",
+            dependencies=[Depends(require_grants(GRANT_VENUE_REPORT))])
 async def get_report(request: Request,
                      controller_id: int,
                      venue_id: str = Query(..., description="Venue to report on"),
@@ -194,10 +198,11 @@ async def get_report(request: Request,
                 getattr(request.state, "pisr_user", "-"), role,
                 cfg.id, override, venue_id)
     return redact(await build_report(r1, override, venue_id),
-                  visibility.hidden_for(role))
+                  hidden_of(request))
 
 
-@router.get("/{controller_id}/report.pdf")
+@router.get("/{controller_id}/report.pdf",
+            dependencies=[Depends(require_grants(GRANT_VENUE_REPORT))])
 async def get_report_pdf(request: Request,
                          controller_id: int,
                          venue_id: str = Query(..., description="Venue to report on"),
@@ -233,7 +238,7 @@ async def get_report_pdf(request: Request,
     # data — filter one and not the other and the download is the way around
     # the policy. Both go through `redact` for exactly that reason.
     role = role_of(request)
-    hidden = visibility.hidden_for(role)
+    hidden = hidden_of(request)
     report = redact(await build_report(r1, override, venue_id), hidden)
     context = build_pdf_context(report, cfg.name, label or tenant_id)
 
@@ -260,7 +265,8 @@ async def get_report_pdf(request: Request,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
-@router.get("/{controller_id}/config/detail")
+@router.get("/{controller_id}/config/detail",
+            dependencies=[Depends(require_grants(GRANT_CONFIG_DETAIL))])
 async def get_config_detail(request: Request,
                             controller_id: int,
                             venue_id: str = Query(..., description="Venue to read"),
@@ -284,7 +290,7 @@ async def get_config_detail(request: Request,
     _require_scope(request, override, venue_id)
 
     role = role_of(request)
-    hidden = visibility.hidden_for(role)
+    hidden = hidden_of(request)
     if ({"config.ap-overrides", "config.ap-groups", "config.networks"} <= set(hidden)):
         # Every section of the detail hidden means the button is not rendered for
         # this reader, so a request here is either a stale tab or somebody trying
@@ -371,8 +377,14 @@ async def get_config_detail(request: Request,
     return secret_scrub.scrub_report(detail)
 
 
+# ADMIN-ONLY UNTIL R4, and this is a deliberate widening rather than a
+# refactor: the route names residents' DPSK usernames, which `shape._dpsk_safe`
+# refuses to put in a report at all. `identity.trace` is in no tag and in no
+# default, so nobody holds it until an admin gives somebody a profile that
+# says so, by name, in the portal. It is still never in `build_report`, never
+# in the PDF, and never a section id.
 @router.get("/{controller_id}/identity/trace",
-            dependencies=[Depends(require_admin)])
+            dependencies=[Depends(require_grants(GRANT_IDENTITY_TRACE))])
 async def get_identity_trace(request: Request,
                              controller_id: int,
                              venue_id: str = Query(..., description="Venue to trace"),
@@ -498,7 +510,7 @@ async def get_checks(request: Request, controller_id: int):
     reusing this expression.
     """
     get_controller(controller_id)
-    hidden_checks = section_catalogue.checks_for(visibility.hidden_for(role_of(request)))
+    hidden_checks = section_catalogue.checks_for(hidden_of(request))
     return {
         "checks": [{"id": check_id,
                     "description": (fn.__doc__ or "").strip()}

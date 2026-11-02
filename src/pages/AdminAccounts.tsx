@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check, Copy, KeyRound, Loader2, Trash2, UserPlus, Users, X,
 } from "lucide-react";
@@ -29,7 +29,12 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 interface AccountRow {
   id: string;
   username: string;
-  role: "admin" | "user";
+  /**
+   * A ROLE ID. "admin" and "user" ship with PISR; an administrator may have
+   * built others on the Roles page. The role is the ONLY thing conferring a
+   * capability — there is no second mechanism.
+   */
+  role: string;
   disabled: boolean;
   enrolled: boolean;
   createdAt: string | null;
@@ -40,9 +45,17 @@ interface AccountRow {
   inviteExpired: boolean;
 }
 
+/** A role plus the capabilities it carries, so the form can bound itself. */
+interface RoleOption { id: string; label: string; grants: string[] }
+
 interface Payload {
   users: AccountRow[];
-  roles: string[];
+  /**
+   * Every role in force, as {id, label} — built-ins plus whatever an
+   * administrator has composed. From the server, so the dropdown offers
+   * exactly what can be assigned rather than a hardcoded pair.
+   */
+  roles: RoleOption[];
   writable: boolean;
   broken: boolean;
   path: string | null;
@@ -91,12 +104,22 @@ function state(row: AccountRow): { label: string; tone: string } {
   return { label: "No way in", tone: "bg-red-50 text-red-700" };
 }
 
-export default function AdminAccounts({ onClose }: { onClose: () => void }) {
+export default function AdminAccounts({ heldGrants, onClose }: {
+  /**
+   * What this administrator holds — the bound on what they may hand out.
+   *
+   * Passed in rather than read from `useAuth`, because AuthContext renders
+   * this component and importing back out of it would close an import cycle.
+   * AdminBatch takes `canRun` for the same reason.
+   */
+  heldGrants: string[];
+  onClose: () => void;
+}) {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newAdmin, setNewAdmin] = useState(false);
+  const [newRole, setNewRole] = useState("user");
   const [link, setLink] = useState<FreshLink | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -140,7 +163,7 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
       method: "POST",
       body: JSON.stringify({
         username: newName.trim().toLowerCase(),
-        role: newAdmin ? "admin" : "user",
+        role: newRole,
       }),
     })) as MintedInvite | null;
     if (body) {
@@ -151,7 +174,6 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
         reset: false,
       });
       setNewName("");
-      setNewAdmin(false);
     }
   };
 
@@ -168,8 +190,23 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const patch = (row: AccountRow, change: Partial<Pick<AccountRow, "role" | "disabled">>) =>
-    call(`/${row.id}`, { method: "PATCH", body: JSON.stringify(change) });
+  /**
+   * Roles this administrator could actually assign.
+   *
+   * Somebody holding `admin.roles` is exempt: they can put any capability into
+   * any role and then assign it, so filtering the list for them would be
+   * theatre they bypass with one extra save.
+   */
+  const grantableRoles = useMemo(() => {
+    const all = data?.roles ?? [];
+    if (heldGrants.includes("admin.roles")) return all;
+    return all.filter((r) => r.grants.every((g) => heldGrants.includes(g)));
+  }, [data, heldGrants]);
+
+  const patch = (
+    row: AccountRow,
+    change: Partial<Pick<AccountRow, "role" | "disabled">>,
+  ) => call(`/${row.id}`, { method: "PATCH", body: JSON.stringify(change) });
 
   const remove = (row: AccountRow) => {
     // Deleting is not the usual intent behind "remove this person" — disabling
@@ -233,7 +270,9 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
           <p className="m-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
             <b>{data.path} could not be read.</b> Nobody can sign in with an
             account until it is repaired or removed, and it will not be
-            overwritten from here. Use the break-glass passphrase meanwhile.
+            overwritten from here — a damaged but recoverable file is worth
+            more than our idea of what was in it. Repair it on the box; there
+            is no passphrase that gets in meanwhile.
           </p>
         )}
 
@@ -330,12 +369,13 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
                     <select
                       value={row.role}
                       disabled={busy || readOnly}
-                      onChange={(e) => patch(row, { role: e.target.value as "admin" | "user" })}
+                      onChange={(e) => patch(row, { role: e.target.value })}
                       className="shrink-0 rounded-md border border-gray-300 px-2 py-1 text-xs
                                  disabled:bg-gray-100"
                     >
-                      <option value="user">User</option>
-                      <option value="admin">Admin</option>
+                      {(data?.roles ?? []).map((r: RoleOption) => (
+                        <option key={r.id} value={r.id}>{r.label}</option>
+                      ))}
                     </select>
 
                     <button
@@ -395,11 +435,39 @@ export default function AdminAccounts({ onClose }: { onClose: () => void }) {
                 />
                 <p className="mt-1 text-[11px] text-gray-500">{data.usernameRule}</p>
               </div>
-              <label className="flex shrink-0 items-center gap-1.5 pb-1.5 text-xs text-gray-700">
-                <input type="checkbox" checked={newAdmin} disabled={busy || readOnly}
-                       onChange={(e) => setNewAdmin(e.target.checked)} />
-                Admin
-              </label>
+              <div className="min-w-0 shrink-0">
+                {/*
+                  A ROLE, NOT AN "ADMIN" TICK. The tick made sense when there
+                  were two roles and one of them was called admin; roles are
+                  data now, so the only honest question at creation time is
+                  which one they land on.
+
+                  OFFERS ONLY ROLES THIS ADMINISTRATOR COULD GRANT. You may not
+                  hand out a capability you do not hold yourself — otherwise a
+                  restricted administrator manufactures an unrestricted
+                  colleague and inherits their access by proxy. The server
+                  refuses it either way (`_guard_role_assignment`); this is so
+                  the form does not offer a save that will be refused.
+                */}
+                <label htmlFor="new-role"
+                       className="block text-xs font-medium text-gray-700">
+                  Role
+                </label>
+                <select id="new-role" value={newRole} disabled={busy || readOnly}
+                        onChange={(e) => setNewRole(e.target.value)}
+                        className="mt-1 rounded-md border border-gray-300 px-2 py-1.5
+                                   text-sm disabled:bg-gray-100">
+                  {grantableRoles.map((r) => (
+                    <option key={r.id} value={r.id}>{r.label}</option>
+                  ))}
+                </select>
+                {grantableRoles.length < (data.roles?.length ?? 0) && (
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    {(data.roles.length - grantableRoles.length)} role(s) need a
+                    capability you do not hold.
+                  </p>
+                )}
+              </div>
               <button
                 type="submit"
                 disabled={busy || readOnly || !newName.trim()}

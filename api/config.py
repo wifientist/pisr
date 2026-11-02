@@ -128,6 +128,25 @@ class AuthConfig:
     # turning on SSO does not silently promote the whole directory.
     admin_emails: frozenset
 
+    # Who holds the `msp` TAG in the two modes that have no per-person store.
+    # A tag is orthogonal to the role — see api/grants.py — so these are a
+    # second list, not a re-reading of the first.
+    #
+    # BOTH DEFAULT TO THE ADMINS, and that is a migration decision rather than
+    # a security one: the estate roll-up was admin-only before grants existed,
+    # and a release that silently took a working feature away from the person
+    # who deploys it would be diagnosed as a bug in the release. Narrowing is
+    # an explicit act. Widening to nobody is not expressible and does not need
+    # to be — a deployment that wants no cross-tenant views has one tenant,
+    # and the views then show one tenant.
+    #
+    # `msp_emails` is proxy mode (an identity, case-folded like admin_emails);
+    # `msp_roles` is passphrase mode, where there is no identity and the only
+    # thing to key on is which of the two passphrases signed the cookie.
+    # ACCOUNTS MODE CONSULTS NEITHER: its tags live on the record.
+    msp_emails: frozenset
+    msp_roles: frozenset
+
     # Where the section visibility policy is stored. One of the two files PISR
     # writes; see visibility.py for why that is not a contradiction of "stores
     # nothing". Empty means the admin portal is read-only.
@@ -288,6 +307,46 @@ def _admin_emails() -> frozenset:
     return frozenset(entries)
 
 
+#: The roles `PISR_MSP_ROLES` may name. Literals rather than an import: auth.py
+#: and accounts.py both define these, and both import THIS module.
+_ROLE_NAMES = ("admin", "user")
+
+
+def _msp_emails(admin_emails: frozenset) -> frozenset:
+    """
+    The identities that hold the `msp` tag in proxy mode, case-folded.
+
+    Unset means the admins, for the reason given on the field. Set means
+    exactly what it names — including addresses that are not in
+    PISR_ADMIN_EMAILS, which is the whole point of a tag being orthogonal to
+    the role.
+    """
+    raw = _env("PISR_MSP_EMAILS")
+    entries = {e.strip().casefold() for e in raw.split(",") if e.strip()}
+    return frozenset(entries) if entries else admin_emails
+
+
+def _msp_roles() -> frozenset:
+    """
+    Which passphrase-mode roles hold the `msp` tag. Unset means `admin`.
+
+    An unknown entry is a startup failure rather than a silent no-op: the
+    symptom of the silent reading is a chip that never appears, which is
+    indistinguishable from the feature being broken and sends someone reading
+    this file the long way round.
+    """
+    raw = _env("PISR_MSP_ROLES")
+    entries = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    if not entries:
+        return frozenset({"admin"})
+    unknown = sorted(entries - set(_ROLE_NAMES))
+    if unknown:
+        raise RuntimeError(
+            f"PISR_MSP_ROLES names unknown role(s) {unknown}; "
+            f"valid roles are {list(_ROLE_NAMES)}.")
+    return frozenset(entries)
+
+
 def _org_name() -> str:
     """
     Who the "recommended" column speaks for.
@@ -351,7 +410,12 @@ def _load_auth() -> AuthConfig:
             # An instance with the gate switched off has one caller and it is
             # whoever is standing at the machine. Giving them the user role
             # would hide sections from the only person who could unhide them.
-            admin_emails=frozenset(), visibility_file=_visibility_file(),
+            admin_emails=frozenset(),
+            # Same reasoning as the role above: the one caller is standing at
+            # the machine, so withholding a feature from them would only hide
+            # the switch that turns it back on.
+            msp_emails=frozenset(), msp_roles=frozenset({"admin"}),
+            visibility_file=_visibility_file(),
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
             accounts_file=_accounts_file(), invite_days=0,
             min_password_length=0,
@@ -387,6 +451,8 @@ def _load_auth() -> AuthConfig:
     # and reading it early means a malformed one is a startup failure rather
     # than a surprise at the moment the mode flips.
     admin_emails = _admin_emails()
+    msp_emails = _msp_emails(admin_emails)
+    msp_roles = _msp_roles()
 
     if mode == "proxy":
         return AuthConfig(
@@ -401,7 +467,8 @@ def _load_auth() -> AuthConfig:
             trusted_proxies=_trusted_proxies(required=True),
             client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
-            admin_emails=admin_emails, visibility_file=_visibility_file(),
+            admin_emails=admin_emails, msp_emails=msp_emails,
+            msp_roles=msp_roles, visibility_file=_visibility_file(),
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
             accounts_file=_accounts_file(), invite_days=0,
             min_password_length=0,
@@ -413,9 +480,10 @@ def _load_auth() -> AuthConfig:
     # default would be a hardcoded key.
     session_secret = _env("PISR_SESSION_SECRET") or _secrets.token_urlsafe(32)
 
-    # The break-glass admin, and the ordinary dev shim, are the same env var
-    # read in two modes — see auth.py, which explains why accounts mode keeps a
-    # door that proxy mode deliberately refuses.
+    # Passphrase mode's ADMIN DOOR — one of the two secrets that mode's two
+    # roles actually are. It was ALSO accounts mode's break-glass admin until
+    # that door was removed; in accounts mode it now decides nothing and
+    # main.py says so at startup if it is still set.
     admin_passphrase = _env("PISR_AUTH_ADMIN_PASSPHRASE")
     if admin_passphrase and len(admin_passphrase) < MIN_PASSPHRASE_LENGTH:
         raise RuntimeError(
@@ -452,7 +520,9 @@ def _load_auth() -> AuthConfig:
             # No shared passphrase in this mode: a password per person is the
             # whole point, and a shared one alongside it would be the way
             # around the audit trail and the revocation this mode exists for.
-            # The ADMIN passphrase survives as break-glass — see auth.py.
+            # The ADMIN passphrase is still read here, because switching
+            # back to passphrase mode should not need it re-typed. It opens
+            # nothing in accounts mode — see auth.py.
             passphrase="",
             session_secret=session_secret,
             session_seconds=_int("PISR_SESSION_HOURS", 12) * 3600,
@@ -464,7 +534,8 @@ def _load_auth() -> AuthConfig:
             trusted_proxies=_trusted_proxies(required=False),
             client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
-            admin_emails=admin_emails, visibility_file=_visibility_file(),
+            admin_emails=admin_emails, msp_emails=msp_emails,
+            msp_roles=msp_roles, visibility_file=_visibility_file(),
             accounts_file=accounts_file, invite_days=invite_days,
             min_password_length=min_password,
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
@@ -484,7 +555,7 @@ def _load_auth() -> AuthConfig:
             "report.")
 
     # The optional admin passphrase is read and length-checked above, since
-    # accounts mode uses the same variable for break-glass. This check is
+    # accounts mode reads the same variable and ignores it. This check is
     # passphrase mode's alone: there, the two roles ARE the two passphrases.
     if admin_passphrase and hmac.compare_digest(
             admin_passphrase.encode(), passphrase.encode()):
@@ -511,7 +582,8 @@ def _load_auth() -> AuthConfig:
         trusted_proxies=_trusted_proxies(required=False),
         client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
         access_team=access_team, access_aud=access_aud,
-        admin_emails=admin_emails, visibility_file=_visibility_file(),
+        admin_emails=admin_emails, msp_emails=msp_emails,
+        msp_roles=msp_roles, visibility_file=_visibility_file(),
         org_name=_org_name(), org_baseline_file=_org_baseline_file(),
         accounts_file=_accounts_file(), invite_days=0,
         min_password_length=0,

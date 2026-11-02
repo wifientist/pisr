@@ -34,6 +34,129 @@ CATEGORY_LABELS = {key: label for key, label, _ in punchlist.CATEGORIES}
 KNOWN_CHECKS = sections.ALL_CHECK_IDS
 
 
+# ── narrowing the record to one caller ──────────────────────────────
+
+
+def restrict(snapshot: Dict[str, Any], allowed, hidden_checks) -> Dict[str, Any]:
+    """
+    The record as ONE CALLER is entitled to read it: their tenants, their
+    venues, and no check their policy hides.
+
+    APPLIED TO THE SNAPSHOT, BEFORE ANY ROLL-UP READS IT, and that placement is
+    the point. Every figure downstream — `venueCount`, `checked`, `fresh`,
+    `clean`, the severity totals, the per-tenant rows, the run history and
+    `attach_detail`'s three venue lists — is derived from this dict. Filter
+    here and all of them are narrowed by construction; filter any of them
+    individually and the next figure somebody adds is the one that escapes.
+
+    IT NARROWS THE DENOMINATOR TOO. "48 of 58" handed to a caller who may reach
+    fourteen venues tells them an estate of 58 exists, which is exactly the
+    disclosure scope.py is there to prevent — and it is disclosure by a NUMBER,
+    so no amount of hiding names would have caught it.
+
+    Why the record needs this at all: it is written by an admin, whose scope is
+    unrestricted, so it holds every venue of every tenant that has ever been
+    batched. The roll-up routes were admin-only when they were written and
+    therefore never had to narrow anything. Reaching them behind a grant is
+    what makes this function necessary — see the invariant at the top of
+    api/grants.py.
+
+    Run history is dropped rather than narrowed — see below for why.
+
+    `allowed` is a `scope.Scope`; `hidden_checks` is the check-id set from
+    `sections.checks_for(visibility.hidden_for(role))`. An admin passes
+    `scope.UNRESTRICTED` and an empty set, and this returns the snapshot
+    unchanged — cheaply, without walking it.
+    """
+    hidden = frozenset(hidden_checks or ())
+    if getattr(allowed, "unrestricted", False) and not hidden:
+        return snapshot
+
+    tenants: Dict[str, Any] = {}
+    for tenant_id, tenant in (snapshot.get("tenants") or {}).items():
+        if not allowed.allows_ec(tenant_id):
+            continue
+        kept = dict(tenant or {})
+        kept["venues"] = {vid: name
+                          for vid, name in (kept.get("venues") or {}).items()
+                          if allowed.allows_venue(tenant_id, vid)}
+        tenants[tenant_id] = kept
+
+    venues: Dict[str, Any] = {}
+    for key, record in (snapshot.get("venues") or {}).items():
+        tenant_id, _, venue_id = str(key).partition("/")
+        if not venue_id or not isinstance(record, dict):
+            # A key this function cannot attribute to a tenant is a key it
+            # cannot vouch for, and this is the fail-closed side of the house.
+            continue
+        if not allowed.allows_venue(tenant_id, venue_id):
+            continue
+        venues[key] = _strip_checks(record, hidden)
+
+    # RUN HISTORY IS NOT NARROWED, IT IS DROPPED. A run row is operational
+    # state about the batch itself — who started it, how many venues were
+    # planned, how many were never reached — and every one of those is a count
+    # over venues the caller may not see. Narrowing it would mean recomputing
+    # `planned`, `results` and `tally` so they could not disclose the estate
+    # size, which is three chances to get a denominator wrong in return for a
+    # list the caller cannot act on: starting a run stays admin-only, so a
+    # scoped caller has no use for the history of one.
+    #
+    # `unrestricted` is exactly "is an admin" here — `visibility.scope_for`
+    # returns UNRESTRICTED for the admin role — so this drops nothing an admin
+    # sees today.
+    # Kept for an unrestricted caller, who reaches this line only when
+    # `hidden_checks` is non-empty — a state an admin cannot be in today
+    # (`hidden_for("admin")` is empty), but one this function should not
+    # silently punish if the policy layer ever changes.
+    runs = snapshot.get("runs") or []
+    unrestricted = bool(getattr(allowed, "unrestricted", False))
+    return {"tenants": tenants, "venues": venues,
+            "runs": runs if unrestricted else []}
+
+
+def _strip_checks(record: Dict[str, Any], hidden: frozenset) -> Dict[str, Any]:
+    """
+    One venue's record with hidden check ids removed from its summaries.
+
+    THE COUNTS ARE LEFT ALONE, deliberately, and this is the one asymmetry in
+    here worth reading twice. `counts.critical` is how many tasks a venue has;
+    subtracting the hidden ones would report a venue as cleaner than it is to
+    the very people sent to fix it, and section visibility is DE-CLUTTERING —
+    it decides what a reader is shown, never whether a problem exists. So the
+    number stays honest and the named list loses the rows.
+
+    The consequence to know about: a caller with checks hidden can see that a
+    venue has three critical tasks and be listed only two. That is the same
+    thing the live report already does, and it is the right way round.
+    """
+    if not hidden:
+        return record
+    kept = dict(record)
+    for field in ("lastComplete", "lastAttempt"):
+        block = kept.get(field)
+        if not isinstance(block, dict):
+            continue
+        summary = block.get("summary")
+        if not isinstance(summary, dict) or not isinstance(summary.get("checks"), dict):
+            continue
+        block = dict(block)
+        summary = dict(summary)
+        summary["checks"] = {
+            sev: {cid: n for cid, n in (ids or {}).items() if cid not in hidden}
+            for sev, ids in summary["checks"].items()
+        }
+        # An empty severity is dropped so `check_detail` reads it the same way
+        # it reads a venue that simply had nothing at that severity. `checks`
+        # itself stays a dict, because `has_checks` uses its presence to tell
+        # "nothing fired" from "recorded before ids were kept" — removing it
+        # would relabel a filtered venue as an unrecorded one.
+        summary["checks"] = {sev: ids for sev, ids in summary["checks"].items() if ids}
+        block["summary"] = summary
+        kept[field] = block
+    return kept
+
+
 def _int(value) -> int:
     try:
         return int(value or 0)

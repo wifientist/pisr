@@ -664,6 +664,18 @@ IDS: Tuple[str, ...] = tuple(section.id for section in SECTIONS)
 # `<tab>.<thing>`, columns are `<section>.col.<name>`, checks are kebab finding
 # ids with no dot).
 ALL_CHECK_IDS: frozenset = frozenset(c for s in SECTIONS for c in s.checks)
+
+#: EVERY hideable element id — a section, a check, or a column.
+#:
+#: The denominator of the allow model. A role names the elements it may see and
+#: everything else is withheld, so `visibility.hidden_for` is this set minus the
+#: role's list. Computed from the catalogue rather than written down, which is
+#: what keeps the built-in `admin` role current without anybody editing it: a
+#: card added in a release is in here the moment it is in SECTIONS.
+ALL_ELEMENT_IDS: frozenset = frozenset(
+    [s.id for s in SECTIONS]
+    + [c for s in SECTIONS for c in s.checks]
+    + [col.id for s in SECTIONS for col in s.columns])
 COLUMNS_BY_ID: Dict[str, Column] = {
     col.id: col for s in SECTIONS for col in s.columns}
 ALL_COLUMN_IDS: frozenset = frozenset(COLUMNS_BY_ID)

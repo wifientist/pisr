@@ -189,21 +189,35 @@ else:
                     "Accounts: no admin can sign in, so the portals are "
                     "unreachable. Promote somebody with scripts/pisr_admin.py, "
                     "or use PISR_AUTH_ADMIN_PASSPHRASE if it is set.")
+            elif not any(a.role != "user" for a in people if a.can_sign_in):
+                # Said once at startup because the symptom is a chip that is
+                # not there, which is indistinguishable from a broken release.
+                # Tags are NOT seeded for existing accounts on purpose: this
+                # file has a second writer and a rule like "a missing key on an
+                # admin means msp" would outlive everyone who understood it.
+                logger.warning(
+                    "Accounts: everybody holds the ordinary `user` role, so "
+                    "nothing beyond a venue report is reachable. Build a role "
+                    "in the portal, or:  python scripts/pisr_admin.py "
+                    "set-role <name> admin")
 
         if AUTH.admin_passphrase:
-            # WARNING, not INFO. It is a shared secret that bypasses the whole
-            # account system, and the point of printing it every start is that
-            # one left set by accident is otherwise invisible.
+            # WARNING, not INFO, and for the opposite reason it used to be.
+            # This mode honoured it as a break-glass admin until that door was
+            # removed; an operator who still has it set believes they have a
+            # way in that no longer exists, and would find out at the worst
+            # possible moment. Say so until they clear it.
             logger.warning(
-                "Accounts: PISR_AUTH_ADMIN_PASSPHRASE is set — a break-glass "
-                "admin that works even with no accounts file. It bypasses "
-                "per-person logins, the audit trail and revocation. Keep it "
-                "for recovery; do not use it day to day.")
-        else:
-            logger.info(
-                "Accounts: no PISR_AUTH_ADMIN_PASSPHRASE, so there is no "
-                "break-glass door. Losing %s means recovering it with "
-                "scripts/pisr_admin.py on the box.", AUTH.accounts_file)
+                "Accounts: PISR_AUTH_ADMIN_PASSPHRASE is set but DECIDES "
+                "NOTHING in this mode — the break-glass door was removed. "
+                "Clear it from the environment so nobody plans around it. "
+                "Recovery is: docker compose run --rm pisr python "
+                "scripts/pisr_admin.py invite <name>")
+        logger.info(
+            "Accounts: there is no break-glass door. Recovery is another "
+            "admin, or scripts/pisr_admin.py on the box — keep two admins "
+            "enrolled so the first is never the only one. File: %s",
+            AUTH.accounts_file)
     elif AUTH.admin_passphrase:
         logger.info(
             "Roles: PISR_AUTH_ADMIN_PASSPHRASE is set, so the ordinary "
@@ -296,6 +310,11 @@ app.include_router(admin_router.router, prefix="/api")
 app.include_router(accounts_router.router, prefix="/api")
 app.include_router(baseline_router.router, prefix="/api")
 app.include_router(batch_router.router, prefix="/api")
+# The read half of batch, behind the `msp.rollup` grant rather than the
+# admin role. See the module docstring for why it cannot live under
+# /api/admin.
+app.include_router(batch_router.read_router, prefix="/api")
+app.include_router(batch_router.estate_router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
 app.include_router(pisr_router.router, prefix="/api")
 

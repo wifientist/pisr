@@ -242,11 +242,21 @@ this was the inner one. On its own it is the only one, so it needs TLS in front
 the address and the username instead of locking out — a hard lockout on a login
 page anyone can reach is an off switch anyone can flip.
 
-*Keep a break-glass door.* `PISR_AUTH_ADMIN_PASSPHRASE` still signs in as an
-admin in this mode, and works even when the accounts file is missing or
-corrupt. It is optional and PISR warns about it at every startup, because it
-bypasses per-person logins entirely — but the accounts live on a volume, and
-losing that volume without it means recovering on the box.
+*Keep two admins enrolled.* There is no break-glass passphrase in this mode.
+`PISR_AUTH_ADMIN_PASSPHRASE` used to open one and no longer does — it was a
+standing shared secret that bypassed per-person revocation and left no name in
+the audit trail, and rotating it needed shell access on the box, which is the
+very thing it existed to avoid. Every recovery it offered, the CLI offers
+better:
+
+```
+docker compose run --rm pisr python scripts/pisr_admin.py invite <name>
+```
+
+That mints a single-use, expiring link for an existing account — the same flow
+the portal's password reset uses. So the first line of recovery is the other
+admin, and the second is the box. PISR refuses to delete or demote the last
+admin who can sign in, so the commonest lockout cannot happen at all.
 
 ### SSO
 

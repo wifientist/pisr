@@ -38,26 +38,34 @@ anyone can read what it would render — so the route check is the real one.
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import accounts
-from auth import require_admin
+from auth import may_grant, require_grants
+from grants import GRANT_ADMIN_ACCOUNTS, GRANT_ADMIN_PORTAL
 from config import AUTH
 
 logger = logging.getLogger(__name__)
 
+#: ALL-OF: reaching the portals AND managing people. Two capabilities because
+#: they are two decisions — an organisation may want somebody who curates
+#: settings and cannot mint a login.
 router = APIRouter(prefix="/admin/accounts", tags=["Accounts"],
-                   dependencies=[Depends(require_admin)])
+                   dependencies=[Depends(require_grants(GRANT_ADMIN_PORTAL,
+                                                       GRANT_ADMIN_ACCOUNTS))])
 
 
 class CreateBody(BaseModel):
     username: str = Field(description="Lowercase; see accounts.USERNAME_RULE.")
     role: str = Field(default=accounts.ROLE_USER,
-                      description="'admin' or 'user'.")
+                      description="A role id. 'admin' and 'user' ship with "
+                                  "PISR; an administrator may have built "
+                                  "others. See api/roles.py.")
+
 
 
 class UpdateBody(BaseModel):
@@ -73,6 +81,73 @@ class UpdateBody(BaseModel):
 
     role: Optional[str] = None
     disabled: Optional[bool] = None
+
+
+def _guard_role_assignment(request: Request, role_id: Optional[str]) -> None:
+    """
+    Nobody may assign a role carrying a capability they do not hold.
+
+    THE SECOND DOOR onto the escalation `admin_router` guards. The role
+    CATALOGUE is edited there; the ASSIGNMENT is made here, because in accounts
+    mode it is a field on the account. Shutting one and not the other would
+    leave the super role a dropdown away for any administrator.
+    """
+    if not role_id:
+        return
+    import visibility
+    role = visibility.STORE.role_map().get(role_id)
+    if role is None:
+        return          # `known_role` refuses it separately, with a better message
+    ok, beyond = may_grant(request, role.grants)
+    if not ok:
+        raise HTTPException(
+            status_code=403,
+            detail=f"That role carries {', '.join(repr(g) for g in beyond)}, "
+                   "which you do not hold yourself. Ask an administrator who "
+                   "does.")
+
+
+def _guard_last_super(account_id: str, new_role: Optional[str]) -> None:
+    """
+    Nobody may leave `admin.roles` unheld by changing an account's role.
+
+    The mirror of `admin_router._guard_last_super`, and needed for the same
+    reason `_guard_role_assignment` is needed here: assignment lives on the
+    ACCOUNT in this mode, so the People portal is a second route to the same
+    state. Leaving the capability unclaimed re-opens the bootstrap rule and
+    hands role editing back to every administrator — a super demoting
+    themselves is an escalation for everybody else.
+
+    Distinct from the last-ADMIN guard above it. Somebody may hold
+    `admin.portal` without `admin.roles`, so a deployment can have plenty of
+    administrators and exactly one person able to decide who may do what.
+    """
+    import visibility
+    import roles as role_rules
+    from grants import GRANT_ADMIN_ROLES
+
+    if not visibility.STORE.grant_is_claimed(GRANT_ADMIN_ROLES):
+        return
+    resolved = visibility.STORE.role_map()
+    if GRANT_ADMIN_ROLES in role_rules.grants_of(resolved.get(new_role or "")):
+        return                     # they still hold it afterwards
+
+    account = accounts.STORE.by_id(account_id)
+    if account is None:
+        return
+    if GRANT_ADMIN_ROLES not in role_rules.grants_of(resolved.get(account.role)):
+        return                     # they never held it
+
+    others = [a for a in accounts.STORE.list()
+              if a.id != account_id and a.can_sign_in
+              and GRANT_ADMIN_ROLES in role_rules.grants_of(resolved.get(a.role))]
+    if not others:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{account.username} is the only person who can build "
+                   "roles. Give somebody else a role carrying 'admin.roles' "
+                   "first, or nobody will be able to change what any role "
+                   "means.")
 
 
 def _enrol_path(token: str) -> str:
@@ -149,6 +224,7 @@ async def create_account(body: CreateBody, request: Request):
     """Create an account and mint its first enrolment link."""
     _require_accounts_mode()
     _guard_writable()
+    _guard_role_assignment(request, body.role)
     try:
         account, token = accounts.STORE.create(
             body.username, body.role, _actor(request))
@@ -188,15 +264,24 @@ async def reissue_invite(account_id: str, request: Request):
 
 @router.patch("/{account_id}")
 async def update_account(account_id: str, body: UpdateBody, request: Request):
-    """Change a role, or enable/disable. Refuses to strand the last admin."""
+    """
+    Change a role, or enable/disable. Refuses to strand the last person who
+    can reach the portal — asking `accounts.administers` rather than whether
+    the role is spelled "admin". See accounts.AccountStore.update.
+    """
     _require_accounts_mode()
     _guard_writable()
     if body.role is None and body.disabled is None:
-        raise HTTPException(status_code=400,
-                            detail="Nothing to change — send a role or disabled.")
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing to change — send a role or disabled.")
+    _guard_role_assignment(request, body.role)
+    if body.role is not None:
+        _guard_last_super(account_id, body.role)
     try:
         account = accounts.STORE.update(
-            account_id, _actor(request), role=body.role, disabled=body.disabled)
+            account_id, _actor(request), role=body.role,
+            disabled=body.disabled)
     except accounts.AccountsError as exc:
         # 400, not 404: the commonest cause by far is the last-admin guard,
         # which is a refusal with a reason rather than a missing thing.

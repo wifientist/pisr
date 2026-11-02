@@ -77,6 +77,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import grants as grant_rules
+import roles as role_rules
 import scope as scope_rules
 import sections as section_catalogue
 from config import AUTH
@@ -89,7 +91,44 @@ FORMAT_VERSION = 2
 # construction — there is no policy entry that could hide a section from the
 # person who edits the policy, which removes the "locked myself out" failure
 # entirely. A third role would be a new key here and a new column in the portal.
+#: RETIRED. Before roles existed this was the one role a policy could hide
+#: things from. The list a role hides now lives ON the role, so there is no
+#: fixed set of "manageable" ones — an admin creates as many as they need.
+#:
+#: Kept as a name only because `PEOPLE_KEY`'s assertion below reads better
+#: against it, and because a stored `hidden: {"user": [...]}` block is still
+#: read forward onto the role of that id. See `_migrate_hidden`.
 MANAGED_ROLES: Tuple[str, ...] = ("user",)
+
+# Where PER-PERSON policy lives: a top-level map of identity -> {role,
+# scope}. R1 shipped it as `scope.people` (scope only); both are read, and the
+# top-level one is written. See `_clean_people`.
+#
+# ONE PLACE FOR "WHAT IS DANA'S POLICY", deliberately. Her role and her
+# scope are two answers to one question an admin asks in one sitting, and
+# splitting them across two blocks means two places to look and two places to
+# forget when somebody leaves.
+PEOPLE_BLOCK = "people"
+
+# The legacy nesting of the same map, inside `scope`, beside the role keys.
+#
+# NESTED UNDER A RESERVED KEY RATHER THAN IN A NEW TOP-LEVEL SHAPE, and that is
+# a rollback decision rather than an aesthetic one. Restructuring `scope` into
+# `{"roles": …, "people": …}` would need FORMAT_VERSION bumped, and a PISR one
+# version older refuses a file it does not understand OUTRIGHT — which for
+# scope means every restriction silently vanishing on a rollback, the one
+# direction this control must never fail in. A key that is simply not a
+# managed role is invisible to an older reader: it keeps every role
+# restriction it already understood and merely does not see the per-person
+# ones. Worse than the current binary, better than unrestricted.
+#
+# The obvious hazard is a future role actually called "people", which would
+# make one person's scope look like a role's. `test_sections.py` would not
+# catch it and nor would anything else, so it is asserted below.
+PEOPLE_KEY = "people"
+assert PEOPLE_KEY not in MANAGED_ROLES, (
+    f"{PEOPLE_KEY!r} is the reserved per-person scope key and cannot also be "
+    "a managed role — see visibility.PEOPLE_KEY")
 
 # Section ids that have been renamed, old -> new.
 #
@@ -143,6 +182,13 @@ class PolicyStore:
         self._lock = threading.Lock()
         self._cache: Dict[str, List[str]] = {}
         self._scope: Dict[str, Dict[str, Any]] = {}
+        # INITIALISED HERE AND NOT ONLY IN `_load`, because `_load` returns
+        # early when there is no path at all — the unconfigured deployment —
+        # and every reader would then hit an AttributeError rather than the
+        # built-in roles. That is the one case where falling back has to work
+        # by construction, since it is also what an unreadable file lands on.
+        self._roles: Dict[str, Any] = {}
+        self._people: Dict[str, Dict[str, Any]] = {}
         self._meta: Dict[str, Optional[str]] = {"updatedAt": None, "updatedBy": None}
         self._stamp: Optional[Tuple[float, int]] = None
         self._loaded = False
@@ -195,6 +241,8 @@ class PolicyStore:
             # error. Nothing is hidden until an admin hides something.
             self._cache = {}
             self._scope = {}
+            self._roles = {}
+            self._people = {}
             self._meta = {"updatedAt": None, "updatedBy": None}
             self._stamp = None
             self._loaded = True
@@ -232,6 +280,9 @@ class PolicyStore:
 
         self._cache = self._clean(raw.get("hidden"))
         self._scope = self._clean_scope(raw.get("scope"))
+        self._roles = self._migrate_hidden(
+            role_rules.clean(raw.get("roles")), self._cache)
+        self._people = self._clean_people(raw, role_rules.resolve(self._roles))
         self._meta = {"updatedAt": raw.get("updatedAt"),
                       "updatedBy": raw.get("updatedBy")}
         self._stamp = stamp
@@ -251,9 +302,8 @@ class PolicyStore:
         if not isinstance(hidden, dict):
             return {}
         cleaned: Dict[str, List[str]] = {}
-        for role in MANAGED_ROLES:
-            wanted = hidden.get(role)
-            if not isinstance(wanted, list):
+        for role, wanted in hidden.items():
+            if not isinstance(role, str) or not isinstance(wanted, list):
                 continue
             migrated = {RENAMED.get(sid, sid) for sid in wanted if isinstance(sid, str)}
             renamed = sum(1 for sid in wanted
@@ -276,7 +326,52 @@ class PolicyStore:
         return cleaned
 
     @staticmethod
-    def _clean_scope(raw) -> Dict[str, Dict[str, Any]]:
+    def _migrate_hidden(stored: Dict[str, Any],
+                        legacy: Dict[str, List[str]]) -> Dict[str, Any]:
+        """
+        A pre-roles `hidden` block becomes the matching role's hidden list.
+
+        Before roles existed, the policy held `hidden: {"user": [...]}` — a
+        list keyed by the old binary role. Those ids are somebody's deliberate
+        curation, often dozens of them, and a release that quietly stopped
+        applying them would show every user forty cards an admin had decided
+        they should not see. So they are READ FORWARD onto the role of the same
+        id, which for the ids that existed ("admin", "user") is exactly the
+        built-in they now name.
+
+        INVERTED ON THE WAY, because roles hold an ALLOW list now. A stored
+        `hidden` list of forty-three ids becomes a `visible` list of the other
+        seventy, so whoever holds that role sees exactly what they saw before
+        the model changed. Migrating it as a deny list would have been simpler
+        and would have shown them nothing.
+
+        Only when that role has no stored override of its own. An admin who has
+        edited the role in the new portal has said something more recent, and
+        the old block must not overwrite it.
+        """
+        if not legacy:
+            return stored
+        every = frozenset(section_catalogue.ALL_ELEMENT_IDS)
+        migrated = dict(stored)
+        for role_id, ids in legacy.items():
+            if role_id in migrated or not ids:
+                continue
+            base = role_rules.builtins().get(role_id)
+            allowed = sorted(every - {i for i in ids if isinstance(i, str)})
+            migrated[role_id] = role_rules.clean_one({
+                "id": role_id,
+                "label": base.label if base else role_id,
+                "grants": list(base.grants) if base else [],
+                "visible": allowed,
+            })
+            logger.info(
+                "visibility: inverted %d hidden element(s) from the pre-roles "
+                "policy into a %d-element allow list on the %r role. The next "
+                "save writes it there.", len(ids), len(allowed), role_id)
+        return {k: v for k, v in migrated.items() if v is not None}
+
+    @staticmethod
+    def _clean_scope(raw, known_roles=None) -> Dict[str, Dict[str, Any]]:
         """
         Keep only managed roles' scope blocks, each validated by `scope.clean`.
 
@@ -287,41 +382,330 @@ class PolicyStore:
         if not isinstance(raw, dict):
             return {}
         cleaned: Dict[str, Dict[str, Any]] = {}
-        for role in MANAGED_ROLES:
-            block = scope_rules.clean(raw.get(role))
+        for key, value in raw.items():
+            if not isinstance(key, str) or key == PEOPLE_KEY:
+                continue
+            # Keyed by ROLE ID now. An id for a role that no longer exists is
+            # kept rather than dropped: the restriction was deliberate, and
+            # dropping it would widen whoever holds that role if it comes back.
+            block = scope_rules.clean(value)
             if block is not None:
-                cleaned[role] = block
+                cleaned[key] = block
         return cleaned
 
-    def scope_for(self, role: str):
+    @staticmethod
+    def _clean_people(raw, known_roles) -> Dict[str, Dict[str, Any]]:
         """
-        What this role may reach, as a `scope.Scope`.
+        Per-person policy — role and scope — keyed by the identity PISR
+        knows somebody by.
 
-        Admins are unrestricted, and that short-circuit sits above the file
-        read for the same reason `hidden_for`'s does: an admin has to be able
-        to reach the portal and fix a scope even when the policy file is the
-        thing that is broken. It is also what stops an admin locking themselves
-        out of every EC with one bad save.
+        That is the username in accounts mode and the verified address in proxy
+        mode. PASSPHRASE MODE HAS NO IDENTITY AT ALL — a shared secret proves
+        somebody knew it, never who — so nothing here can ever match there and
+        every caller falls back to their role's policy. That is not a gap to
+        fix; it is what a shared secret means.
+
+        CASE-FOLDED ON THE WAY IN, for the reason `_role_for_identity` folds:
+        an identity provider's idea of an address's case is not stable, and
+        losing a restriction to a capital letter fails in the wrong direction.
+
+        READS TWO SHAPES AND WRITES ONE. The top-level `people` map is current;
+        `scope.people` is where R1 put the scope half before roles existed.
+        Both are merged, top-level winning, so a file written by the previous
+        release keeps working and the next save tidies it. An entry with
+        neither a role nor a scope is dropped, so the file has one way to
+        say "nothing special about this person".
+
+        A ROLE ID THAT NO LONGER EXISTS IS KEPT, NOT DROPPED. Dropping it
+        would silently return that person to the role default — more visible
+        and more reachable than the job they were assigned — which is the
+        wrong direction for the half of a role that fails closed. It is
+        surfaced to the admin instead: `orphaned_assignments` below, and a
+        warning in the portal.
         """
-        if role == "admin" or role not in MANAGED_ROLES:
-            return scope_rules.UNRESTRICTED
+        if not isinstance(raw, dict):
+            return {}
+
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        def note(identity: Any, role_id: Any, block: Any) -> None:
+            if not isinstance(identity, str) or not identity.strip():
+                return
+            key = identity.strip().casefold()
+            entry = merged.setdefault(key, {})
+            if isinstance(role_id, str) and role_id:
+                entry["role"] = role_id
+            parsed = scope_rules.clean(block)
+            if parsed is not None:
+                entry["scope"] = parsed
+
+        legacy = (raw.get("scope") or {}) if isinstance(raw.get("scope"), dict) else {}
+        for identity, block in (legacy.get(PEOPLE_KEY) or {}).items():
+            note(identity, None, block)
+
+        current = raw.get(PEOPLE_BLOCK)
+        if isinstance(current, dict):
+            for identity, entry in current.items():
+                if not isinstance(entry, dict):
+                    continue
+                note(identity, entry.get("role"), entry.get("scope"))
+
+        if known_roles is not None:
+            missing = sorted({e["role"] for e in merged.values()
+                              if e.get("role")
+                              and e["role"] not in known_roles})
+            if missing:
+                logger.warning(
+                    "visibility: %d assignment(s) name role(s) that no "
+                    "longer exist (%s). Those people are left WITHOUT the "
+                    "grants that role carried rather than silently "
+                    "returned to the role default; fix it in the portal.",
+                    len(missing), ", ".join(missing))
+
+        return {k: v for k, v in merged.items() if v}
+
+    def people_scoped(self) -> Tuple[str, ...]:
+        """Every identity with an entry of its own, for the portal to draw."""
         with self._lock:
             self._load()
-            return scope_rules.parse(self._scope.get(role))
+            return tuple(sorted(self._people))
 
-    def hidden_for(self, role: str) -> Tuple[str, ...]:
+    def roles(self) -> Tuple[Any, ...]:
         """
-        Section ids this role does not see. Admins get an empty tuple always.
+        Every role in force: the compiled-in ones, overridden by any stored
+        role of the same id, plus every role an admin has created.
+        """
+        return tuple(self.role_map().values())
 
-        The admin short-circuit is above the file read deliberately: an admin
-        must still be able to reach the portal and fix things when the policy
-        file is the thing that is broken.
+    def role_map(self) -> Dict[str, Any]:
         """
-        if role == "admin" or role not in MANAGED_ROLES:
-            return ()
+        The same, keyed by id. EVERY LOOKUP GOES THROUGH HERE.
+
+        `role_rules.resolve` is what makes an unreadable policy file survivable
+        now that `admin.portal` is a capability rather than a flag: the
+        built-ins are compiled in, so a file that cannot be read leaves
+        `admin` and `user` still resolving instead of leaving nobody able to
+        administer anything.
+        """
         with self._lock:
             self._load()
-            return tuple(self._cache.get(role, ()))
+            return role_rules.resolve(self._roles)
+
+    def role_for(self, identity: Optional[str], role_id: Optional[str] = None):
+        """
+        The role in force for this caller, resolved to a `roles.Role`.
+
+        WHERE THE ASSIGNMENT COMES FROM DEPENDS ON THE MODE, and it is one
+        place per mode rather than two places arguing:
+
+          ACCOUNTS mode — the account record's `role` field, passed in as
+          `role_id`. It was already "admin" or "user" before roles existed, so
+          collapsing the old binary into a role id migrated nobody. It is also
+          what `_account_key` signs, so reassigning somebody ends their
+          sessions rather than waiting for them to expire.
+
+          PASSPHRASE mode — which of the two secrets signed the cookie, again
+          passed in as `role_id`. That mode has no identity, so this is the
+          only thing there is to key on.
+
+          PROXY mode — the policy's per-person map, looked up by the verified
+          identity, because there is no account record to carry it.
+
+        An id naming a role that does not exist resolves to None, and the
+        caller treats that as conferring nothing — see `grants_of`. It is NOT
+        quietly downgraded to the built-in `user`: somebody was deliberately
+        given a job, and losing its definition must not promote them back to
+        what everybody else gets.
+        """
+        resolved = self.role_map()
+        if role_id:
+            return resolved.get(role_id)
+        if not identity:
+            return None
+        with self._lock:
+            self._load()
+            entry = self._people.get(identity.strip().casefold()) or {}
+        assigned = entry.get("role")
+        if not assigned:
+            # Nobody named a role for them: the tool as it behaves before
+            # anyone configures anything.
+            return resolved.get(role_rules.BUILTIN_USER)
+        return resolved.get(assigned)
+
+    def ungranted_elements(self) -> Tuple[str, ...]:
+        """
+        Elements no role allows — nobody in this deployment can see them.
+
+        THE PRICE OF DENY-BY-DEFAULT, PAID IN THE OPEN. An element added in a
+        release is in nobody's allow list, so it is withheld; that is correct,
+        and it is also exactly how a new feature silently fails to appear. This
+        is what turns "missing" into "not granted yet", which is a thing an
+        administrator can act on.
+
+        The built-in `admin` role's list is computed, so in practice this is
+        only ever non-empty if somebody has overridden that role — which is
+        worth surfacing for the same reason.
+        """
+        with self._lock:
+            self._load()
+            return self._ungranted()
+
+    def _ungranted(self) -> Tuple[str, ...]:
+        """
+        The same, WITHOUT taking the lock.
+
+        `self._lock` is a plain `threading.Lock` and is therefore NOT
+        reentrant, so a method that holds it cannot call one that takes it —
+        `policy()` calling the public version above deadlocked every request
+        that touched the policy. Every helper here follows the same split: the
+        public one locks and loads, the underscore one assumes both.
+        """
+        allowed: set = set()
+        for role in role_rules.resolve(self._roles).values():
+            allowed.update(role.visible)
+        return tuple(sorted(section_catalogue.ALL_ELEMENT_IDS - allowed))
+
+    def orphaned_assignments(self) -> Dict[str, str]:
+        """identity -> the role id it names, for ids that no longer exist."""
+        with self._lock:
+            self._load()
+            return {identity: entry["role"]
+                    for identity, entry in self._people.items()
+                    if entry.get("role")
+                    and entry["role"] not in role_rules.resolve(self._roles)}
+
+    def holders_of(self, grant: str) -> Tuple[str, ...]:
+        """
+        Every identity whose ROLE confers `grant`.
+
+        BOTH PLACES A ROLE CAN BE ASSIGNED, because there are two. In accounts
+        mode the assignment is a field on the ACCOUNT; the policy's per-person
+        map carries it for the modes with no account store. Reading only the
+        policy meant the super tier never registered as claimed in the mode
+        everybody actually uses — so the bootstrap rule stayed open and every
+        administrator kept role authority forever, which is exactly the tier
+        not existing.
+        """
+        with self._lock:
+            self._load()
+            resolved = role_rules.resolve(self._roles)
+            held = {identity for identity, entry in self._people.items()
+                    if entry.get("role")
+                    and grant in role_rules.grants_of(
+                        resolved.get(entry["role"]))}
+
+        if AUTH.mode == "accounts":
+            try:
+                import accounts
+                held.update(
+                    a.username for a in accounts.STORE.list()
+                    if a.can_sign_in
+                    and grant in role_rules.grants_of(resolved.get(a.role)))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("visibility: could not count %s holders: %s",
+                               grant, exc)
+        return tuple(sorted(held))
+
+    def grant_is_claimed(self, grant: str) -> bool:
+        """
+        Whether anybody holds `grant`, i.e. whether that tier EXISTS yet.
+
+        THE BOOTSTRAP RULE LIVES ON THIS, and it is the same shape as
+        `scope.py`'s "unrestricted is the default": a control that nobody has
+        configured must not lock everyone out. Until some role confers
+        `admin.roles` and somebody is assigned it, every admin may edit
+        roles — otherwise a fresh instance could never make its first one.
+        The moment a super exists, ordinary admins are shut out.
+
+        Note that in PASSPHRASE MODE this is always False and always will be:
+        roles are keyed by identity and that mode has none, so no super tier
+        can exist there. That is correct rather than a gap — a mode that cannot
+        tell two people apart cannot meaningfully put one above the other.
+        """
+        return bool(self.holders_of(grant))
+
+    def grants_for(self, identity: Optional[str],
+                   role_id: Optional[str] = None) -> frozenset:
+        """
+        What this person's ROLE confers, and that is the whole of it. There
+        is no second source to union in — see `api/grants.py`.
+
+        NO ROLE MEANS THE DEFAULTS, not nothing. `grants.DEFAULT_GRANTS` is
+        the tool as it behaves before anybody has configured anything, and it
+        holds `venue.report` so that the release introducing roles does not
+        take the only thing most people use away from all of them at once.
+
+        A ROLE REPLACES THAT DEFAULT rather than adding to it — the same
+        rule `hidden_for` and `scope_for` follow, and the way the "leader who
+        never opens a venue" persona is expressed: a role naming only
+        `msp.rollup` does not carry `venue.report`, so they do not get one.
+        It is also the footgun in this design, so the portal seeds a new
+        role with the defaults already ticked.
+
+        Still fails CLOSED where it matters: an unknown grant id is dropped,
+        and a DELETED role confers nothing at all — not the defaults, since
+        the person was deliberately given a job and losing its definition must
+        not silently promote them back to what everyone else gets.
+        """
+        return role_rules.grants_of(self.role_for(identity, role_id))
+
+    def scope_for(self, identity: Optional[str], role_id: Optional[str] = None):
+        """
+        Which customers and venues this caller may reach.
+
+        Resolved PERSON FIRST, then their ROLE's default, then unrestricted.
+
+        SCOPE IS NOT A FIELD ON THE ROLE, and that is deliberate. Two regional
+        leaders doing identical work in different territories would otherwise
+        need two roles — `tenant_leader_north` and `tenant_leader_south` — and
+        the role list would grow with the org chart rather than with the kinds
+        of work people do. The role carries a DEFAULT; the person carries their
+        territory.
+
+        A person's entry REPLACES their role's rather than adding to it, so
+        "what can Dana reach" has one answer. Under a union rule, naming her
+        ECs would have handed her hers PLUS everything her role could already
+        reach, which is the opposite of what an admin typing a territory into a
+        box means.
+
+        FAILS CLOSED, unlike `hidden_for` — once a restriction is named,
+        anything unnamed is refused. There is no admin short-circuit any more:
+        the built-in `admin` role simply has no scope entry, so it resolves to
+        unrestricted the ordinary way, and `roles.resolve` compiling that role
+        in is what keeps an unreadable policy file from locking everybody out.
+        """
+        with self._lock:
+            self._load()
+            if identity:
+                entry = self._people.get(identity.strip().casefold()) or {}
+                if entry.get("scope") is not None:
+                    return scope_rules.parse(entry["scope"])
+            resolved_id = role_id
+            if not resolved_id and identity:
+                resolved_id = (self._people.get(identity.strip().casefold())
+                               or {}).get("role")
+            return scope_rules.parse(self._scope.get(resolved_id or ""))
+
+    def hidden_for(self, identity: Optional[str],
+                   role_id: Optional[str] = None) -> Tuple[str, ...]:
+        """
+        Element ids this caller does not see — from their ROLE, and nowhere
+        else.
+
+        THE FAIL DIRECTION IS THE OPPOSITE OF `scope_for`'s, and that is why
+        these stay two methods rather than one lookup returning a bundle.
+        Hiding is de-cluttering: an unknown element id, a role that no longer
+        exists, an unreadable file all resolve to HIDING NOTHING, because an
+        app that renders nothing and explains nothing is worse than a card
+        somebody did not need. Scope is access and resolves the other way. They
+        live in one record now; do not let a refactor make them agree.
+
+        There is no admin short-circuit any more and there does not need to be:
+        the built-in `admin` role hides nothing, and it is compiled in, so the
+        old "an admin must be able to fix a broken policy" guarantee now comes
+        from `roles.resolve` rather than from a special case here.
+        """
+        return role_rules.hidden_of(self.role_for(identity, role_id))
 
     def policy(self) -> Dict[str, object]:
         """The whole policy, for the admin portal."""
@@ -329,10 +713,30 @@ class PolicyStore:
             self._load()
             return {
                 "version": FORMAT_VERSION,
-                "hidden": {role: list(self._cache.get(role, []))
-                           for role in MANAGED_ROLES},
-                "scope": {role: scope_rules.parse(self._scope.get(role)).as_json()
-                          for role in MANAGED_ROLES},
+                # NOT EMITTED ANY MORE. Visibility lives on the role, as an
+                # allow list, and there is nothing else for a portal to edit.
+                # The stored block is still READ — once, to migrate — and
+                # `_migrate_hidden` is the only thing that looks at it.
+                "scope": {role: scope_rules.parse(block).as_json()
+                          for role, block in self._scope.items()},
+                "roles": role_rules.catalogue(role_rules.resolve(self._roles).values()),
+                PEOPLE_BLOCK: {
+                    identity: {
+                        "role": entry.get("role"),
+                        "scope": (scope_rules.parse(entry["scope"]).as_json()
+                                  if entry.get("scope") is not None else None),
+                    }
+                    for identity, entry in sorted(self._people.items())
+                },
+                # Assignments naming a role that no longer exists. Surfaced
+                # rather than swept up, because those people silently hold no
+                # grants until somebody notices.
+                "ungrantedElements": list(self._ungranted()),
+                "orphanedAssignments": {
+                    identity: entry["role"]
+                    for identity, entry in self._people.items()
+                    if entry.get("role") and entry["role"] not in role_rules.resolve(self._roles)
+                },
                 "updatedAt": self._meta.get("updatedAt"),
                 "updatedBy": self._meta.get("updatedBy"),
                 "writable": self.writable,
@@ -342,7 +746,9 @@ class PolicyStore:
     # ── writing ──────────────────────────────────────────────────────
 
     def save(self, hidden: Dict[str, List[str]], scope: Optional[Dict[str, Any]],
-             actor: Optional[str]) -> Dict[str, object]:
+             actor: Optional[str],
+             roles: Optional[Any] = None,
+             people: Optional[Any] = None) -> Dict[str, object]:
         """
         Replace the policy. Raises RuntimeError if there is nowhere to write.
 
@@ -358,15 +764,56 @@ class PolicyStore:
                 "PISR_VISIBILITY_FILE is not set, so there is nowhere to save a "
                 "policy. Set it and mount a writable volume at its directory.")
 
+        # OMITTED MEANS "LEAVE ALONE", NOT "DELETE". The document is replaced
+        # whole, but a caller that never mentions a block did not ask for it to
+        # go — and the blocks are edited from DIFFERENT SCREENS now that roles
+        # have their own page. Reading an absent `roles` as an empty one meant
+        # saving the Sections dialog silently deleted every role an
+        # administrator had built, which is the worst kind of data loss:
+        # invisible, immediate, and caused by an unrelated action.
+        #
+        # An explicit empty map still clears — that is the role editor deleting
+        # the last one, and it says so by sending it.
+        with self._lock:
+            self._load()
+            if hidden is None:
+                hidden = dict(self._cache)
+            if scope is None and self._scope:
+                scope = dict(self._scope)
+            if roles is None:
+                roles = {rid: r.public() for rid, r in self._roles.items()}
+            if people is None:
+                people = dict(self._people)
+
         cleaned = self._clean(hidden)
         cleaned_scope = self._clean_scope(scope)
+        # The SAME migration `_load` applies, and it has to be here too: the
+        # cache is refreshed in place below rather than re-read, so a step this
+        # skipped would be correct on disk and wrong in memory until the
+        # container restarted. `_people` was exactly that bug once already.
+        cleaned_roles = self._migrate_hidden(role_rules.clean(roles), cleaned)
+        # Both shapes are accepted on the way in — a caller may still send the
+        # per-person scope nested under `scope`, which is where R1 put it — and
+        # only the top-level one is written. `_clean_people` does the merge.
+        cleaned_people = self._clean_people(
+            {"scope": scope, PEOPLE_BLOCK: people},
+            role_rules.resolve(cleaned_roles))
         payload = {
             "version": FORMAT_VERSION,
-            "hidden": {role: cleaned.get(role, []) for role in MANAGED_ROLES},
-            # Omitted entirely when no role is restricted, so an unrestricted
+            # The pre-roles `hidden` block is NOT written back. It is read on
+            # load, inverted onto the role of the same id, and then it has done
+            # its job — writing it again would leave two descriptions of one
+            # thing, and the next reader would have to work out which wins.
+            # Each block omitted entirely when empty, so an unrestricted
             # deployment's file stays readable at a glance and a version-1 file
             # round-trips to something that looks the same.
             **({"scope": cleaned_scope} if cleaned_scope else {}),
+            **({"roles": {rid: r.public()
+                             for rid, r in sorted(cleaned_roles.items())}}
+               if cleaned_roles else {}),
+            **({PEOPLE_BLOCK: {identity: entry
+                               for identity, entry in sorted(cleaned_people.items())}}
+               if cleaned_people else {}),
             "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             # Under a shared passphrase this is "admin (passphrase)", which is
             # the honest answer: that mode cannot tell one admin from another.
@@ -403,9 +850,18 @@ class PolicyStore:
                 "Check the volume is mounted and writable by the container's "
                 "user.") from exc
 
+        # The cache is refreshed in place rather than re-read, and `_stamp` is
+        # advanced so `_load` will not re-read either. EVERY FIELD `_load`
+        # SETS MUST BE SET HERE TOO — one left out is written to disk
+        # correctly and then ignored until the container restarts, which
+        # presents as a save that silently did nothing and sends somebody
+        # looking at the file, where the value is sitting in plain sight.
+        # `_people` was exactly that bug.
         with self._lock:
             self._cache = cleaned
             self._scope = cleaned_scope
+            self._roles = cleaned_roles
+            self._people = cleaned_people
             self._meta = {"updatedAt": payload["updatedAt"],
                           "updatedBy": payload["updatedBy"]}
             self._stamp = self._stat()
@@ -414,21 +870,43 @@ class PolicyStore:
         logger.info(
             "visibility: policy saved by %s — %s", payload["updatedBy"],
             "; ".join(
-                f"{role}: {len(cleaned.get(role, []))} section(s) hidden, "
-                + ("unrestricted scope" if role not in cleaned_scope else
-                   f"{len(cleaned_scope[role].get('ecs') or {})} EC(s) allowed")
-                for role in MANAGED_ROLES))
+                f"{rid}: {len(role.grants)} capability(ies), "
+                f"{len(role.visible)} element(s) visible, "
+                + ("unrestricted scope" if rid not in cleaned_scope else
+                   f"{len(cleaned_scope[rid].get('ecs') or {})} EC(s) allowed")
+                for rid, role in sorted(cleaned_roles.items())) or "no roles"
+            + (f"; {len(cleaned_roles)} role(s)" if cleaned_roles else "")
+            + (f"; {len(cleaned_people)} person(s) with their own entry"
+               if cleaned_people else ""))
         return self.policy()
 
 
 STORE = PolicyStore(AUTH.visibility_file)
 
 
-def hidden_for(role: str) -> Tuple[str, ...]:
-    """Module-level shorthand — the routers only ever want this."""
-    return STORE.hidden_for(role)
+def hidden_for(identity: Optional[str],
+               role_id: Optional[str] = None) -> Tuple[str, ...]:
+    """
+    Module-level shorthand — the routers only ever want this.
+
+    Routers ask `auth.hidden_of(request)` rather than calling this, so that no
+    fact about a caller can be dropped by accident.
+    """
+    return STORE.hidden_for(identity, role_id)
 
 
-def scope_for(role: str):
-    """Module-level shorthand for the scope half."""
-    return STORE.scope_for(role)
+def grants_for(identity: Optional[str],
+               role_id: Optional[str] = None) -> frozenset:
+    """What this person's role confers. See PolicyStore.grants_for."""
+    return STORE.grants_for(identity, role_id)
+
+
+def scope_for(identity: Optional[str], role_id: Optional[str] = None):
+    """
+    Module-level shorthand for the scope half.
+
+    Routers ask `auth.scope_of(request)`, which carries both facts about a
+    caller so neither can be dropped — see
+    `test_access.py::test_every_scope_lookup_passes_an_identity`.
+    """
+    return STORE.scope_for(identity, role_id)
