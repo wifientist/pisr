@@ -3,7 +3,7 @@ The RUCKUS ONE client, built from .env instead of from a database row.
 
 Replaces rtools2's `clients/r1_client.py`, which looked a controller up by id,
 checked that the requesting user owned it, and Fernet-decrypted its credentials.
-Standalone PISR has one controller, no users and no encryption, so all three
+Standalone PRISM has one controller, no users and no encryption, so all three
 collapse into the small functions below.
 """
 
@@ -18,7 +18,7 @@ from r1api.client import R1Client
 
 logger = logging.getLogger(__name__)
 
-# Every RUCKUS ONE id PISR handles — tenant, venue, AP group, network, pool,
+# Every RUCKUS ONE id PRISM handles — tenant, venue, AP group, network, pool,
 # policy — is a 32-character hex string. Verified against a live MSP tenant
 # 2026-09-22: EC ids and venue ids are both plain hex. The pattern below is
 # wider than that on purpose (letters, digits, dash, underscore) so a future
@@ -35,11 +35,11 @@ def require_id(value: str, what: str = "id") -> str:
     {venue_id}"` — so an id carrying a slash or a dot-segment does not name a
     venue, it names a DIFFERENT ENDPOINT. Before this check, any signed-in
     caller, including a plain `user`, could pass
-    `<venue>/aps/<serial>/passwords` and have PISR issue
+    `<venue>/aps/<serial>/passwords` and have PRISM issue
     `GET /venues/<venue>/aps/<serial>/passwords` — the one endpoint CLAUDE.md
     says is never to be called, whose payload is an AP's admin password. The
     shapers and `scrub.py` meant nothing obviously leaked, but "the scrubber
-    caught it" is not the guarantee: PISR promises not to make that call at
+    caught it" is not the guarantee: PRISM promises not to make that call at
     all, and a promise the caller can steer is not a promise.
 
     It is equally a scope question. Scope compares venue ids as strings, so
@@ -47,7 +47,7 @@ def require_id(value: str, what: str = "id") -> str:
 
     Validated HERE rather than in `fetch`, because this is the boundary where
     a value stops being a caller's input and becomes ours; `fetch` is called
-    with ids PISR itself read back from R1.
+    with ids PRISM itself read back from R1.
     """
     if not isinstance(value, str) or not _ID.fullmatch(value):
         # The value is not echoed. It is attacker-controlled and this message

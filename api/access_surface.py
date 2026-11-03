@@ -50,7 +50,7 @@ import sections
 from fastapi.routing import APIRoute
 
 #: Routes whose scope check lives in a helper this file would otherwise have to
-#: follow. `_require_scope` is called by name in pisr_router; batch_router's
+#: follow. `_require_scope` is called by name in prism_router; batch_router's
 #: read routes go through `_readable`, which narrows the record instead.
 _SCOPE_CALLS = ("_require_scope", "scope_of", "_readable", "_require_ec")
 
@@ -74,7 +74,7 @@ def _grants_of(route):
             # and another of its own — `/batch/sweeps` needs `batch.run` from
             # the router AND `msp.batch` from the route — and reporting only
             # one would describe a weaker rule than the app enforces.
-            held.update(getattr(dep.call, "pisr_grants", ()))
+            held.update(getattr(dep.call, "prism_grants", ()))
     return tuple(sorted(held))
 
 

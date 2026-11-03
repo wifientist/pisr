@@ -15,7 +15,7 @@ import { apiFetch } from "@/utils/api";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 /**
- * PISR — Property Installation Status Report.
+ * PRISM — Property Rollout & Installation Status Monitor.
  *
  * A read-only poll of one venue: what got installed, what is online, how it is
  * addressed, what VLANs and PoE it uses, and which SSIDs are demonstrably
@@ -529,7 +529,7 @@ function Finding({ finding }: { finding: any }) {
 
 // ── page ──────────────────────────────────────────────────────
 
-export default function PISR() {
+export default function PRISM() {
   const { activeControllerId, activeControllerType, activeControllerSubtype, controllers } = useAuth();
   const activeController = controllers.find((c) => c.id === activeControllerId);
   const isR1 = activeControllerType === "RuckusONE";
@@ -568,7 +568,7 @@ export default function PISR() {
   // failures when the reader only wants the exceptions.
   const [showPasses, setShowPasses] = useState(true);
 
-  const base = `${API_BASE_URL}/pisr/${activeControllerId}`;
+  const base = `${API_BASE_URL}/prism/${activeControllerId}`;
 
   const qs = useCallback((extra: Record<string, string> = {}) => {
     const params = new URLSearchParams(extra);
@@ -600,7 +600,7 @@ export default function PISR() {
    * Download the report as a PDF.
    *
    * The endpoint re-polls rather than rendering the report already on screen —
-   * PISR stores nothing — so the PDF is its own snapshot and can differ by a
+   * PRISM stores nothing — so the PDF is its own snapshot and can differ by a
    * few clients from a page that has been open a while. Fetched rather than
    * linked so the auth wrapper applies and a failure surfaces as an error
    * instead of a broken download.
@@ -723,7 +723,7 @@ export default function PISR() {
         <Header />
         <Card title="Pick a RUCKUS ONE controller">
           <p className="text-sm text-gray-600">
-            PISR reports on a RUCKUS ONE venue. The active controller is{" "}
+            PRISM reports on a RUCKUS ONE venue. The active controller is{" "}
             {activeController ? `${activeController.name} (${activeControllerType})` : "not set"}.
             Choose an R1 controller on the Controllers page to continue.
           </p>
@@ -939,7 +939,7 @@ function Header({ ec, onChangeEc }: { ec?: string | null; onChangeEc?: () => voi
   return (
     <div className="mb-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <h1 className="text-2xl font-bold text-gray-900">PISR</h1>
+        <h1 className="text-2xl font-bold text-gray-900">PRISM</h1>
         <Pill tone="green">Read-only</Pill>
         {ec && (
           <span className="text-sm text-gray-500">
@@ -951,7 +951,7 @@ function Header({ ec, onChangeEc }: { ec?: string | null; onChangeEc?: () => voi
         )}
       </div>
       <p className="text-sm text-gray-500 mt-0.5">
-        Property Installation Status Report — one venue, polled on demand. PISR only reads: it never
+        Property Rollout & Installation Status Monitor — one venue, polled on demand. PRISM only reads: it never
         changes configuration, and it stores nothing between refreshes.
       </p>
     </div>
@@ -1732,7 +1732,7 @@ function Wireless({ report }: { report: any }) {
  * a firmware mismatch is a different person who is probably not on site.
  *
  * It adds no data. Every task is a finding `checks.py` produced or an alarm R1
- * raised, regrouped by `services/pisr/punchlist.py`. If a task is wrong, the
+ * raised, regrouped by `services/prism/punchlist.py`. If a task is wrong, the
  * bug is in the check.
  */
 /**
@@ -2569,7 +2569,7 @@ function PunchList({ report }: { report: any }) {
  * RUCKUS ONE's own live alarms for this venue.
  *
  * Sits beside Verification rather than inside it, and the distinction is the
- * point: Verification is PISR's opinion about whether the install looks
+ * point: Verification is PRISM's opinion about whether the install looks
  * finished, this is the platform's opinion about whether the venue is healthy
  * right now. They disagree usefully — a venue can pass every check here while
  * R1 is shouting about an AP that dropped off an hour ago, or be quiet on R1
@@ -2595,7 +2595,7 @@ function Incidents({ report }: { report: any }) {
     <Card id="overview.incidents"
           title={`RUCKUS ONE alarms (${fmtNum(incidents.total || 0)})`}
           icon={<Siren size={17} className="text-gray-400" />}
-          hint="Raised by R1 itself, not by PISR's checks. Active alarms only —
+          hint="Raised by R1 itself, not by PRISM's checks. Active alarms only —
                 R1 does not expose a cleared or acknowledged state here.">
       {!rows.length ? (
         <p className="text-sm text-green-700">
@@ -4090,7 +4090,7 @@ function Sources({ meta }: { meta: any }) {
         </div>
       )}
       <button onClick={() => setOpen(!open)} className="text-xs text-gray-500 hover:text-gray-800">
-        {open ? "Hide" : "Show"} what PISR read ({meta?.sources?.length || 0} endpoints, all read-only)
+        {open ? "Hide" : "Show"} what PRISM read ({meta?.sources?.length || 0} endpoints, all read-only)
       </button>
       {open && (
         <div className="mt-2 border border-gray-200 rounded-lg p-3 bg-gray-50">

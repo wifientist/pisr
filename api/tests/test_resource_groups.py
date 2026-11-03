@@ -250,7 +250,7 @@ def test_an_admin_with_no_group_is_refused_venues():
 def test_passphrase_mode_never_fails_closed():
     """
     That mode has no identities, so no assignment can ever match. Applying the
-    reversal there would leave PISR's DEFAULT auth mode showing every user
+    reversal there would leave PRISM's DEFAULT auth mode showing every user
     nothing, for ever, with no screen that could repair it.
     """
     store = _store(resourceGroups={"north": NORTH})
@@ -292,8 +292,8 @@ def test_the_builtin_is_not_written_back():
 
 def test_the_rollback_shadow_is_written_and_is_never_wider():
     """
-    Groups ride under a key an older PISR cannot see, so the territory they
-    resolve to is ALSO written where that older PISR already looks. Without
+    Groups ride under a key an older PRISM cannot see, so the territory they
+    resolve to is ALSO written where that older PRISM already looks. Without
     it a rollback reads "no scope entry" as unrestricted, which is the one
     direction this control must never fail in.
     """
@@ -309,7 +309,7 @@ def test_the_rollback_shadow_is_written_and_is_never_wider():
     assert shadow["ecs"]["tenantA"] == "*", "the shadow lost a customer"
     assert sorted(shadow["ecs"]["tenantB"]) == ["v1", "v2"]
 
-    # all-access resolves to "no restriction", which is what an older PISR
+    # all-access resolves to "no restriction", which is what an older PRISM
     # would already have done for somebody with no entry. Nothing is given
     # away by it, and writing an id list instead would be NARROWER than the
     # group and would go stale.

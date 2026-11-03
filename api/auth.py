@@ -1,7 +1,7 @@
 """
-The gate in front of PISR.
+The gate in front of PRISM.
 
-Two modes, chosen with PISR_AUTH_MODE. Both gate the same paths; they differ
+Two modes, chosen with PRISM_AUTH_MODE. Both gate the same paths; they differ
 only in what counts as proof.
 
 PASSPHRASE MODE (default). One shared passphrase, exchanged once for a signed
@@ -22,18 +22,18 @@ you trust.
 PROXY MODE. The SSO story, and deliberately the smaller half of it. An
 authenticating reverse proxy in front — oauth2-proxy against Entra, Okta or
 Google Workspace — does the whole OIDC dance and forwards the caller's identity
-in a header. PISR reads the header. It validates no tokens, fetches no JWKS,
+in a header. PRISM reads the header. It validates no tokens, fetches no JWKS,
 holds no client secret and has no callback route, because implementing OIDC in
 a read-only reporting tool is how you acquire a security surface you did not
 need. Swapping modes is a compose change, not a code change.
 
-  THE HEADER IS A CLAIM, NOT PROOF. Anyone who can open a socket to PISR can
+  THE HEADER IS A CLAIM, NOT PROOF. Anyone who can open a socket to PRISM can
   send `X-Forwarded-Email: someone.important@corp.example`. Two things stop
   that, and you need both:
 
-    1. PISR_TRUSTED_PROXY_IPS — required in proxy mode, no default. Only these
+    1. PRISM_TRUSTED_PROXY_IPS — required in proxy mode, no default. Only these
        source addresses are believed. Checked below in `_proxy_identity`.
-    2. The port binding. Publish PISR on loopback or on the proxy's own Docker
+    2. The port binding. Publish PRISM on loopback or on the proxy's own Docker
        network, never on 0.0.0.0. Compose cannot enforce this from in here,
        which is why it is said twice.
 
@@ -49,7 +49,7 @@ second gate — both roles are fully authenticated, and the difference between
 them is which cards a report contains, never whether they may have one.
 
   In PROXY mode the role comes from the verified identity against
-  PISR_ADMIN_EMAILS. That is the real deployment, and it is the only one where
+  PRISM_ADMIN_EMAILS. That is the real deployment, and it is the only one where
   the role means anything durable: revoking someone is an env change, and the
   assertion is signed, so the role cannot be asserted by the caller.
 
@@ -67,7 +67,7 @@ them is which cards a report contains, never whether they may have one.
 ACCOUNTS MODE. Local per-person logins, added when Cloudflare Access stopped
 being usable — its one-time-PIN mail is silently discarded by two of three
 customer domains, and every mail-based scheme inherits that failure. An admin
-creates an account, PISR mints a single-use enrolment link, and the admin
+creates an account, PRISM mints a single-use enrolment link, and the admin
 delivers it OUT OF BAND. Nothing has to arrive by email at the moment somebody
 is trying to sign in. See `api/accounts.py` for the store and the argument
 about what it is allowed to hold.
@@ -89,18 +89,18 @@ about what it is allowed to hold.
   is load-bearing rather than a nicety — read its comment before changing it.
 
   NO BREAK-GLASS, AND THAT WAS A DELIBERATE REMOVAL. This mode once honoured
-  PISR_AUTH_ADMIN_PASSPHRASE as an emergency admin, on the argument that
+  PRISM_AUTH_ADMIN_PASSPHRASE as an emergency admin, on the argument that
   accounts live on a volume that could be lost. Two things undid it. The
   lockout it was mainly justified by — deleting the last admin — `accounts.py`
   refuses outright. And every remaining recovery path it offered, the CLI also
-  offers: `pisr_admin.py invite <name>` mints a single-use, expiring link
+  offers: `prism_admin.py invite <name>` mints a single-use, expiring link
   attributed to a named person. The only thing break-glass did that the CLI
   cannot is recover WITHOUT SHELL ACCESS — and rotating a leaked passphrase
   needed shell anyway, so it could not even repair itself.
 
   What it cost was a standing shared secret that bypassed the account system,
   per-person revocation and the audit trail, warned about at every startup by
-  a line nobody reads twice. In this mode PISR_AUTH_ADMIN_PASSPHRASE now
+  a line nobody reads twice. In this mode PRISM_AUTH_ADMIN_PASSPHRASE now
   decides nothing; main.py says so once if it is still set. IT REMAINS THE
   ADMIN DOOR IN PASSPHRASE MODE, which is a different job — there the two
   roles ARE the two secrets.
@@ -139,7 +139,7 @@ if AUTH.access_team and AUTH.access_aud:
     from cf_access import AccessVerifier
     _ACCESS = AccessVerifier(AUTH.access_team, AUTH.access_aud)
 
-COOKIE_NAME = "pisr_session"
+COOKIE_NAME = "prism_session"
 
 # The two roles. Deliberately two: "admin" edits the visibility policy and is
 # never subject to it, "user" is everyone else and sees what the policy allows.
@@ -274,8 +274,8 @@ def _valid_account(token: str) -> Optional[Tuple[str, str]]:
     rotated password and an expired session all mean "sign in again".
 
     THERE IS NO SECOND DOOR. Accounts mode once honoured
-    PISR_AUTH_ADMIN_PASSPHRASE as a break-glass admin; it does not any more.
-    Recovery is `scripts/pisr_admin.py invite <name>`, which mints a
+    PRISM_AUTH_ADMIN_PASSPHRASE as a break-glass admin; it does not any more.
+    Recovery is `scripts/prism_admin.py invite <name>`, which mints a
     single-use, expiring link attributed to a named person — better than a
     standing shared secret on every axis that matters, and the same flow the
     portal's password reset already uses.
@@ -384,8 +384,8 @@ def _client_ip(request: Request) -> str:
     So a forwarded header is read INSTEAD, under two conditions that have to
     hold together:
 
-      * an operator named the header in PISR_CLIENT_IP_HEADER, and
-      * the peer is inside PISR_TRUSTED_PROXY_IPS.
+      * an operator named the header in PRISM_CLIENT_IP_HEADER, and
+      * the peer is inside PRISM_TRUSTED_PROXY_IPS.
 
     Both, because a header on its own is worth nothing: if any peer could set
     it, an attacker would simply vary it per request and never be throttled at
@@ -428,7 +428,7 @@ def _request_is_https(request: Request) -> bool:
     for a connection the user made over HTTPS, and the cookie would go out
     without Secure on exactly the deployments that most need it. So the
     forwarded scheme wins, on the same terms as the forwarded address: only
-    from a peer inside PISR_TRUSTED_PROXY_IPS. An untrusted peer's header is
+    from a peer inside PRISM_TRUSTED_PROXY_IPS. An untrusted peer's header is
     ignored, which can only ever err towards marking the cookie Secure less
     often, never towards trusting a plaintext hop.
     """
@@ -634,7 +634,7 @@ def _proxy_identity(request: Request) -> Optional[str]:
         logger.warning(
             "No valid Cloudflare Access assertion on a request to %s. The "
             "header is %s; check Access is in front of this hostname and that "
-            "PISR_ACCESS_AUD matches this application's Audience Tag.",
+            "PRISM_ACCESS_AUD matches this application's Audience Tag.",
             request.url.path, _ACCESS_HEADER)
         return None
 
@@ -645,7 +645,7 @@ def _proxy_identity(request: Request) -> Optional[str]:
         if claimed:
             logger.warning(
                 "Rejected %s asserted from %s, which is not in "
-                "PISR_TRUSTED_PROXY_IPS. Either the proxy moved, or something "
+                "PRISM_TRUSTED_PROXY_IPS. Either the proxy moved, or something "
                 "is forging identity headers.", AUTH.proxy_header, ip)
         return None
 
@@ -661,7 +661,7 @@ def _proxy_identity(request: Request) -> Optional[str]:
 
 def _role_for_identity(identity: Optional[str]) -> str:
     """
-    Admin or user, for a caller PISR actually knows the name of.
+    Admin or user, for a caller PRISM actually knows the name of.
 
     Case-folded on both sides. An identity provider's idea of an address's case
     is not stable — Entra will hand back the casing a user typed at enrolment —
@@ -722,7 +722,7 @@ def resolve_principal(request: Request) -> Optional[Principal]:
     drift.
     """
     if not AUTH.enabled:
-        # PISR_AUTH_DISABLED. One caller, who is standing at the machine;
+        # PRISM_AUTH_DISABLED. One caller, who is standing at the machine;
         # giving them the user role would hide sections from the only person
         # in a position to unhide them, and withholding a capability would hide
         # the feature from the only person who could turn it on.
@@ -733,7 +733,7 @@ def resolve_principal(request: Request) -> Optional[Principal]:
         if not identity:
             return None
         # Proxy mode has an identity but no account record, so the role
-        # assignment lives in the policy's per-person map. PISR_ADMIN_EMAILS
+        # assignment lives in the policy's per-person map. PRISM_ADMIN_EMAILS
         # is the fallback for anybody it does not name, which keeps an SSO
         # deployment working before anybody has assigned a single role.
         import visibility
@@ -768,7 +768,7 @@ def role_of(request: Request) -> str:
     that can be seen — for the case that should not happen, a gated route
     somehow reached without the middleware having run.
     """
-    return getattr(request.state, "pisr_role", None) or ROLE_USER
+    return getattr(request.state, "prism_role", None) or ROLE_USER
 
 
 def generated_by(request: Request) -> str:
@@ -779,7 +779,7 @@ def generated_by(request: Request) -> str:
     says which door was used rather than inventing a person. The role is the
     one the gate decided, so nobody is labelled an admin who is not one.
     """
-    return (getattr(request.state, "pisr_user", None)
+    return (getattr(request.state, "prism_user", None)
             or f"{role_of(request)} (shared passphrase)")
 
 
@@ -829,14 +829,14 @@ def require_grants(*needed: str) -> Callable[[Request], str]:
 
     # So `test_access.py` can read the surface back off the app.
     dependency.__name__ = "require_grants"
-    dependency.pisr_grants = tuple(sorted(wanted))
+    dependency.prism_grants = tuple(sorted(wanted))
     return dependency
 
 
 #: Reaching the admin portals. A plain alias so the seventeen call sites that
 #: said `require_admin` still read naturally — it is the same check every other
 #: route makes, against a capability that happens to be about administering
-#: PISR rather than about reading a customer's network.
+#: PRISM rather than about reading a customer's network.
 require_admin = require_grants(grants.GRANT_ADMIN_PORTAL)
 
 
@@ -850,7 +850,7 @@ def role_id_of(request: Request) -> str:
     the least that can be done — for the case that should not happen, a gated
     route somehow reached without the middleware having run.
     """
-    return getattr(request.state, "pisr_role", None) or ROLE_USER
+    return getattr(request.state, "prism_role", None) or ROLE_USER
 
 
 def grants_of(request: Request) -> FrozenSet[str]:
@@ -865,7 +865,7 @@ def grants_of(request: Request) -> FrozenSet[str]:
     """
     import visibility
     return visibility.grants_for(
-        getattr(request.state, "pisr_user", None), role_id_of(request))
+        getattr(request.state, "prism_user", None), role_id_of(request))
 
 
 def hidden_of(request: Request):
@@ -879,7 +879,7 @@ def hidden_of(request: Request):
     direction even for a control that fails open.
     """
     import visibility
-    return visibility.hidden_for(getattr(request.state, "pisr_user", None),
+    return visibility.hidden_for(getattr(request.state, "prism_user", None),
                                  role_id_of(request))
 
 
@@ -926,7 +926,7 @@ def scope_of(request: Request):
     of it loads.
     """
     import visibility
-    return visibility.scope_for(getattr(request.state, "pisr_user", None),
+    return visibility.scope_for(getattr(request.state, "prism_user", None),
                                 role_id_of(request))
 
 
@@ -934,7 +934,7 @@ def proxy_preview(request: Request) -> dict:
     """
     What proxy mode WOULD make of this request, deciding nothing.
 
-    Switching PISR_AUTH_MODE to proxy turns the passphrase off completely. Get
+    Switching PRISM_AUTH_MODE to proxy turns the passphrase off completely. Get
     it wrong — a proxy not forwarding the header, the wrong header name, a
     trusted-proxy list naming an address that is not really the peer — and
     every caller gets a 401 with no way to authenticate, including whoever
@@ -994,7 +994,7 @@ def proxy_preview(request: Request) -> dict:
 # ── Middleware ───────────────────────────────────────────────────────
 
 def _denied(message: str) -> JSONResponse:
-    # Both keys for the same reason main.py's handler emits both: PISR.tsx
+    # Both keys for the same reason main.py's handler emits both: PRISM.tsx
     # reads `detail`, useSingleEc.tsx reads `error`.
     return JSONResponse(status_code=401,
                         content={"detail": message, "error": message})
@@ -1024,14 +1024,14 @@ class SessionGateMiddleware(BaseHTTPMiddleware):
             return _denied("Not signed in — no identity from the proxy."
                            if AUTH.mode == "proxy" else "Not signed in.")
 
-        # Read back by pisr_router to name who ran a report. This is the audit
+        # Read back by prism_router to name who ran a report. This is the audit
         # trail that a shared passphrase cannot give you.
-        request.state.pisr_user = principal.identity
+        request.state.prism_user = principal.identity
         # And read back by every route that renders a report, to decide which
         # sections that report is allowed to contain. Set HERE rather than in
         # each route so that a router added later is role-aware by existing,
         # the same way it is gated by existing.
-        request.state.pisr_role = principal.role
+        request.state.prism_role = principal.role
         # Same argument, for features. A grant-gated router added later reads
         # these through `grants_of` and never re-resolves them.
         return await call_next(request)
@@ -1069,7 +1069,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "form-action 'self'; "
             "frame-ancestors 'none'")
 
-    # PISR asks for none of these, so all of them are denied outright — the
+    # PRISM asks for none of these, so all of them are denied outright — the
     # point being that a compromised or injected bundle cannot ask either.
     # The list is broad because the app's own use of browser APIs is nil: it
     # renders a report and downloads a PDF, and neither touches a device, a
@@ -1104,7 +1104,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "X-Frame-Options": "DENY",
         # Nothing here is meant to be opened by, or opened into, another
         # origin. same-origin severs window.opener both ways, so a page that
-        # somehow opens PISR cannot reach into it.
+        # somehow opens PRISM cannot reach into it.
         "Cross-Origin-Opener-Policy": "same-origin",
         # And nothing here is meant to be embedded elsewhere — no image, no
         # script, no JSON. This is the resource-level counterpart to
@@ -1126,7 +1126,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # addresses and SSIDs, and a roll-up PDF names their venues; with no
         # cache header at all a browser is free to keep either on disk, where
         # it outlives the session, the sign-out and the person's involvement
-        # with the account. PISR going to the trouble of storing no report
+        # with the account. PRISM going to the trouble of storing no report
         # server-side means little if the browser quietly keeps one.
         #
         # This does NOT cover the PDF a person deliberately downloads — that
@@ -1137,7 +1137,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # HSTS only on a connection that was actually HTTPS. Sent over plain
         # HTTP it is ignored by a browser, but sent from a LAN deployment on
-        # http://<ip>:8090 it would be a promise PISR cannot keep.
+        # http://<ip>:8090 it would be a promise PRISM cannot keep.
         if _request_is_https(request):
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -1171,7 +1171,7 @@ class PasswordBody(BaseModel):
 
 def _write_session_cookie(response: Response, request: Request, token: str) -> None:
     # Secure is set whenever the request arrived over HTTPS, whatever the
-    # config says; PISR_COOKIE_SECURE=1 forces it on for the case where a
+    # config says; PRISM_COOKIE_SECURE=1 forces it on for the case where a
     # deployment knows it is behind TLS that this process cannot see.
     #
     # Not defaulted to True outright: a browser refuses to store a Secure
@@ -1249,7 +1249,7 @@ async def auth_status(request: Request):
             "features": shown,
             "roleLabel": (assigned.label if assigned else None),
             # oauth2-proxy's own sign-out, if the operator pointed us at it.
-            # PISR cannot end an SSO session itself — it never held one.
+            # PRISM cannot end an SSO session itself — it never held one.
             "logoutUrl": AUTH.proxy_logout_url or None,
         }
 
@@ -1367,7 +1367,7 @@ def _login_with_account(body: LoginBody, request: Request, ip: str):
     """
     Accounts mode's sign-in. A username and a password, and nothing else.
 
-    THERE IS NO SECOND DOOR HERE ANY MORE. PISR_AUTH_ADMIN_PASSPHRASE used to
+    THERE IS NO SECOND DOOR HERE ANY MORE. PRISM_AUTH_ADMIN_PASSPHRASE used to
     open one, on the argument that accounts live on a volume that could be
     lost. It bought one thing that the CLI does not — recovery WITHOUT SHELL
     ACCESS — and cost a standing shared secret that bypassed the account
@@ -1375,7 +1375,7 @@ def _login_with_account(body: LoginBody, request: Request, ip: str):
     rotated by editing the env file on the box, which needs the shell access
     it existed to avoid.
 
-    Recovery is `scripts/pisr_admin.py invite <name>`: a single-use, expiring
+    Recovery is `scripts/prism_admin.py invite <name>`: a single-use, expiring
     link attributed to a named person, which is the same flow the portal's own
     password reset uses. The lockout it was mainly justified by — deleting the
     last admin — `accounts.py` refuses outright in three places.
@@ -1568,7 +1568,7 @@ async def change_password(body: PasswordBody, request: Request):
 
     import accounts
 
-    identity = getattr(request.state, "pisr_user", None)
+    identity = getattr(request.state, "prism_user", None)
     account = accounts.STORE.by_username(identity or "")
     if account is None:
         raise HTTPException(status_code=404, detail="No such account.")

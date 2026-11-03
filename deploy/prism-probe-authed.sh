@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 #
-# Probe PISR as a signed-in ORDINARY USER, trying to reach what they should not.
+# Probe PRISM as a signed-in ORDINARY USER, trying to reach what they should not.
 #
-# The companion to pisr-probe-auth.sh. That one asks what a stranger can reach;
+# The companion to prism-probe-auth.sh. That one asks what a stranger can reach;
 # this one asks what somebody who legitimately holds a `user` session can reach
 # by asking for things that are not theirs — another customer's tenant, an
 # admin route, a venue outside their scope, an id they made up.
 #
-#   PISR_PROBE_CREDS=~/probe.creds ./pisr-probe-authed.sh https://pisr.example.com
+#   PRISM_PROBE_CREDS=~/probe.creds ./prism-probe-authed.sh https://prism.example.com
 #
-# where ~/probe.creds holds PISR_PROBE_USER= and PISR_PROBE_PASS= lines. Or
+# where ~/probe.creds holds PRISM_PROBE_USER= and PRISM_PROBE_PASS= lines. Or
 # pass them in the environment directly:
 #
-#   PISR_PROBE_USER=testuser PISR_PROBE_PASS='...' \
-#     ./pisr-probe-authed.sh https://pisr.example.com
+#   PRISM_PROBE_USER=testuser PRISM_PROBE_PASS='...' \
+#     ./prism-probe-authed.sh https://prism.example.com
 #
 # Optionally, admin credentials as well. They are used READ-ONLY, to learn what
 # the policy actually says so the user's view can be checked against it —
 # which EC exists that this user should NOT see, and which sections are hidden:
 #
-#   PISR_PROBE_ADMIN_USER=... PISR_PROBE_ADMIN_PASS=... \
-#   PISR_PROBE_USER=... PISR_PROBE_PASS=... ./pisr-probe-authed.sh <url>
+#   PRISM_PROBE_ADMIN_USER=... PRISM_PROBE_ADMIN_PASS=... \
+#   PRISM_PROBE_USER=... PRISM_PROBE_PASS=... ./prism-probe-authed.sh <url>
 #
 # CREDENTIALS COME FROM THE ENVIRONMENT, never argv — argv is visible in `ps`
 # and lands in shell history. Prefix the command rather than exporting, and
@@ -48,27 +48,32 @@
 
 set -uo pipefail
 
+# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
+_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# shellcheck source=legacy-names.sh
+[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
+
 BASE="${1:-}"
-[ -n "$BASE" ] || { echo "usage: PISR_PROBE_USER=... PISR_PROBE_PASS=... $0 <base-url>" >&2; exit 2; }
+[ -n "$BASE" ] || { echo "usage: PRISM_PROBE_USER=... PRISM_PROBE_PASS=... $0 <base-url>" >&2; exit 2; }
 BASE="${BASE%/}"
 # One file holding everything, which is the usual way to run this:
 #
-#   PISR_PROBE_CREDS=~/probe.creds ./pisr-probe-authed.sh <url>
+#   PRISM_PROBE_CREDS=~/probe.creds ./prism-probe-authed.sh <url>
 #
 #   # ~/probe.creds
-#   PISR_PROBE_USER=probeuser
-#   PISR_PROBE_PASS=whatever-you-set
-#   PISR_PROBE_ADMIN_USER=probeadmin      # optional
-#   PISR_PROBE_ADMIN_PASS=whatever        # optional
+#   PRISM_PROBE_USER=probeuser
+#   PRISM_PROBE_PASS=whatever-you-set
+#   PRISM_PROBE_ADMIN_USER=probeadmin      # optional
+#   PRISM_PROBE_ADMIN_PASS=whatever        # optional
 #
 # PARSED, NOT SOURCED. Sourcing would execute whatever is in the file, and a
 # credentials file is exactly the thing somebody pastes into without reading.
 # Splitting on the first `=` also means a password may contain `=` freely.
-if [ -n "${PISR_PROBE_CREDS:-}" ]; then
-  [ -r "$PISR_PROBE_CREDS" ] || { echo "cannot read $PISR_PROBE_CREDS" >&2; exit 2; }
+if [ -n "${PRISM_PROBE_CREDS:-}" ]; then
+  [ -r "$PRISM_PROBE_CREDS" ] || { echo "cannot read $PRISM_PROBE_CREDS" >&2; exit 2; }
   while IFS='=' read -r _k _v; do
     # Trim BOTH ends of the key. Only the leading end was trimmed before, so
-    # `PISR_PROBE_ADMIN_PASS = x` produced a key with a trailing space, matched
+    # `PRISM_PROBE_ADMIN_PASS = x` produced a key with a trailing space, matched
     # nothing, and left the password empty — which the server then answered
     # with a 401 that looked like wrong credentials.
     _k="${_k#"${_k%%[![:space:]]*}"}"
@@ -83,49 +88,49 @@ if [ -n "${PISR_PROBE_CREDS:-}" ]; then
     # An inline `#` is NOT treated as a comment, because a password may contain
     # one. Comments must be on their own line.
     case "$_k" in
-      PISR_PROBE_USER)       PISR_PROBE_USER="$_v" ;;
-      PISR_PROBE_PASS)       PISR_PROBE_PASS="$_v" ;;
-      PISR_PROBE_ADMIN_USER) PISR_PROBE_ADMIN_USER="$_v" ;;
-      PISR_PROBE_ADMIN_PASS) PISR_PROBE_ADMIN_PASS="$_v" ;;
-      *) printf '  \033[33mnote\033[0m  ignoring unknown key %s in %s\n' "$_k" "$PISR_PROBE_CREDS" ;;
+      PRISM_PROBE_USER|PISR_PROBE_USER)       PRISM_PROBE_USER="$_v" ;;
+      PRISM_PROBE_PASS|PISR_PROBE_PASS)       PRISM_PROBE_PASS="$_v" ;;
+      PRISM_PROBE_ADMIN_USER|PISR_PROBE_ADMIN_USER) PRISM_PROBE_ADMIN_USER="$_v" ;;
+      PRISM_PROBE_ADMIN_PASS|PISR_PROBE_ADMIN_PASS) PRISM_PROBE_ADMIN_PASS="$_v" ;;
+      *) printf '  \033[33mnote\033[0m  ignoring unknown key %s in %s\n' "$_k" "$PRISM_PROBE_CREDS" ;;
     esac
-  done < "$PISR_PROBE_CREDS"
+  done < "$PRISM_PROBE_CREDS"
   unset _k _v
 
-  # PISR_PROBE_DEBUG=1 shows what was parsed WITHOUT printing any password:
+  # PRISM_PROBE_DEBUG=1 shows what was parsed WITHOUT printing any password:
   # the username in full, and the passwords as lengths. A length of 0, or one
   # that is not what you typed, is the answer.
-  if [ -n "${PISR_PROBE_DEBUG:-}" ]; then
+  if [ -n "${PRISM_PROBE_DEBUG:-}" ]; then
     printf '  parsed user=%s pass=%s chars | admin=%s pass=%s chars\n' \
-      "${PISR_PROBE_USER:-(unset)}" "${#PISR_PROBE_PASS}" \
-      "${PISR_PROBE_ADMIN_USER:-(unset)}" "${#PISR_PROBE_ADMIN_PASS}"
+      "${PRISM_PROBE_USER:-(unset)}" "${#PRISM_PROBE_PASS}" \
+      "${PRISM_PROBE_ADMIN_USER:-(unset)}" "${#PRISM_PROBE_ADMIN_PASS}"
   fi
   # Said once, not enforced: these are meant to be throwaway accounts you
   # delete afterwards, so this is a reminder rather than a rule.
-  case "$(ls -l "$PISR_PROBE_CREDS" 2>/dev/null | cut -c5-10)" in
+  case "$(ls -l "$PRISM_PROBE_CREDS" 2>/dev/null | cut -c5-10)" in
     ------) ;;
     *) printf '  \033[33mnote\033[0m  %s is readable by others; chmod 600 it.\n' \
-              "$PISR_PROBE_CREDS" ;;
+              "$PRISM_PROBE_CREDS" ;;
   esac
 fi
 
 # Or the <NAME>_FILE convention config.py uses for every other secret.
-[ -n "${PISR_PROBE_PASS_FILE:-}" ] && \
-  PISR_PROBE_PASS="$(tr -d '\r\n' < "$PISR_PROBE_PASS_FILE")"
-[ -n "${PISR_PROBE_ADMIN_PASS_FILE:-}" ] && \
-  PISR_PROBE_ADMIN_PASS="$(tr -d '\r\n' < "$PISR_PROBE_ADMIN_PASS_FILE")"
+[ -n "${PRISM_PROBE_PASS_FILE:-}" ] && \
+  PRISM_PROBE_PASS="$(tr -d '\r\n' < "$PRISM_PROBE_PASS_FILE")"
+[ -n "${PRISM_PROBE_ADMIN_PASS_FILE:-}" ] && \
+  PRISM_PROBE_ADMIN_PASS="$(tr -d '\r\n' < "$PRISM_PROBE_ADMIN_PASS_FILE")"
 
-# A username PISR could never issue means the creds file did not parse the way
+# A username PRISM could never issue means the creds file did not parse the way
 # you meant. Usernames are [a-z0-9][a-z0-9._-]{1,31} — no spaces, no '#' — so
 # anything else here is an inline comment or stray text that got swept into the
 # value, which otherwise surfaces much later as an unexplained 401.
-for _pair in "user:${PISR_PROBE_USER:-}" "admin:${PISR_PROBE_ADMIN_USER:-}"; do
+for _pair in "user:${PRISM_PROBE_USER:-}" "admin:${PRISM_PROBE_ADMIN_USER:-}"; do
   _who="${_pair%%:*}"; _name="${_pair#*:}"
   [ -z "$_name" ] && continue
   case "$_name" in
     *[!a-z0-9._-]*)
       printf '  \033[31mFAIL\033[0m  the %s username parsed as %s\n' "$_who" "$(printf '%q' "$_name")" >&2
-      printf '        That is not a username PISR can issue. Almost always an\n' >&2
+      printf '        That is not a username PRISM can issue. Almost always an\n' >&2
       printf '        inline comment in the creds file — comments must be on\n' >&2
       printf '        their own line, because a password may contain a "#".\n' >&2
       exit 2 ;;
@@ -133,11 +138,11 @@ for _pair in "user:${PISR_PROBE_USER:-}" "admin:${PISR_PROBE_ADMIN_USER:-}"; do
 done
 unset _pair _who _name
 
-: "${PISR_PROBE_USER:?set PISR_PROBE_USER}"
-: "${PISR_PROBE_PASS:?set PISR_PROBE_PASS (or PISR_PROBE_PASS_FILE)}"
+: "${PRISM_PROBE_USER:?set PRISM_PROBE_USER}"
+: "${PRISM_PROBE_PASS:?set PRISM_PROBE_PASS (or PRISM_PROBE_PASS_FILE)}"
 
-ADMIN_USER="${PISR_PROBE_ADMIN_USER:-}"
-ADMIN_PASS="${PISR_PROBE_ADMIN_PASS:-}"
+ADMIN_USER="${PRISM_PROBE_ADMIN_USER:-}"
+ADMIN_PASS="${PRISM_PROBE_ADMIN_PASS:-}"
 
 TMPD="$(mktemp -d)"; JAR="$TMPD/user.jar"; AJAR="$TMPD/admin.jar"
 cleanup() { rm -rf "$TMPD"; }
@@ -207,20 +212,20 @@ gated() {  # gated <label> <code>
   esac
 }
 
-printf '\033[1mProbing %s as %s\033[0m\n' "$BASE" "$PISR_PROBE_USER"
+printf '\033[1mProbing %s as %s\033[0m\n' "$BASE" "$PRISM_PROBE_USER"
 
 # ── Sign in ──────────────────────────────────────────────────────────
 head_ "Session"
-c="$(login "$JAR" "$PISR_PROBE_USER" "$PISR_PROBE_PASS")"
-[ "$c" = "204" ] || { bad "could not sign in as $PISR_PROBE_USER (HTTP $c)"; exit 1; }
+c="$(login "$JAR" "$PRISM_PROBE_USER" "$PRISM_PROBE_PASS")"
+[ "$c" = "204" ] || { bad "could not sign in as $PRISM_PROBE_USER (HTTP $c)"; exit 1; }
 ok "signed in"
 
 # Cookie flags. The unauthenticated probe never obtains a real session, so this
 # is the only place they are ever verified.
-SC="$(_login_body "$PISR_PROBE_USER" "$PISR_PROBE_PASS" \
+SC="$(_login_body "$PRISM_PROBE_USER" "$PRISM_PROBE_PASS" \
       | curl -s -D - -o /dev/null --max-time 25 -X POST "$BASE/api/login" \
           -H 'Content-Type: application/json' --data-binary @- \
-      | grep -i '^set-cookie: *pisr_session' | tr -d '\r')"
+      | grep -i '^set-cookie: *prism_session' | tr -d '\r')"
 printf '%s' "$SC" | grep -qi 'httponly' \
   && ok "cookie is HttpOnly" || bad "cookie is NOT HttpOnly — an XSS could read the session"
 printf '%s' "$SC" | grep -qi 'samesite=lax' \
@@ -228,7 +233,7 @@ printf '%s' "$SC" | grep -qi 'samesite=lax' \
 case "$BASE" in
   https://*) printf '%s' "$SC" | grep -qi 'secure' \
       && ok "cookie is Secure" \
-      || bad "cookie lacks Secure on an HTTPS origin — set PISR_COOKIE_SECURE=1" ;;
+      || bad "cookie lacks Secure on an HTTPS origin — set PRISM_COOKIE_SECURE=1" ;;
   *) note "plain HTTP — Secure deliberately not set" ;;
 esac
 
@@ -249,7 +254,7 @@ if [ "$(code "$JAR.copy" GET /api/status)" = "200" ]; then
 else
   ok "the session did not survive logout"
 fi
-login "$JAR" "$PISR_PROBE_USER" "$PISR_PROBE_PASS" >/dev/null   # sign back in
+login "$JAR" "$PRISM_PROBE_USER" "$PRISM_PROBE_PASS" >/dev/null   # sign back in
 
 CID="$(bodyof "$JAR" /api/config | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
 CID="${CID:-1}"
@@ -296,10 +301,10 @@ if [ -n "$ADMIN_USER" ]; then
     204) ADMIN_OK=yes ;;
     401) bad "admin credentials were supplied but REJECTED (401)."
          note "Three things to check, in order:"
-         note "  1. is the account ENROLLED? \`pisr_admin.py list\` shows its state —"
+         note "  1. is the account ENROLLED? \`prism_admin.py list\` shows its state —"
          note "     an account created but never enrolled has no password and 401s."
          note "  2. is it disabled? same listing."
-         note "  3. re-run with PISR_PROBE_DEBUG=1 to see the parsed password LENGTH"
+         note "  3. re-run with PRISM_PROBE_DEBUG=1 to see the parsed password LENGTH"
          note "     (never the value). A length of 0 means the creds file did not parse." ;;
     429) bad "admin login was throttled (429). Wait ~5 minutes and re-run; "\
              "the checks needing admin are skipped." ;;
@@ -321,10 +326,10 @@ case "$SCOPED" in
 esac
 
 FAKE_EC="00000000000000000000000000000000"
-for p in "/api/pisr/$CID/venues?tenant_id=$FAKE_EC" \
-         "/api/pisr/$CID/report?tenant_id=$FAKE_EC&venue_id=$FAKE_EC" \
-         "/api/pisr/$CID/report.pdf?tenant_id=$FAKE_EC&venue_id=$FAKE_EC" \
-         "/api/pisr/$CID/config/detail?tenant_id=$FAKE_EC&venue_id=$FAKE_EC"; do
+for p in "/api/prism/$CID/venues?tenant_id=$FAKE_EC" \
+         "/api/prism/$CID/report?tenant_id=$FAKE_EC&venue_id=$FAKE_EC" \
+         "/api/prism/$CID/report.pdf?tenant_id=$FAKE_EC&venue_id=$FAKE_EC" \
+         "/api/prism/$CID/config/detail?tenant_id=$FAKE_EC&venue_id=$FAKE_EC"; do
   c="$(code "$JAR" GET "$p")"; short="${p%%\?*}"
   case "$c" in
     403) ok "$short with a foreign tenant -> 403" ;;
@@ -346,7 +351,7 @@ if [ -n "$ADMIN_OK" ]; then
     ALL="$(bodyof "$AJAR" "/api/r1/$CID/msp/mspEcs")"
     for ec in $(printf '%s' "$ALL" | grep -o '"id":"[0-9a-f]\{16,\}"' | cut -d'"' -f4); do
       printf '%s' "$MINE" | grep -q "$ec" && continue
-      c="$(code "$JAR" GET "/api/pisr/$CID/venues?tenant_id=$ec")"
+      c="$(code "$JAR" GET "/api/prism/$CID/venues?tenant_id=$ec")"
       case "$c" in
         403) ok "a REAL EC the user cannot see -> 403 (${ec:0:12}…)" ;;
         200) bad "a REAL EC the user cannot see -> 200 ** another customer's data **" ;;
@@ -359,7 +364,7 @@ fi
 
 # ── Injection, traversal, and made-up ids ────────────────────────────
 #
-# PISR has no database, so the realistic targets are the R1 client and the
+# PRISM has no database, so the realistic targets are the R1 client and the
 # Jinja template behind the PDF — not SQL. Nothing here should return 200, and
 # nothing should return 500: a 500 means the input reached something that did
 # not expect it.
@@ -389,10 +394,10 @@ for v in "${payloads[@]}"; do
   if [ -n "$MY_EC" ]; then
     c="$(curl -s -o "$out" -w '%{http_code}' --max-time 60 -g -b "$JAR" -G \
       --data-urlencode "venue_id=$v" --data-urlencode "tenant_id=$MY_EC" \
-      "$BASE/api/pisr/$CID/report")"
+      "$BASE/api/prism/$CID/report")"
   else
     c="$(curl -s -o "$out" -w '%{http_code}' --max-time 60 -g -b "$JAR" -G \
-      --data-urlencode "venue_id=$v" "$BASE/api/pisr/$CID/report")"
+      --data-urlencode "venue_id=$v" "$BASE/api/prism/$CID/report")"
   fi
   label="$(printf '%s' "$v" | cut -c1-28)"
 
@@ -425,9 +430,9 @@ done
 # The PDF route takes a `label` rendered into the document. This cannot read the
 # rendered text, so it checks only that nothing errors.
 if [ -n "$MY_EC" ]; then
-  c="$(code_q "$JAR" "/api/pisr/$CID/report.pdf" venue_id x label '{{7*7}}' tenant_id "$MY_EC")"
+  c="$(code_q "$JAR" "/api/prism/$CID/report.pdf" venue_id x label '{{7*7}}' tenant_id "$MY_EC")"
 else
-  c="$(code_q "$JAR" "/api/pisr/$CID/report.pdf" venue_id x label '{{7*7}}')"
+  c="$(code_q "$JAR" "/api/prism/$CID/report.pdf" venue_id x label '{{7*7}}')"
 fi
 case "$c" in
   400|403|404|422) ok "PDF label={{7*7}} -> $c" ;;
@@ -438,7 +443,7 @@ esac
 # The controller id is in the path; a different one must not become somebody
 # else's tenant.
 for cid in 0 999 -1 abc; do
-  c="$(code "$JAR" GET "/api/pisr/$cid/venues")"
+  c="$(code "$JAR" GET "/api/prism/$cid/venues")"
   case "$c" in
     200) bad "controller_id=$cid -> 200" ;;
     500) bad "controller_id=$cid -> 500" ;;
@@ -449,14 +454,14 @@ done
 # ── What the user is actually served ─────────────────────────────────
 head_ "Data returned to this user"
 
-VENUE="$(bodyof "$JAR" "/api/pisr/$CID/venues${MY_EC:+?tenant_id=$MY_EC}" \
+VENUE="$(bodyof "$JAR" "/api/prism/$CID/venues${MY_EC:+?tenant_id=$MY_EC}" \
          | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
 if [ -z "$VENUE" ]; then
   note "no venue reachable by this user — skipping the report checks."
   note "give the account a scope including one venue to exercise these."
 else
   printf '  venue: %s…\n' "${VENUE:0:16}"
-  REP="$(bodyof "$JAR" "/api/pisr/$CID/report?venue_id=$VENUE${MY_EC:+&tenant_id=$MY_EC}")"
+  REP="$(bodyof "$JAR" "/api/prism/$CID/report?venue_id=$VENUE${MY_EC:+&tenant_id=$MY_EC}")"
   if [ "${#REP}" -lt 100 ]; then
     note "the report came back empty or errored; skipping content checks"
   else
@@ -486,12 +491,12 @@ else
     # says, what matters is that the user's copy is emptier.
     if [ -z "$ADMIN_OK" ]; then
       note "no working admin session, so redaction could not be compared."
-      note "supply PISR_PROBE_ADMIN_USER/PASS to exercise it."
+      note "supply PRISM_PROBE_ADMIN_USER/PASS to exercise it."
     else
       AREP="$TMPD/admin-report.json"
       curl -s -o "$AREP" --max-time 120 -g -b "$AJAR" -G \
         --data-urlencode "venue_id=$VENUE" ${MY_EC:+--data-urlencode "tenant_id=$MY_EC"} \
-        "$BASE/api/pisr/$CID/report" >/dev/null
+        "$BASE/api/prism/$CID/report" >/dev/null
       printf '%s' "$REP" > "$TMPD/user-report.json"
 
       emptied="$(python3 - "$AREP" "$TMPD/user-report.json" <<'PYEOF'

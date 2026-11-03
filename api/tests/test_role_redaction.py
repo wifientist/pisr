@@ -15,7 +15,7 @@ THREE THINGS MAKE THIS CHEAP:
   polls RUCKUS ONE zero times and runs in a second.
 
   THE FIXTURE IS GENERATED FROM `sections.py`, not captured. A real report
-  cannot live in this repository — PISR stores no report, and a captured one is
+  cannot live in this repository — PRISM stores no report, and a captured one is
   a customer's network in git. Building it from the catalogue means every
   declared path carries a sentinel, the coverage is exhaustive by
   construction, and a section added next release is covered the day it is

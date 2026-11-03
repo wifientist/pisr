@@ -1,8 +1,8 @@
 """
-PISR configuration — the pseudo-controller, read from .env.
+PRISM configuration — the pseudo-controller, read from .env.
 
 In rtools2 this was a `Controller` row in Postgres holding Fernet-encrypted
-credentials, selected per-user from a dropdown. Standalone PISR serves exactly
+credentials, selected per-user from a dropdown. Standalone PRISM serves exactly
 one RUCKUS ONE tenant, so the row becomes a frozen dataclass built from the
 environment at import time.
 
@@ -42,7 +42,7 @@ REGIONS = {"NA", "EU", "ASIA"}
 # check below.
 EC_TYPES = {"EC", "MSP"}
 
-# The floor on PISR_AUTH_PASSPHRASE. Low, deliberately: the real brake on
+# The floor on PRISM_AUTH_PASSPHRASE. Low, deliberately: the real brake on
 # guessing is the per-IP lockout in auth.py, not length. Its one weakness is
 # that it lives in memory and resets when the container restarts — which is why
 # there is a floor at all rather than none.
@@ -75,7 +75,7 @@ class AuthConfig:
 
     `proxy` — the SSO story. An authenticating reverse proxy in front (usually
     oauth2-proxy against Entra, Okta or Google) does the OIDC dance and
-    forwards the caller's identity in a header. PISR reads that header and
+    forwards the caller's identity in a header. PRISM reads that header and
     implements no OIDC of its own. The passphrase is switched OFF entirely in
     this mode: leaving both doors open would mean the shared secret is a way
     around SSO, which would defeat the audit trail and the revocation story
@@ -89,7 +89,7 @@ class AuthConfig:
     nothing has to be delivered at the moment somebody signs in. See
     api/accounts.py.
 
-    `enabled=False` is reachable only by setting PISR_AUTH_DISABLED=1 on
+    `enabled=False` is reachable only by setting PRISM_AUTH_DISABLED=1 on
     purpose. There is no accidental path to an open instance.
     """
 
@@ -147,7 +147,7 @@ class AuthConfig:
     msp_emails: frozenset
     msp_roles: frozenset
 
-    # Where the section visibility policy is stored. One of the two files PISR
+    # Where the section visibility policy is stored. One of the two files PRISM
     # writes; see visibility.py for why that is not a contradiction of "stores
     # nothing". Empty means the admin portal is read-only.
     visibility_file: str
@@ -158,7 +158,7 @@ class AuthConfig:
     # THE NAME IS AN ENV VAR AND THE VALUES ARE A MOUNTED FILE, deliberately.
     # A customer's name and their agreed configuration baseline are theirs, not
     # this tool's, and neither belongs in a repository that is not theirs
-    # either. PISR ships knowing how to compare against a baseline and knowing
+    # either. PRISM ships knowing how to compare against a baseline and knowing
     # nothing about whose it is.
     org_name: str
     org_baseline_file: str
@@ -180,14 +180,8 @@ class AuthConfig:
     client_ip_header: str
 
 
-def _env(name: str) -> str:
-    """
-    Read `name`, preferring the contents of the file at `<name>_FILE`.
-
-    The file form wins when both are present: if someone has gone to the
-    trouble of mounting a secret, an env var left over from an earlier
-    deployment should not silently take precedence over it.
-    """
+def _env_exact(name: str) -> str:
+    """`name`, preferring the contents of the file at `<name>_FILE`."""
     path = (os.getenv(f"{name}_FILE") or "").strip()
     if path:
         try:
@@ -195,6 +189,38 @@ def _env(name: str) -> str:
         except OSError as exc:
             raise RuntimeError(f"{name}_FILE is set to {path!r} but could not be read: {exc}")
     return (os.getenv(name) or "").strip()
+
+
+# The tool was called PISR until 2026-11, and every setting was PISR_<X>. A
+# deployed env file still says that — production's lives OUTSIDE the repo, so
+# no commit can rename what is in it — and a rename that made every one of
+# those lines silently inert would turn the next deploy into an outage that
+# looks like a config fault: the auth mode reverting to `passphrase`, the
+# trusted-proxy list vanishing. So PRISM_<X> is read first and PISR_<X> after
+# it, `_FILE` form included, and each legacy name that actually supplied a
+# value is recorded so main.py can say which lines are worth renaming.
+LEGACY_PREFIX = "PISR_"
+LEGACY_USED: set = set()
+
+
+def _env(name: str) -> str:
+    """
+    Read `name`, preferring the contents of the file at `<name>_FILE`.
+
+    The file form wins when both are present: if someone has gone to the
+    trouble of mounting a secret, an env var left over from an earlier
+    deployment should not silently take precedence over it.
+
+    A `PRISM_` name falls back to its pre-rename `PISR_` spelling; see above.
+    """
+    value = _env_exact(name)
+    if value or not name.startswith("PRISM_"):
+        return value
+    legacy = LEGACY_PREFIX + name[len("PRISM_"):]
+    value = _env_exact(legacy)
+    if value:
+        LEGACY_USED.add(legacy)
+    return value
 
 
 def _required(name: str) -> str:
@@ -255,13 +281,13 @@ def _trusted_proxies(required: bool) -> Tuple[ipaddress._BaseNetwork, ...]:
     client-address header in either mode.
 
     This list is the entire security of proxy mode, so it is required rather
-    than defaulted. A header is a claim, not proof: if PISR is reachable from
+    than defaulted. A header is a claim, not proof: if PRISM is reachable from
     anywhere other than the proxy, anyone who can open a socket to it can send
     `X-Forwarded-Email: someone.important@corp.example` and be believed. Bind
-    PISR to loopback or to the proxy's own Docker network as well — this check
+    PRISM to loopback or to the proxy's own Docker network as well — this check
     is the second lock, not the first.
     """
-    raw = _env("PISR_TRUSTED_PROXY_IPS")
+    raw = _env("PRISM_TRUSTED_PROXY_IPS")
     if not raw:
         if not required:
             # Passphrase mode. No proxy declared means no forwarded header is
@@ -269,10 +295,10 @@ def _trusted_proxies(required: bool) -> Tuple[ipaddress._BaseNetwork, ...]:
             # for a directly-reachable instance and fails closed for any other.
             return ()
         raise RuntimeError(
-            "PISR_AUTH_MODE=proxy requires PISR_TRUSTED_PROXY_IPS — the "
+            "PRISM_AUTH_MODE=proxy requires PRISM_TRUSTED_PROXY_IPS — the "
             "address or CIDR the authenticating proxy connects from. Without "
             "it, anyone who can reach this port can forge the identity header "
-            "and walk straight in. Example: PISR_TRUSTED_PROXY_IPS=172.20.0.0/16")
+            "and walk straight in. Example: PRISM_TRUSTED_PROXY_IPS=172.20.0.0/16")
 
     nets = []
     for entry in (e.strip() for e in raw.split(",")):
@@ -282,9 +308,9 @@ def _trusted_proxies(required: bool) -> Tuple[ipaddress._BaseNetwork, ...]:
             nets.append(ipaddress.ip_network(entry, strict=False))
         except ValueError as exc:
             raise RuntimeError(
-                f"PISR_TRUSTED_PROXY_IPS entry {entry!r} is not an IP or CIDR: {exc}")
+                f"PRISM_TRUSTED_PROXY_IPS entry {entry!r} is not an IP or CIDR: {exc}")
     if not nets:
-        raise RuntimeError("PISR_TRUSTED_PROXY_IPS is set but contains no usable entries.")
+        raise RuntimeError("PRISM_TRUSTED_PROXY_IPS is set but contains no usable entries.")
     return tuple(nets)
 
 
@@ -302,12 +328,12 @@ def _admin_emails() -> frozenset:
     direction for a setting whose other failure mode is promoting an entire
     corporate directory the day someone turns proxy mode on.
     """
-    raw = _env("PISR_ADMIN_EMAILS")
+    raw = _env("PRISM_ADMIN_EMAILS")
     entries = {e.strip().casefold() for e in raw.split(",") if e.strip()}
     return frozenset(entries)
 
 
-#: The roles `PISR_MSP_ROLES` may name. Literals rather than an import: auth.py
+#: The roles `PRISM_MSP_ROLES` may name. Literals rather than an import: auth.py
 #: and accounts.py both define these, and both import THIS module.
 _ROLE_NAMES = ("admin", "user")
 
@@ -318,10 +344,10 @@ def _msp_emails(admin_emails: frozenset) -> frozenset:
 
     Unset means the admins, for the reason given on the field. Set means
     exactly what it names — including addresses that are not in
-    PISR_ADMIN_EMAILS, which is the whole point of a tag being orthogonal to
+    PRISM_ADMIN_EMAILS, which is the whole point of a tag being orthogonal to
     the role.
     """
-    raw = _env("PISR_MSP_EMAILS")
+    raw = _env("PRISM_MSP_EMAILS")
     entries = {e.strip().casefold() for e in raw.split(",") if e.strip()}
     return frozenset(entries) if entries else admin_emails
 
@@ -335,14 +361,14 @@ def _msp_roles() -> frozenset:
     indistinguishable from the feature being broken and sends someone reading
     this file the long way round.
     """
-    raw = _env("PISR_MSP_ROLES")
+    raw = _env("PRISM_MSP_ROLES")
     entries = {e.strip().lower() for e in raw.split(",") if e.strip()}
     if not entries:
         return frozenset({"admin"})
     unknown = sorted(entries - set(_ROLE_NAMES))
     if unknown:
         raise RuntimeError(
-            f"PISR_MSP_ROLES names unknown role(s) {unknown}; "
+            f"PRISM_MSP_ROLES names unknown role(s) {unknown}; "
             f"valid roles are {list(_ROLE_NAMES)}.")
     return frozenset(entries)
 
@@ -354,9 +380,9 @@ def _org_name() -> str:
     Defaults to a generic word rather than a placeholder like "ACME": the
     column header is read by an install crew, and "Org recommended" is honest
     where "ACME recommended" would be a lie that looks like a configuration
-    error. Set PISR_ORG_NAME to the customer's name in the deployment.
+    error. Set PRISM_ORG_NAME to the customer's name in the deployment.
     """
-    return _env("PISR_ORG_NAME") or "Org"
+    return _env("PRISM_ORG_NAME") or "Org"
 
 
 def _org_baseline_file() -> str:
@@ -364,19 +390,19 @@ def _org_baseline_file() -> str:
     The customer's configuration baseline, as a JSON file mounted alongside
     the visibility policy. Never committed — see config.org_name.
     """
-    return _env("PISR_ORG_BASELINE_FILE") or "/data/org-baseline.json"
+    return _env("PRISM_ORG_BASELINE_FILE") or "/data/org-baseline.json"
 def _accounts_file() -> str:
     """
     Where local accounts live, or "" for nowhere.
 
     Defaulted onto the same volume as the visibility policy, for the same
-    reason: an operator should not have to know this exists to run PISR. Unlike
+    reason: an operator should not have to know this exists to run PRISM. Unlike
     the policy, though, a path inside the image is NOT harmless here — the
     accounts would vanish at the next deploy and nobody could sign in. The
     compose file mounts a volume at /data so it does not come to that, and
     main.py warns at startup if it finds this unwritable.
     """
-    return _env("PISR_ACCOUNTS_FILE") or "/data/accounts.json"
+    return _env("PRISM_ACCOUNTS_FILE") or "/data/accounts.json"
 
 
 def _visibility_file() -> str:
@@ -389,7 +415,7 @@ def _visibility_file() -> str:
     resets to "show everything", which is the harmless direction. The compose
     file mounts a volume here so it does not come to that.
     """
-    return _env("PISR_VISIBILITY_FILE") or "/data/visibility.json"
+    return _env("PRISM_VISIBILITY_FILE") or "/data/visibility.json"
 
 
 def _load_auth() -> AuthConfig:
@@ -399,7 +425,7 @@ def _load_auth() -> AuthConfig:
     serving one tenant's whole network inventory to anyone who can reach the
     port.
     """
-    if _flag("PISR_AUTH_DISABLED"):
+    if _flag("PRISM_AUTH_DISABLED"):
         return AuthConfig(
             enabled=False, mode="disabled", passphrase="", session_secret="",
             session_seconds=0, cookie_secure=False, max_attempts=0,
@@ -421,28 +447,28 @@ def _load_auth() -> AuthConfig:
             min_password_length=0,
         )
 
-    mode = (_env("PISR_AUTH_MODE") or "passphrase").lower()
+    mode = (_env("PRISM_AUTH_MODE") or "passphrase").lower()
     if mode not in ("passphrase", "proxy", "accounts"):
         raise RuntimeError(
-            "PISR_AUTH_MODE must be 'passphrase', 'proxy' or 'accounts' — "
+            "PRISM_AUTH_MODE must be 'passphrase', 'proxy' or 'accounts' — "
             f"got {mode!r}.")
 
     # Resolved in both modes. Passphrase mode never acts on it, but reports
     # what proxy mode WOULD make of the request — see proxy_preview() — which
     # is what makes it possible to check a proxy is forwarding identity before
     # switching to a mode where a wrong answer locks everyone out.
-    header = _env("PISR_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
+    header = _env("PRISM_TRUSTED_PROXY_HEADER") or "X-Forwarded-Email"
 
     # Half-configured is refused rather than silently ignored. Someone who set
     # the team and not the audience believes assertions are being verified, and
     # the audience is the check that binds a token to THIS application — an
     # instance running without it would accept a token minted for any other
     # Access app in the same account.
-    access_team = _env("PISR_ACCESS_TEAM")
-    access_aud = _env("PISR_ACCESS_AUD")
+    access_team = _env("PRISM_ACCESS_TEAM")
+    access_aud = _env("PRISM_ACCESS_AUD")
     if bool(access_team) != bool(access_aud):
         raise RuntimeError(
-            "PISR_ACCESS_TEAM and PISR_ACCESS_AUD must be set together. "
+            "PRISM_ACCESS_TEAM and PRISM_ACCESS_AUD must be set together. "
             "Without the audience, a token minted for any other Cloudflare "
             "Access application in this account would be accepted here.")
 
@@ -459,13 +485,13 @@ def _load_auth() -> AuthConfig:
             enabled=True,
             mode="proxy",
             passphrase="", session_secret="", session_seconds=0,
-            cookie_secure=_flag("PISR_COOKIE_SECURE", False),
+            cookie_secure=_flag("PRISM_COOKIE_SECURE", False),
             max_attempts=0, lockout_seconds=0,
             admin_passphrase="",
             proxy_header=header,
-            proxy_logout_url=_env("PISR_PROXY_LOGOUT_URL"),
+            proxy_logout_url=_env("PRISM_PROXY_LOGOUT_URL"),
             trusted_proxies=_trusted_proxies(required=True),
-            client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+            client_ip_header=_env("PRISM_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
             admin_emails=admin_emails, msp_emails=msp_emails,
             msp_roles=msp_roles, visibility_file=_visibility_file(),
@@ -478,39 +504,39 @@ def _load_auth() -> AuthConfig:
     # secret set means sessions do not survive a restart — a safe default whose
     # cost is signing in again after `compose up`, and whose only alternative
     # default would be a hardcoded key.
-    session_secret = _env("PISR_SESSION_SECRET") or _secrets.token_urlsafe(32)
+    session_secret = _env("PRISM_SESSION_SECRET") or _secrets.token_urlsafe(32)
 
     # Passphrase mode's ADMIN DOOR — one of the two secrets that mode's two
     # roles actually are. It was ALSO accounts mode's break-glass admin until
     # that door was removed; in accounts mode it now decides nothing and
     # main.py says so at startup if it is still set.
-    admin_passphrase = _env("PISR_AUTH_ADMIN_PASSPHRASE")
+    admin_passphrase = _env("PRISM_AUTH_ADMIN_PASSPHRASE")
     if admin_passphrase and len(admin_passphrase) < MIN_PASSPHRASE_LENGTH:
         raise RuntimeError(
-            f"PISR_AUTH_ADMIN_PASSPHRASE must be at least "
+            f"PRISM_AUTH_ADMIN_PASSPHRASE must be at least "
             f"{MIN_PASSPHRASE_LENGTH} characters.")
 
     if mode == "accounts":
-        invite_days = _int("PISR_INVITE_DAYS", 7)
+        invite_days = _int("PRISM_INVITE_DAYS", 7)
         if invite_days < 1:
             raise RuntimeError(
-                f"PISR_INVITE_DAYS must be at least 1 — got {invite_days}. An "
+                f"PRISM_INVITE_DAYS must be at least 1 — got {invite_days}. An "
                 "enrolment link nobody can redeem is not a security setting.")
 
         # Higher than MIN_PASSPHRASE_LENGTH on purpose. That floor is low
         # because a shared passphrase is protected by a lockout and is typed by
         # an operator who chose it; this one is chosen by whoever is enrolling,
         # on a login page that is now directly internet-facing.
-        min_password = _int("PISR_ACCOUNTS_MIN_PASSWORD", 12)
+        min_password = _int("PRISM_ACCOUNTS_MIN_PASSWORD", 12)
         if min_password < MIN_PASSPHRASE_LENGTH:
             raise RuntimeError(
-                f"PISR_ACCOUNTS_MIN_PASSWORD must be at least "
+                f"PRISM_ACCOUNTS_MIN_PASSWORD must be at least "
                 f"{MIN_PASSPHRASE_LENGTH} — got {min_password}.")
 
         accounts_file = _accounts_file()
         if not accounts_file:
             raise RuntimeError(
-                "PISR_AUTH_MODE=accounts needs PISR_ACCOUNTS_FILE to point "
+                "PRISM_AUTH_MODE=accounts needs PRISM_ACCOUNTS_FILE to point "
                 "somewhere writable — there is nowhere to keep the accounts "
                 "otherwise, and nobody could sign in.")
 
@@ -525,14 +551,14 @@ def _load_auth() -> AuthConfig:
             # nothing in accounts mode — see auth.py.
             passphrase="",
             session_secret=session_secret,
-            session_seconds=_int("PISR_SESSION_HOURS", 12) * 3600,
-            cookie_secure=_flag("PISR_COOKIE_SECURE", False),
-            max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
-            lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
+            session_seconds=_int("PRISM_SESSION_HOURS", 12) * 3600,
+            cookie_secure=_flag("PRISM_COOKIE_SECURE", False),
+            max_attempts=_int("PRISM_AUTH_MAX_ATTEMPTS", 5),
+            lockout_seconds=_int("PRISM_AUTH_LOCKOUT_SECONDS", 300),
             admin_passphrase=admin_passphrase,
             proxy_header=header, proxy_logout_url="",
             trusted_proxies=_trusted_proxies(required=False),
-            client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+            client_ip_header=_env("PRISM_CLIENT_IP_HEADER"),
             access_team=access_team, access_aud=access_aud,
             admin_emails=admin_emails, msp_emails=msp_emails,
             msp_roles=msp_roles, visibility_file=_visibility_file(),
@@ -541,16 +567,16 @@ def _load_auth() -> AuthConfig:
             org_name=_org_name(), org_baseline_file=_org_baseline_file(),
         )
 
-    passphrase = _env("PISR_AUTH_PASSPHRASE")
+    passphrase = _env("PRISM_AUTH_PASSPHRASE")
     if not passphrase:
         raise RuntimeError(
-            "PISR_AUTH_PASSPHRASE is not set. PISR serves a full RUCKUS ONE "
+            "PRISM_AUTH_PASSPHRASE is not set. PRISM serves a full RUCKUS ONE "
             "venue inventory and will not start without a gate in front of it. "
-            "Set one in .env, or set PISR_AUTH_DISABLED=1 if this instance is "
+            "Set one in .env, or set PRISM_AUTH_DISABLED=1 if this instance is "
             "genuinely unreachable by anyone else.")
     if len(passphrase) < MIN_PASSPHRASE_LENGTH:
         raise RuntimeError(
-            f"PISR_AUTH_PASSPHRASE must be at least {MIN_PASSPHRASE_LENGTH} "
+            f"PRISM_AUTH_PASSPHRASE must be at least {MIN_PASSPHRASE_LENGTH} "
             "characters. It is the only thing between the network and the "
             "report.")
 
@@ -564,7 +590,7 @@ def _load_auth() -> AuthConfig:
         # derive one key, and which role you get would depend on the order the
         # keys happen to be tried. Refuse rather than resolve it arbitrarily.
         raise RuntimeError(
-            "PISR_AUTH_ADMIN_PASSPHRASE is the same as PISR_AUTH_PASSPHRASE. "
+            "PRISM_AUTH_ADMIN_PASSPHRASE is the same as PRISM_AUTH_PASSPHRASE. "
             "The two roles are distinguished by which one you signed in "
             "with, so they have to differ.")
 
@@ -573,14 +599,14 @@ def _load_auth() -> AuthConfig:
         mode="passphrase",
         passphrase=passphrase,
         session_secret=session_secret,
-        session_seconds=_int("PISR_SESSION_HOURS", 12) * 3600,
-        cookie_secure=_flag("PISR_COOKIE_SECURE", False),
-        max_attempts=_int("PISR_AUTH_MAX_ATTEMPTS", 5),
-        lockout_seconds=_int("PISR_AUTH_LOCKOUT_SECONDS", 300),
+        session_seconds=_int("PRISM_SESSION_HOURS", 12) * 3600,
+        cookie_secure=_flag("PRISM_COOKIE_SECURE", False),
+        max_attempts=_int("PRISM_AUTH_MAX_ATTEMPTS", 5),
+        lockout_seconds=_int("PRISM_AUTH_LOCKOUT_SECONDS", 300),
         admin_passphrase=admin_passphrase,
         proxy_header=header, proxy_logout_url="",
         trusted_proxies=_trusted_proxies(required=False),
-        client_ip_header=_env("PISR_CLIENT_IP_HEADER"),
+        client_ip_header=_env("PRISM_CLIENT_IP_HEADER"),
         access_team=access_team, access_aud=access_aud,
         admin_emails=admin_emails, msp_emails=msp_emails,
         msp_roles=msp_roles, visibility_file=_visibility_file(),
@@ -603,16 +629,16 @@ AUTH: AuthConfig = _load_auth()
 # connections past its own limit (see api/r1api/client.py). Raise them together
 # or not at all — a wider executor over a pool of ten just churns TCP handshakes.
 # `setdefault`, so an explicit R1_POOL_MAXSIZE in the environment still wins.
-FETCH_WORKERS: int = _int("PISR_FETCH_WORKERS", 24)
+FETCH_WORKERS: int = _int("PRISM_FETCH_WORKERS", 24)
 os.environ.setdefault("R1_POOL_MAXSIZE", str(FETCH_WORKERS))
 
-# Whether PISR_SESSION_SECRET was supplied rather than generated. main.py logs
+# Whether PRISM_SESSION_SECRET was supplied rather than generated. main.py logs
 # this once at startup so "everyone got logged out again" has a visible cause.
 # True in both cookie-minting modes: accounts mode has the same property and a
 # worse consequence, since being logged out means typing a password rather than
 # a passphrase everyone already shares.
 SESSION_SECRET_IS_EPHEMERAL: bool = (
-    AUTH.mode in ("passphrase", "accounts") and not _env("PISR_SESSION_SECRET"))
+    AUTH.mode in ("passphrase", "accounts") and not _env("PRISM_SESSION_SECRET"))
 
 
 def public_config() -> dict:

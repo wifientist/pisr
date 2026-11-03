@@ -11,16 +11,16 @@ IT IS ALSO THE RECOVERY PATH. Deleted the last admin, lost the volume, or
 corrupted the file — this runs against the volume without needing a session, a
 password or a working gate.
 
-    docker compose run --rm pisr python scripts/pisr_admin.py list
-    docker compose run --rm pisr python scripts/pisr_admin.py add-user alice --admin
-    docker compose run --rm pisr python scripts/pisr_admin.py invite alice
-    docker compose run --rm pisr python scripts/pisr_admin.py set-role alice user
-    docker compose run --rm pisr python scripts/pisr_admin.py disable alice
-    docker compose run --rm pisr python scripts/pisr_admin.py enable alice
-    docker compose run --rm pisr python scripts/pisr_admin.py delete alice
+    docker compose run --rm prism python scripts/prism_admin.py list
+    docker compose run --rm prism python scripts/prism_admin.py add-user alice --admin
+    docker compose run --rm prism python scripts/prism_admin.py invite alice
+    docker compose run --rm prism python scripts/prism_admin.py set-role alice user
+    docker compose run --rm prism python scripts/prism_admin.py disable alice
+    docker compose run --rm prism python scripts/prism_admin.py enable alice
+    docker compose run --rm prism python scripts/prism_admin.py delete alice
 
     (dev: docker compose -f docker-compose.dev.yml exec backend \
-          python scripts/pisr_admin.py list)
+          python scripts/prism_admin.py list)
 
 IT RUNS IN A SEPARATE CONTAINER FROM THE SERVER, against the same volume. That
 is why `accounts.AccountStore` re-reads before every mutation and compares
@@ -33,7 +33,7 @@ in the process table, and the person whose account it is should be the only one
 who ever knows it. Hand over the link instead; it is single-use and expires.
 
 The link's host is a guess — this process has no idea what address people reach
-PISR on — so it prints a path and says so. The portal, which is answering a
+PRISM on — so it prints a path and says so. The portal, which is answering a
 real request, prints a complete URL.
 """
 
@@ -49,7 +49,7 @@ from config import AUTH  # noqa: E402
 
 def _store() -> accounts.AccountStore:
     if not accounts.STORE.configured:
-        _die("PISR_ACCOUNTS_FILE is not set, so there is nowhere to keep "
+        _die("PRISM_ACCOUNTS_FILE is not set, so there is nowhere to keep "
              "accounts.")
     return accounts.STORE
 
@@ -72,7 +72,7 @@ def _print_link(token: str) -> None:
     print("  person). It is single-use, it expires, and it CANNOT be shown")
     print("  again: only its hash is stored. Reissue with `invite` if lost.")
     print()
-    print(f"      https://<your-pisr-address>/?enroll={token}")
+    print(f"      https://<your-prism-address>/?enroll={token}")
     print()
     print(f"  Valid for {AUTH.invite_days} day(s).")
     print()
@@ -86,7 +86,7 @@ def cmd_list(args) -> None:
     people = store.list()
     if not people:
         print("No accounts yet. Create the first admin:")
-        print("    pisr_admin.py add-user <name> --admin")
+        print("    prism_admin.py add-user <name> --admin")
         return
 
     width = max([len(a.username) for a in people] + [len("USERNAME")])
@@ -137,7 +137,7 @@ def cmd_set_role(args) -> None:
     """
     Assign a role. Roles are data an administrator builds in the portal, so
     the valid ids are whatever exists — `list` shows what each account holds,
-    and `admin` and `user` always resolve because they ship with PISR.
+    and `admin` and `user` always resolve because they ship with PRISM.
     """
     account = _find(args.username)
     try:
@@ -185,8 +185,8 @@ def cmd_delete(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="pisr_admin.py",
-        description="Manage PISR's local accounts. Creates the first admin, "
+        prog="prism_admin.py",
+        description="Manage PRISM's local accounts. Creates the first admin, "
                     "and recovers an instance nobody can sign in to.")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -227,9 +227,9 @@ def main() -> None:
 
     if AUTH.mode != "accounts":
         # A warning rather than a refusal: creating the accounts BEFORE
-        # flipping PISR_AUTH_MODE is the sensible migration order, exactly as
-        # it is for PISR_ADMIN_EMAILS and proxy mode.
-        print(f"note: PISR_AUTH_MODE is {AUTH.mode!r}, so these accounts do not "
+        # flipping PRISM_AUTH_MODE is the sensible migration order, exactly as
+        # it is for PRISM_ADMIN_EMAILS and proxy mode.
+        print(f"note: PRISM_AUTH_MODE is {AUTH.mode!r}, so these accounts do not "
               "decide anything yet.\n", file=sys.stderr)
 
     args.func(args)

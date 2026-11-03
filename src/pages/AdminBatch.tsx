@@ -17,7 +17,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * running only the venues that are not fresh.
  *
  * WHAT IS KEPT is counts, plus WHICH checks failed by id — see
- * api/services/pisr/rollup.py. Never a finding's own words: for those, and for
+ * api/services/prism/rollup.py. Never a finding's own words: for those, and for
  * the devices behind them, every venue row links to the live report.
  *
  * TWO PRIVILEGES IN ONE DIALOG, and the split is the thing to hold on to.
@@ -54,7 +54,7 @@ interface Summary {
   clients: number;
   alarms: number;
   readErrors: string[];
-  /** {severity: {checkId: deviceCount}} — ids from PISR's own catalogue. */
+  /** {severity: {checkId: deviceCount}} — ids from PRISM's own catalogue. */
   checks?: Record<string, Record<string, number>>;
 }
 
@@ -141,7 +141,7 @@ interface Progress {
   halted: string | null;
 }
 
-/** Scheme + host of wherever this admin reached PISR — the server cannot know it. */
+/** Scheme + host of wherever this admin reached PRISM — the server cannot know it. */
 function reportLink(isMsp: boolean, tenantId: string | null, tenantName: string | null,
                     venueId: string): string {
   const params = new URLSearchParams();
@@ -192,7 +192,7 @@ const SEVERITY_LABEL: Record<Severity, string> = {
  * are the long tail and listing them everywhere buries the two lines that
  * matter. Whatever is ticked here is listed per venue as named checks — the
  * check's catalogue label and how many devices it names, never the finding's
- * own text, which PISR does not keep.
+ * own text, which PRISM does not keep.
  */
 function DetailPicker({ value, onChange }: {
   value: Set<Severity>;
@@ -306,7 +306,7 @@ export default function AdminBatch({ controllerId, isMsp, canRun, onClose }: {
     setVenues(null);
     setSelected(new Set());
     setLive({});
-    apiFetch(`${API_BASE_URL}/pisr/${controllerId}/venues${tenant.id ? `?tenant_id=${encodeURIComponent(tenant.id)}` : ""}`)
+    apiFetch(`${API_BASE_URL}/prism/${controllerId}/venues${tenant.id ? `?tenant_id=${encodeURIComponent(tenant.id)}` : ""}`)
       .then(async (r) => (r.ok ? r.json() : Promise.reject(new Error(await errorOf(r)))))
       .then((json) => {
         if (cancelled) return;
@@ -812,7 +812,7 @@ export default function AdminBatch({ controllerId, isMsp, canRun, onClose }: {
             <b>Runs cannot be recorded.</b>{" "}
             {state?.broken
               ? `${state.path} could not be read and is being left alone so it can be recovered.`
-              : `${state?.path ?? "PISR_BATCH_FILE"} is not writable by the container.`}
+              : `${state?.path ?? "PRISM_BATCH_FILE"} is not writable by the container.`}
           </p>
         )}
 

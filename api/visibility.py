@@ -14,7 +14,7 @@ like one thing:
 Everything below about failing open describes the FIRST of those. The scope
 block is parsed by `scope.parse`, which has its own rules and its own reasons.
 
-THIS IS THE ONE PLACE PISR WRITES TO DISK, and it is a deliberate exception to
+THIS IS THE ONE PLACE PRISM WRITES TO DISK, and it is a deliberate exception to
 the rule in CLAUDE.md rather than an erosion of it. That rule — no snapshot
 files, no cache, no database — is about TENANT DATA: a report is a live poll
 and must not be persisted, cached or served from anything but the RUCKUS ONE
@@ -41,7 +41,7 @@ guessed at:
 
 An OLDER version is read, not rejected: a version-1 file simply has no scope
 block, which means no restriction, which is exactly what a version-1
-deployment had. A NEWER one is refused, because a file written by a later PISR
+deployment had. A NEWER one is refused, because a file written by a later PRISM
 may mean something by a key this code would silently ignore — and silently
 ignoring a key in the scope block is how you serve one customer's venue to
 another.
@@ -115,7 +115,7 @@ PEOPLE_BLOCK = "people"
 #
 # NESTED UNDER A RESERVED KEY RATHER THAN IN A NEW TOP-LEVEL SHAPE, and that is
 # a rollback decision rather than an aesthetic one. Restructuring `scope` into
-# `{"roles": …, "people": …}` would need FORMAT_VERSION bumped, and a PISR one
+# `{"roles": …, "people": …}` would need FORMAT_VERSION bumped, and a PRISM one
 # version older refuses a file it does not understand OUTRIGHT — which for
 # scope means every restriction silently vanishing on a rollback, the one
 # direction this control must never fail in. A key that is simply not a
@@ -267,7 +267,7 @@ class PolicyStore:
         version = raw.get("version")
         if not isinstance(version, int) or version > FORMAT_VERSION:
             logger.error(
-                "visibility: %s declares version %r, which this PISR does not "
+                "visibility: %s declares version %r, which this PRISM does not "
                 "understand (it writes version %d). Ignoring the file rather "
                 "than acting on half of it — a scope restriction read with a "
                 "key missing is worse than no restriction at all.",
@@ -402,7 +402,7 @@ class PolicyStore:
     @staticmethod
     def _clean_people(raw, known_roles) -> Dict[str, Dict[str, Any]]:
         """
-        Per-person policy — role and scope — keyed by the identity PISR
+        Per-person policy — role and scope — keyed by the identity PRISM
         knows somebody by.
 
         That is the username in accounts mode and the verified address in proxy
@@ -417,7 +417,7 @@ class PolicyStore:
 
         CARRIES THREE THINGS NOW: the role, the resource groups, and the
         legacy scope map. The last of those is the COMPATIBILITY SHADOW once
-        groups are in force — written so that a rollback to a PISR that has
+        groups are in force — written so that a rollback to a PRISM that has
         never heard of groups still enforces the last resolved territory
         rather than reading an absent scope as "unrestricted", which for the
         fail-closed half is the one direction it must never fail in. It is
@@ -494,18 +494,18 @@ class PolicyStore:
         Write each person's RESOLVED territory into the legacy `scope` field.
 
         A ROLLBACK GUARD, and the reason groups did not need `FORMAT_VERSION`
-        bumped. A PISR one version older refuses a file whose version it does
+        bumped. A PRISM one version older refuses a file whose version it does
         not understand OUTRIGHT, which for scope means every restriction
         vanishing at once — the single direction this control must never fail
         in. So the groups go in under a key an older reader simply does not
         see, and the territory they resolve to is ALSO written where that
         older reader already looks.
 
-        What a rolled-back PISR then enforces is the last resolved snapshot:
+        What a rolled-back PRISM then enforces is the last resolved snapshot:
         correct for a group naming ids, and NEVER WIDER than the live answer,
         because a group cannot resolve to more than the ids it names. The one
         case that loses precision is `all-access`, which resolves to "no
-        restriction" — the same thing the older PISR would have done for
+        restriction" — the same thing the older PRISM would have done for
         somebody with no entry, so nothing is given away.
 
         WRITE-ONLY FROM HERE. `scope_for` reads the GROUPS once they are in
@@ -782,7 +782,7 @@ class PolicyStore:
         PASSPHRASE MODE NEVER FAILS CLOSED HERE, and that is not a hole. That
         mode has no identities — a shared secret proves somebody knew it,
         never who — so a per-person assignment can never match, and applying
-        the fail-closed rule would mean PISR's DEFAULT auth mode shows every
+        the fail-closed rule would mean PRISM's DEFAULT auth mode shows every
         user nothing, permanently, with no screen that could fix it. Groups
         need somebody to assign them to; where there is nobody, the legacy
         answer stands. Same reasoning as the super tier, which cannot exist
@@ -916,7 +916,7 @@ class PolicyStore:
         """
         if not self.path:
             raise RuntimeError(
-                "PISR_VISIBILITY_FILE is not set, so there is nowhere to save a "
+                "PRISM_VISIBILITY_FILE is not set, so there is nowhere to save a "
                 "policy. Set it and mount a writable volume at its directory.")
 
         # OMITTED MEANS "LEAVE ALONE", NOT "DELETE". The document is replaced

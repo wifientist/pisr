@@ -34,7 +34,7 @@ class R1Client:
         self.session = requests.Session()
 
         # DIVERGENCE FROM rtools2. A bare Session gets urllib3's default
-        # pool_maxsize of 10, and PISR does not make requests one at a time:
+        # pool_maxsize of 10, and PRISM does not make requests one at a time:
         # collect.py fans a report out with asyncio.gather over
         # asyncio.to_thread, and asyncio's default executor runs
         # min(32, cpu_count + 4) threads. So ~30 requests contend for 10 pooled

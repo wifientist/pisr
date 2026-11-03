@@ -1,12 +1,12 @@
 """
-PISR collection — one venue, one poll, one report.
+PRISM collection — one venue, one poll, one report.
 
 Fans every read out at once (they are independent), shapes what comes back, then
 runs the checks over the shaped result. A section that fails to load is recorded
 in `errors` and the rest of the report still renders: a half-read venue is worth
 more than an error page, as long as the page says which half is missing.
 
-READ-ONLY and HUMAN-TRIGGERED. See services/pisr/fetch.py.
+READ-ONLY and HUMAN-TRIGGERED. See services/prism/fetch.py.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from services.pisr import checks, fetch, punchlist, shape
+from services.prism import checks, fetch, punchlist, shape
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ async def list_venues(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
         raise rows
     if isinstance(tag_map, Exception):
         # Tags are a convenience on the picker; the picker must work without them.
-        logger.warning("pisr: venue tags unavailable: %s", tag_map)
+        logger.warning("prism: venue tags unavailable: %s", tag_map)
         tag_map = {}
 
     venues = []
@@ -173,7 +173,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         slowest = sorted(timings.items(), key=lambda kv: kv[1], reverse=True)
         top = ", ".join(f"{k}={v:.1f}s" for k, v in slowest[:6])
         logger.info(
-            "pisr: venue %s wave-1 %.1fs wall over %d reads (slowest single %.1fs, "
+            "prism: venue %s wave-1 %.1fs wall over %d reads (slowest single %.1fs, "
             "sum %.1fs) — %s", venue_id, wave1_wall, len(timings),
             slowest[0][1], sum(timings.values()), top)
 
@@ -192,7 +192,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
     empty.update({f"venueConfig:{key}": None for key in fetch.VENUE_CONFIG_SOURCES})
     for key, result in zip(keys, results):
         if isinstance(result, Exception):
-            logger.warning("pisr: %s read failed for venue %s: %s", key, venue_id, result)
+            logger.warning("prism: %s read failed for venue %s: %s", key, venue_id, result)
             errors[key] = str(result)
             raw[key] = empty[key]
         else:
@@ -228,7 +228,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         )
         for pool, count in zip(venue_pools, counts):
             if isinstance(count, Exception):
-                logger.warning("pisr: passphrase count failed for pool %s: %s",
+                logger.warning("prism: passphrase count failed for pool %s: %s",
                                pool.get("id"), count)
                 passphrase_counts[pool["id"]] = None
             else:
@@ -295,11 +295,11 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
     # Needs the flat AP views and the port list to tell a wired client from an
     # AP, and from a wireless client learned through an AP's uplink.
     # R1's own live alarms for this venue, kept apart from `verification`:
-    # that is PISR's opinion about the install, this is the platform's opinion
+    # that is PRISM's opinion about the install, this is the platform's opinion
     # about the venue right now, and they disagree usefully.
     # Venue-level config only. Group and per-AP settings are one R1 call per
     # object — a 200-unit MDU has a per-unit AP group each — so they are
-    # fetched on demand by /pisr/{cid}/config/detail rather than put behind
+    # fetched on demand by /prism/{cid}/config/detail rather than put behind
     # every report for a tab most readers never open.
     report["config"] = shape.config_card(
         raw["venue"], raw["venueConfig"], raw["radio"], raw["mesh"],
@@ -324,7 +324,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
     report["inventory"]["aps"]["truncated"] = bool(
         isinstance(reported_total, int) and reported_total > len(aps))
     if report["inventory"]["aps"]["truncated"]:
-        logger.warning("pisr: venue %s reports %s APs but the query returned %s",
+        logger.warning("prism: venue %s reports %s APs but the query returned %s",
                        venue_id, reported_total, len(aps))
 
     report["radios"]["plan"] = shape.channel_plan(
@@ -353,7 +353,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             "networks": len(raw["networks"]),
             "activations": len(raw["activations"]),
         },
-        # What PISR read, so the report can show its own sources. Every one is a
+        # What PRISM read, so the report can show its own sources. Every one is a
         # GET or a query POST.
         "sources": [
             "GET /venues/{venueId}",
@@ -382,7 +382,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             "POST /venues/wifiNetworks/query",
         ],
     }
-    logger.info("pisr: venue %s report built in %.1fs (%d APs, %d switches, %d ports, "
+    logger.info("prism: venue %s report built in %.1fs (%d APs, %d switches, %d ports, "
                 "%d clients, %d errors)", venue_id, report["meta"]["elapsedSeconds"],
                 len(raw["aps"]), len(raw["switches"]), len(raw["ports"]),
                 len(raw["clients"]), len(errors))

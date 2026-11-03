@@ -172,6 +172,6 @@ def scrub_report(report: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning(
             "scrub: removed %d credential-shaped field(s) from a report before "
             "it was served: %s. This should be empty — a shaper is emitting a "
-            "key it should not, or R1 added one to an endpoint PISR reads.",
+            "key it should not, or R1 added one to an endpoint PRISM reads.",
             len(removed), ", ".join(sorted(set(removed))[:12]))
     return cleaned

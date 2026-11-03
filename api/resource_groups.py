@@ -44,7 +44,7 @@ including ones added tomorrow, and it is the group an upgrade hands to anybody
 who was unrestricted before.
 
 WHAT A GROUP HOLDS IS EXPLICIT IDS, ON PURPOSE. A rule — "every venue tagged
-Live", "every venue named North-*" — is expressible: the venue rows PISR
+Live", "every venue named North-*" — is expressible: the venue rows PRISM
 already fetches carry name, city, country, tags and AP counts. It is not
 STORED, and that is the decision rather than an omission. Scope is checked at
 the route before any RUCKUS ONE client is built, so a refusal costs no upstream

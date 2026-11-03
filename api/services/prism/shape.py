@@ -1,5 +1,5 @@
 """
-PISR shaping — raw RUCKUS ONE rows in, card payloads out.
+PRISM shaping — raw RUCKUS ONE rows in, card payloads out.
 
 Pure functions, no I/O. Everything here is arithmetic over what fetch.py
 collected, which keeps the API calls in one file and the judgement in another.
@@ -1310,7 +1310,7 @@ def _alarm_text(raw: Any, names: Dict[str, str], fallback: str) -> str:
         '{"message_template":"AP @@apName disconnected from the cloud controller."}'
 
     The `@@token` placeholders are substituted by the R1 console from its own
-    context, which PISR does not have — so left alone they render literally and
+    context, which PRISM does not have — so left alone they render literally and
     the reader sees "@@apName" where a name should be. Every token is therefore
     replaced with the device's real name where the report knows it, and with
     the serial where it does not, which is still more use than the raw token.
@@ -1345,7 +1345,7 @@ def incident_card(alarms: List[Dict[str, Any]], aps: List[Dict[str, Any]],
     What RUCKUS ONE is already raising about this venue.
 
     Deliberately kept apart from `verification`. The checks in `checks.py` are
-    PISR's own opinion about whether an install looks finished; this is the
+    PRISM's own opinion about whether an install looks finished; this is the
     platform's opinion about whether the venue is healthy right now, and the
     two disagree usefully. A venue can pass every check here and still have R1
     shouting about an AP that dropped off an hour ago — or the reverse, where
@@ -1689,7 +1689,7 @@ def config_card(venue_raw: Dict[str, Any], venue_config: Dict[str, Any],
     thought worth keeping.
 
     VENUE LEVEL ONLY. Group and per-AP config are fetched on demand by
-    `/pisr/{cid}/config/detail`, not here, because both are one call per object:
+    `/prism/{cid}/config/detail`, not here, because both are one call per object:
     a 200-unit MDU has a per-unit AP group each, so eagerly loading them would
     put ~600 requests behind every report — most of them for a tab nobody
     opened. This returns the counts so the tab can offer the button and say
@@ -1927,7 +1927,7 @@ def _apgroup_categories(blob: Dict[str, Any]) -> List[Dict[str, Any]]:
     row. `blob` is `{alias -> payload}` from `fetch.AP_GROUP_CONFIG_SOURCES`; the
     `detail` object is skipped — it is the group's identity, not a setting.
     """
-    from services.pisr import fetch as _fetch
+    from services.prism import fetch as _fetch
     cats = []
     for alias, suffix in _fetch.AP_GROUP_CONFIG_SOURCES.items():
         payload = blob.get(alias)
@@ -2158,13 +2158,13 @@ def config_detail(groups: List[Dict[str, Any]], group_config: Dict[str, Any],
     }
 
 
-from services.pisr import fetch as fetch_module  # noqa: E402
-from services.pisr.fetch import VENUE_CONFIG_NOT_FOUND as FETCH_NOT_FOUND  # noqa: E402
+from services.prism import fetch as fetch_module  # noqa: E402
+from services.prism.fetch import VENUE_CONFIG_NOT_FOUND as FETCH_NOT_FOUND  # noqa: E402
 
 
 def fetch_source(key: str) -> str:
     """The R1 path fragment a venue-config category came from, for display."""
-    from services.pisr.fetch import VENUE_CONFIG_SOURCES
+    from services.prism.fetch import VENUE_CONFIG_SOURCES
     return VENUE_CONFIG_SOURCES.get(key, key)
 
 
@@ -2623,13 +2623,13 @@ def _dpsk_safe(payload: Any, path: str = "dpsk") -> Any:
     programming error — a new R1 field name folded into a summary by accident —
     so it raises rather than silently dropping, on the same reasoning as
     utils.icx_redact.assert_clean: a redactor that quietly succeeds teaches you
-    nothing, and PISR would rather fail a section than publish a passphrase.
+    nothing, and PRISM would rather fail a section than publish a passphrase.
     """
     if isinstance(payload, dict):
         for key in payload:
             if str(key).strip().lower() in DPSK_FORBIDDEN_KEYS:
                 raise ValueError(
-                    f"pisr: refusing to emit sensitive DPSK key {key!r} at {path}"
+                    f"prism: refusing to emit sensitive DPSK key {key!r} at {path}"
                 )
         return {k: _dpsk_safe(v, f"{path}.{k}") for k, v in payload.items()}
     if isinstance(payload, list):
@@ -2737,7 +2737,7 @@ def dpsk_card(pools: List[Dict[str, Any]],
             # R1's OWN statement that an identity group references this pool.
             # A DPSK pool cannot be created without at least one identity
             # group, so this is true for every real pool — which is exactly why
-            # PISR must not conclude "no identity group" from a failed join.
+            # PRISM must not conclude "no identity group" from a failed join.
             "isReferenced": bool(pool.get("isReferenced")),
             # Which link brought this pool into the venue's scope. A pool
             # linked only by its property identity group backs no SSID here

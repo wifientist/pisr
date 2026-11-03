@@ -1,7 +1,7 @@
 """
 The admin portal's two endpoints: read the section catalogue, write the policy.
 
-WHAT THIS IS FOR. PISR renders about thirty distinct cards, and most readers
+WHAT THIS IS FOR. PRISM renders about thirty distinct cards, and most readers
 want a fraction of them. An admin decides which of those an ordinary user sees;
 everything else about the report is unchanged. It is de-cluttering, applied
 centrally so that the same decision reaches the screen and the PDF.
@@ -31,7 +31,7 @@ api/scope.py before touching the second — on an MSP tenant, ECs are different
 companies, and it is the only half where a mistake shows one customer another.
 
 The portal builds its EC and venue lists from the ORDINARY endpoints —
-/api/r1/{cid}/msp/mspEcs and /api/pisr/{cid}/venues — which return everything
+/api/r1/{cid}/msp/mspEcs and /api/prism/{cid}/venues — which return everything
 when an admin calls them, because an admin is unrestricted. No admin-only
 mirror of those exists, deliberately: a second path to the same R1 data is a
 second place for the scope filter to be forgotten.
@@ -301,7 +301,7 @@ def _guard_last_super(body: "VisibilityBody", stored: dict) -> None:
 
 def _known_identities() -> List[str]:
     """
-    Every identity an admin could scope, or an empty list where PISR cannot
+    Every identity an admin could scope, or an empty list where PRISM cannot
     know. Never an error: the portal must still draw with no names to offer.
     """
     from config import AUTH
@@ -374,7 +374,7 @@ async def put_roles(body: VisibilityBody, request: Request):
                    "the container. Mount a writable volume at its directory.")
     _require_role_authority(request, body)
     _guard_last_group(body)
-    actor = getattr(request.state, "pisr_user", None) or "admin (passphrase)"
+    actor = getattr(request.state, "prism_user", None) or "admin (passphrase)"
     try:
         return visibility.STORE.save(body.hidden, body.scope, actor,
                                      roles=body.roles, people=body.people,
@@ -656,7 +656,7 @@ async def get_preview(identity: str = Query(..., max_length=320,
     the routes do, and a diagnostic tool that is confidently wrong sends
     somebody to change the wrong box. Same rule as the capability matrix.
 
-    An identity PISR has never heard of is answered rather than refused: on a
+    An identity PRISM has never heard of is answered rather than refused: on a
     proxy-mode instance there is no account list to check against, and "no
     entry, so they get the defaults" is the useful answer to a typo as well as
     to a real person.

@@ -1,11 +1,11 @@
 """
 The batch-run record: when each venue was last checked, and what it found.
 
-THIS IS THE FOURTH FILE PISR WRITES, AND THE FIRST ONE THAT HOLDS SOMETHING
+THIS IS THE FOURTH FILE PRISM WRITES, AND THE FIRST ONE THAT HOLDS SOMETHING
 READ OFF A CUSTOMER'S NETWORK. The other three are configuration. This one
 keeps, per venue, the COUNTS from the last check — how many punch-list items,
 at which severity, in which trade — plus the venue's name and when it was run.
-It is a deliberate, narrow exception to "PISR stores nothing of the tenant",
+It is a deliberate, narrow exception to "PRISM stores nothing of the tenant",
 made because the feature it serves (re-run only what has not been checked in X
 days; show a roll-up across every venue without re-polling every venue) cannot
 exist without it. See CLAUDE.md.
@@ -13,7 +13,7 @@ exist without it. See CLAUDE.md.
   WHAT IT MAY HOLD: ids, names, timestamps, run status, who started a run, and
   integer counts. WHAT IT MUST NOT: a finding's text, its evidence, a device
   name, a serial, an address, a config value, an error body. Those are the
-  report, and the report is still not persisted. `services/pisr/rollup.
+  report, and the report is still not persisted. `services/prism/rollup.
   summarise` is the allowlist that decides what crosses into here, and
   `test_batch.py::test_summary_holds_only_counts` is what keeps it that way. If
   you want a finding's title in the roll-up, re-poll the venue — that is what
@@ -33,7 +33,7 @@ only thing in it worth keeping.
 
 One writer, one process: uvicorn runs a single worker (see the Dockerfile), and
 nothing else touches this file, so an in-process lock is the whole of the
-concurrency story. If PISR ever runs more than one worker, this needs the
+concurrency story. If PRISM ever runs more than one worker, this needs the
 `st_mtime_ns` re-read that `accounts.AccountStore` does.
 """
 
@@ -132,7 +132,7 @@ class BatchStore:
         version = raw.get("version") if isinstance(raw, dict) else None
         if not isinstance(version, int) or version > FORMAT_VERSION:
             logger.error(
-                "batch: %s declares version %r; this PISR writes %d. Leaving it "
+                "batch: %s declares version %r; this PRISM writes %d. Leaving it "
                 "alone rather than rewriting a newer file with older rules.",
                 self.path, version, FORMAT_VERSION)
             self.broken = True
@@ -149,7 +149,7 @@ class BatchStore:
         """Atomic replace in the same directory — see visibility.PolicyStore.save."""
         if not self.path:
             raise RuntimeError(
-                "PISR_BATCH_FILE is not set, so there is nowhere to record a run.")
+                "PRISM_BATCH_FILE is not set, so there is nowhere to record a run.")
         if self.broken:
             raise RuntimeError(
                 f"{self.path} could not be read, so it is not being overwritten. "
@@ -344,7 +344,7 @@ def _batch_file() -> Optional[str]:
     # setting, and threading it through the four AuthConfig constructors would
     # be four places to forget it. Same `_FILE` indirection as everything else.
     from config import _env
-    return _env("PISR_BATCH_FILE") or "/data/batch-runs.json"
+    return _env("PRISM_BATCH_FILE") or "/data/batch-runs.json"
 
 
 STORE = BatchStore(_batch_file())

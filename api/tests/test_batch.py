@@ -2,7 +2,7 @@
 Batch runs: the record, the allowlist of what it keeps, and the roll-up.
 
 The test that matters most is `test_summary_holds_only_counts`. The batch
-record is the one file PISR writes that holds anything read off a customer's
+record is the one file PRISM writes that holds anything read off a customer's
 network, and the argument for allowing it at all is that it holds integers —
 no finding text, no device names, no R1 error bodies. If `rollup.summarise`
 ever starts passing a string through, that argument is gone, and this is what
@@ -23,7 +23,7 @@ API = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API))
 
 import batch_runs                      # noqa: E402
-from services.pisr import punchlist, rollup   # noqa: E402
+from services.prism import punchlist, rollup   # noqa: E402
 
 
 def _report(findings, errors=None, venue_name="Maple Court"):
@@ -159,7 +159,7 @@ def test_every_checked_venue_is_named_clean_ones_included():
     # that was never checked is not clean — it is unknown.
     assert tenant["clean"] == 1 and tenant["checked"] == 2 and tenant["venueCount"] == 3
 
-    from routers.pisr_router import _jinja
+    from routers.prism_router import _jinja
     html = _jinja().get_template("reports/batch.html").render(
         title="T", overall=None, tenants=[tenant], days_label="7",
         generated_at="now", has_links=False, detail_severities=["critical", "warning"],
@@ -343,7 +343,7 @@ def test_msp_rollup_sums_tenants_and_names_unbatched_ones():
 def test_origin_is_scheme_and_host_only():
     from routers import batch_router
     ok = batch_router._origin
-    assert ok("https://pisr.example.com") == "https://pisr.example.com"
+    assert ok("https://prism.example.com") == "https://prism.example.com"
     assert ok("http://localhost:4173") == "http://localhost:4173"
     for bad in ("javascript:alert(1)", "https://x.example/path", "file:///etc/passwd",
                 "https://x.example\" onmouseover=\"", "", None):
@@ -351,7 +351,7 @@ def test_origin_is_scheme_and_host_only():
 
 
 def test_template_renders_and_escapes():
-    from routers.pisr_router import _jinja
+    from routers.prism_router import _jinja
     store, _ = _store()
     run = store.start_run("t1", "<b>Evil</b>", [{"id": "a", "name": "<img src=x>"}], ["a"], "admin")
     store.record_venue(run["id"], "a", "<img src=x>", "ok", rollup.summarise(_report(FINDINGS)), None)
@@ -360,7 +360,7 @@ def test_template_renders_and_escapes():
         tenants = overall["tenants"] if overall else [rollup.tenant_rollup(snap, "t1", 7)]
         for t in tenants:
             for v in t["venues"]:
-                v["link"] = "https://pisr.example/?venue=a"
+                v["link"] = "https://prism.example/?venue=a"
         for severities in ([], ["critical", "warning"]):
             for t2 in tenants:
                 rollup.attach_detail(t2, severities)
@@ -370,7 +370,7 @@ def test_template_renders_and_escapes():
                 categories=[{"key": k, "label": rollup.CATEGORY_LABELS[k]}
                             for k in rollup.CATEGORY_KEYS])
             assert "<img src=x>" not in html and "&lt;img src=x&gt;" in html
-            assert "https://pisr.example/?venue=a" in html
+            assert "https://prism.example/?venue=a" in html
             # The named checks appear only when asked for, and as catalogue
             # labels — never the finding's own title.
             assert ("APs offline" in html) is bool(severities)

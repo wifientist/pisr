@@ -1,23 +1,23 @@
 """
-PISR — Property Installation Status Report.
+PRISM — Property Rollout & Installation Status Monitor.
 
 A read-only poll of one venue: what was installed, what is online, how it is
 addressed, what VLANs and PoE it uses, which SSIDs are activated, and which of
 those are demonstrably carrying traffic.
 
 READ-ONLY. Every endpoint issues GETs and `*/query` POSTs against RUCKUS ONE and
-nothing else. PISR creates nothing, changes nothing, activates nothing, and
+nothing else. PRISM creates nothing, changes nothing, activates nothing, and
 stores nothing — no snapshot files, no database rows. A report exists for the
 length of one HTTP response.
 
-HUMAN-TRIGGERED ONLY. Every endpoint runs once per request. PISR registers no
+HUMAN-TRIGGERED ONLY. Every endpoint runs once per request. PRISM registers no
 scheduled job, starts no background task, and has no recurring-poll entry point
 for a scheduler to call. The page refreshes when someone clicks refresh.
 
-  GET /pisr/{cid}/scope    what tenant this controller acts on
-  GET /pisr/{cid}/venues   venues for the picker, with the counts R1 aggregates
-  GET /pisr/{cid}/report   one venue's full report
-  GET /pisr/{cid}/checks   the check catalogue — what a report verifies
+  GET /prism/{cid}/scope    what tenant this controller acts on
+  GET /prism/{cid}/venues   venues for the picker, with the counts R1 aggregates
+  GET /prism/{cid}/report   one venue's full report
+  GET /prism/{cid}/checks   the check catalogue — what a report verifies
 
 The `{cid}` is a vestige of rtools2, where it selected one of a user's saved
 controllers. Here there is only ever one, from .env, and the segment is kept so
@@ -46,17 +46,17 @@ from grants import (GRANT_CONFIG_DETAIL, GRANT_IDENTITY_TRACE,
 from r1_client import build_r1_client, get_controller, require_id, resolve_tenant
 from redact import redact, template_helpers as redact_helpers
 import scrub as secret_scrub
-from services.pisr import fetch as fetch_module
-from services.pisr import shape as shape_module
-from services.pisr import trace as trace_module
-from services.pisr.fetch import ap_groups as fetch_ap_groups
-from reports.pisr import build_context as build_pdf_context
-from services.pisr import checks as check_registry
-from services.pisr.collect import build_report, list_venues
+from services.prism import fetch as fetch_module
+from services.prism import shape as shape_module
+from services.prism import trace as trace_module
+from services.prism.fetch import ap_groups as fetch_ap_groups
+from reports.prism import build_context as build_pdf_context
+from services.prism import checks as check_registry
+from services.prism.collect import build_report, list_venues
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/pisr", tags=["PISR"])
+router = APIRouter(prefix="/prism", tags=["PRISM"])
 
 
 @lru_cache(maxsize=1)
@@ -65,7 +65,7 @@ def _jinja() -> Environment:
     Report templates live in api/templates.
 
     Two parents, not three: rtools2 had this file one level deeper, at
-    routers/pisr/pisr_router.py. Getting this wrong fails at PDF-request time,
+    routers/prism/prism_router.py. Getting this wrong fails at PDF-request time,
     not at import, so it is worth a comment.
 
     AUTOESCAPE IS ON, AND MUST STAY ON. Jinja defaults it to OFF, and this
@@ -127,14 +127,14 @@ def _require_scope(request: Request, tenant_id, venue_id=None) -> None:
     allowed = scope_of(request)
     if not allowed.allows_ec(tenant_id):
         logger.warning("scope: refused tenant=%s to user=%s role=%s",
-                       tenant_id, getattr(request.state, "pisr_user", "-"),
+                       tenant_id, getattr(request.state, "prism_user", "-"),
                        role_of(request))
         raise HTTPException(
             403, "This account is not scoped to that RUCKUS ONE customer.")
     if venue_id is not None and not allowed.allows_venue(tenant_id, venue_id):
         logger.warning("scope: refused venue=%s on tenant=%s to user=%s role=%s",
                        venue_id, tenant_id,
-                       getattr(request.state, "pisr_user", "-"), role_of(request))
+                       getattr(request.state, "prism_user", "-"), role_of(request))
         raise HTTPException(403, "This account is not scoped to that venue.")
 
 
@@ -194,8 +194,8 @@ async def get_report(request: Request,
     # shared passphrase, which cannot tell one person from another. This line
     # is the whole audit trail, and the honest reason to prefer SSO.
     role = role_of(request)
-    logger.info("pisr: user=%s role=%s controller=%s tenant=%s venue=%s",
-                getattr(request.state, "pisr_user", "-"), role,
+    logger.info("prism: user=%s role=%s controller=%s tenant=%s venue=%s",
+                getattr(request.state, "prism_user", "-"), role,
                 cfg.id, override, venue_id)
     return redact(await build_report(r1, override, venue_id),
                   hidden_of(request))
@@ -214,7 +214,7 @@ async def get_report_pdf(request: Request,
     """
     The whole review as a PDF.
 
-    PISR stores nothing, so this re-polls the venue rather than rendering a
+    PRISM stores nothing, so this re-polls the venue rather than rendering a
     saved run — the PDF is its own snapshot and may differ by a few clients
     from a page left open for a while. It is built from exactly the same
     report the UI renders, so the two cannot disagree about what was found.
@@ -242,7 +242,7 @@ async def get_report_pdf(request: Request,
     report = redact(await build_report(r1, override, venue_id), hidden)
     context = build_pdf_context(report, cfg.name, label or tenant_id)
 
-    template = _jinja().get_template("reports/pisr.html")
+    template = _jinja().get_template("reports/prism.html")
     # The section guards, injected here rather than added to build_context:
     # which sections a reader may see is a per-request question, and the
     # context builder shapes one report the same way every time.
@@ -257,9 +257,9 @@ async def get_report_pdf(request: Request,
 
     venue_name = (report.get("venue") or {}).get("name") or venue_id
     filename = _export_name(venue_name, "pdf")
-    logger.info("pisr: PDF for venue=%s user=%s role=%s (%d findings, %d "
+    logger.info("prism: PDF for venue=%s user=%s role=%s (%d findings, %d "
                 "sections hidden, %d bytes)",
-                venue_id, getattr(request.state, "pisr_user", "-"), role,
+                venue_id, getattr(request.state, "prism_user", "-"), role,
                 context["findings_total"], len(hidden), len(pdf))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -302,7 +302,7 @@ async def get_config_detail(request: Request,
 
     r1 = build_r1_client(cfg)
     # to_thread like every other fetch here: the fetch layer is synchronous
-    # requests, and PISR fans out through threads rather than an async client.
+    # requests, and PRISM fans out through threads rather than an async client.
     #
     # TWO WAVES, not six stages. The groups, the APs and the activated networks
     # are independent listings, so they are read together; then every per-object
@@ -347,7 +347,7 @@ async def get_config_detail(request: Request,
     network_config: Dict[str, Any] = {}
     for tag, result in zip(reads, results):
         if isinstance(result, Exception):
-            logger.warning("pisr: config detail read %s failed: %s",
+            logger.warning("prism: config detail read %s failed: %s",
                            " ".join(map(str, tag)), result)
             if tag[0] == "group":
                 # A failed sub-resource is a missing block, as a non-2xx already
@@ -364,9 +364,9 @@ async def get_config_detail(request: Request,
     detail = shape_module.config_detail(groups, group_config, ap_config, len(aps),
                                         network_config, len(network_ids),
                                         group_total=group_total)
-    logger.info("pisr: config detail for venue=%s user=%s role=%s "
+    logger.info("prism: config detail for venue=%s user=%s role=%s "
                 "(%d group(s), %d AP(s), %d network(s), %d override(s))",
-                venue_id, getattr(request.state, "pisr_user", "-"), role,
+                venue_id, getattr(request.state, "prism_user", "-"), role,
                 len(detail["groups"]), detail["apShown"], detail["networkShown"],
                 detail["groupOverrideCount"] + detail["apOverrideCount"])
 
@@ -452,13 +452,13 @@ async def get_identity_trace(request: Request,
         set_members[sid] = [] if isinstance(result, Exception) else result
     for pid, result in zip(pool_ids, wave2[n_sets:n_sets + n_pools]):
         if isinstance(result, Exception):
-            logger.warning("pisr: trace usernames failed for pool %s: %s", pid, result)
+            logger.warning("prism: trace usernames failed for pool %s: %s", pid, result)
             result = {"rows": [], "total": 0, "complete": False}
         usernames[pid] = result
     for gid, result in zip(group_ids, wave2[n_sets + n_pools:]):
         if isinstance(result, Exception):
             # Names and descriptions only; the trace itself does not need them.
-            logger.warning("pisr: trace identities failed for group %s: %s", gid, result)
+            logger.warning("prism: trace identities failed for group %s: %s", gid, result)
             result = {"rows": [], "total": 0, "complete": False}
         identities[gid] = result
 
@@ -484,9 +484,9 @@ async def get_identity_trace(request: Request,
 
     # Logged without a single username, deliberately: the container log is not
     # somewhere residents' names should accumulate.
-    logger.info("pisr: identity trace for venue=%s user=%s (%d username(s), "
+    logger.info("prism: identity trace for venue=%s user=%s (%d username(s), "
                 "%d policy/policies, %d condition read(s)) — %s",
-                venue_id, getattr(request.state, "pisr_user", "-"),
+                venue_id, getattr(request.state, "prism_user", "-"),
                 payload["summary"]["total"], len(wanted), len(capped),
                 payload["summary"]["byStatus"])
     return secret_scrub.scrub_report(payload)

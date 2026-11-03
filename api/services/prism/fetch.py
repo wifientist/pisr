@@ -1,12 +1,12 @@
 """
-PISR fetch layer — every read PISR makes against RUCKUS ONE.
+PRISM fetch layer — every read PRISM makes against RUCKUS ONE.
 
 READ-ONLY BY CONSTRUCTION. Every function here issues a GET or a `*/query`
 POST. Nothing in this module creates, updates, deletes, activates, reboots or
-syncs anything, and PISR never writes to local storage either — a report is
+syncs anything, and PRISM never writes to local storage either — a report is
 assembled in memory, returned once, and forgotten.
 
-HUMAN-TRIGGERED ONLY. Every function runs once per request. PISR registers no
+HUMAN-TRIGGERED ONLY. Every function runs once per request. PRISM registers no
 scheduled job and starts no background task; there is deliberately nothing here
 for a scheduler to call.
 
@@ -96,12 +96,12 @@ def _json(resp, what: str, default=None):
     if resp is None or not resp.ok:
         code = getattr(resp, "status_code", "no response")
         body = getattr(resp, "text", "")[:200]
-        logger.warning("pisr: %s -> HTTP %s: %s", what, code, body)
+        logger.warning("prism: %s -> HTTP %s: %s", what, code, body)
         return default
     try:
         return resp.json()
     except ValueError:
-        logger.warning("pisr: %s returned non-JSON", what)
+        logger.warning("prism: %s returned non-JSON", what)
         return default
 
 
@@ -139,7 +139,7 @@ def venue_rows(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     rows = _rows(_json(_post(r1, "/venues/query", body, tenant_id), "/venues/query"))
     if rows:
         return rows
-    logger.info("pisr: /venues/query gave nothing, falling back to GET /venues")
+    logger.info("prism: /venues/query gave nothing, falling back to GET /venues")
     return _rows(_json(_get(r1, "/venues", tenant_id), "GET /venues", []))
 
 
@@ -268,7 +268,7 @@ def access_points(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str,
     """
     aps = r1.venues.query_all_aps_by_tenant(tenant_id, [venue_id], AP_FIELDS)
     if not aps:
-        logger.info("pisr: rich AP field list returned nothing for venue %s, retrying safe",
+        logger.info("prism: rich AP field list returned nothing for venue %s, retrying safe",
                     venue_id)
         aps = r1.venues.query_all_aps_by_tenant(tenant_id, [venue_id], AP_FIELDS_SAFE)
     return aps or []
@@ -414,7 +414,7 @@ def venue_config_one(r1, tenant_id: Optional[str], venue_id: str,
     and is thrown away rather than pooled. See the note in r1api/client.py.
 
     Registering each of these as its own read in `build_report` keeps ONE
-    executor and one bound on how many sockets PISR asks R1 for.
+    executor and one bound on how many sockets PRISM asks R1 for.
     """
     path = VENUE_CONFIG_SOURCES[key]
     return _json(_get(r1, f"/venues/{venue_id}/{path}", tenant_id),
@@ -430,7 +430,7 @@ def scrub_venue_config(blocks: Dict[str, Any]) -> Dict[str, Any]:
     """
     cleaned, removed = scrub.scrub(blocks)
     if removed:
-        logger.warning("pisr: venue config carried credential-shaped field(s): "
+        logger.warning("prism: venue config carried credential-shaped field(s): "
                        "%s. Check whether that block should be fetched at all.",
                        ", ".join(sorted(set(removed))[:8]))
     return cleaned
@@ -456,7 +456,7 @@ def radius_server_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]
                        "radiusServerProfiles", []))
     cleaned, removed = scrub.scrub(rows)
     if removed:
-        logger.debug("pisr: removed %d shared secret(s) from RADIUS profiles at "
+        logger.debug("prism: removed %d shared secret(s) from RADIUS profiles at "
                      "the fetch, as expected", len(removed))
     return cleaned
 
@@ -502,7 +502,7 @@ def ap_config(r1, tenant_id: Optional[str], serial: str) -> Optional[Dict[str, A
 #
 # Notably absent, and worth knowing before someone goes looking: there is no
 # status, no clearedTime and no acknowledged flag. What this returns is the
-# ACTIVE alarm list, not a history, so PISR cannot say when something cleared
+# ACTIVE alarm list, not a history, so PRISM cannot say when something cleared
 # or whether anyone has looked at it.
 ALARM_FIELDS = [
     "id", "name", "message", "reason", "severity",
@@ -516,9 +516,9 @@ def incidents(r1, tenant_id: Optional[str], venue_id: str) -> List[Dict[str, Any
     The alarms RUCKUS ONE is currently raising for this venue.
 
     This is the list behind the bell in the R1 console — what the platform has
-    already decided is worth someone's attention, as opposed to what PISR works
+    already decided is worth someone's attention, as opposed to what PRISM works
     out for itself in `checks.py`. The two are worth showing side by side: a
-    venue can pass every check PISR runs and still have R1 shouting about it.
+    venue can pass every check PRISM runs and still have R1 shouting about it.
 
     NOT the AI "Incidents" feature from RUCKUS Analytics, which is a separate
     licensed product. `/events/query` exists as an endpoint but returned
@@ -569,11 +569,11 @@ def wifi_networks(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
     """
     Every Wi-Fi network defined on the tenant. Deliberately a direct query
     rather than NetworkService.get_wifi_networks: that one is `async def` around
-    blocking calls, and PISR fans out through threads instead.
+    blocking calls, and PRISM fans out through threads instead.
 
     PAGINATED ON PURPOSE. This used to be a single call for page 1 of 500, which
     silently truncated the tenant to its first 500 networks by name. That is not
-    a hypothetical limit on the venues PISR is pointed at: a per-unit-SSID
+    a hypothetical limit on the venues PRISM is pointed at: a per-unit-SSID
     property defines one network per unit, so a few hundred units already runs
     past a page. Every activation whose network fell off the end failed to join
     in `wireless_card` and rendered as a bare network id with no SSID, no
@@ -608,10 +608,10 @@ def wifi_networks(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
         if not fresh:
             # A full page of duplicates means paging stopped advancing; stop
             # rather than spin to the backstop.
-            logger.warning("pisr: /wifiNetworks/query page=%s was all duplicates, stopping", page)
+            logger.warning("prism: /wifiNetworks/query page=%s was all duplicates, stopping", page)
             break
     else:
-        logger.warning("pisr: /wifiNetworks/query hit the %s-page backstop (%s networks) — "
+        logger.warning("prism: /wifiNetworks/query hit the %s-page backstop (%s networks) — "
                        "the tenant may have more", NETWORK_PAGE_LIMIT, len(out))
 
     return out
@@ -670,7 +670,7 @@ IDENTITY_GROUP_PAGE_LIMIT = 50
 
 # Fields that must never reach the report. The pool and group DTOs are broad —
 # passphrase DTOs carry the secret itself plus email, phone and username, and an
-# identity group embeds an `identities` array. PISR summarises DPSK; it never
+# identity group embeds an `identities` array. PRISM summarises DPSK; it never
 # reproduces a credential or a resident's details. See shape._dpsk_safe.
 DPSK_FORBIDDEN_KEYS = {
     "passphrase", "devicepassphrase", "email", "phonenumber", "username",
@@ -729,7 +729,7 @@ def identity_groups_all(r1, tenant_id: Optional[str]) -> Dict[str, Any]:
         total = len(rows)
     complete = len(rows) >= total
     if not complete:
-        logger.warning("pisr: walked /identityGroups and got %s of %s groups — "
+        logger.warning("prism: walked /identityGroups and got %s of %s groups — "
                        "DPSK pool linkage cannot be trusted", len(rows), total)
     return {"rows": rows, "total": total, "complete": complete}
 
@@ -847,15 +847,15 @@ def adaptive_policies(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
         if len(rows) < POLICY_PAGE_SIZE:
             break
         if not fresh:
-            logger.warning("pisr: /policyTemplates/policies page=%s was all "
+            logger.warning("prism: /policyTemplates/policies page=%s was all "
                            "duplicates, stopping", page)
             break
     else:
-        logger.warning("pisr: /policyTemplates/policies hit the %s-page backstop "
+        logger.warning("prism: /policyTemplates/policies hit the %s-page backstop "
                        "(%s policies) — the tenant may have more",
                        POLICY_PAGE_LIMIT, len(out))
     if total is not None and len(out) < total:
-        logger.warning("pisr: /policyTemplates/policies walked %s of %s policies — "
+        logger.warning("prism: /policyTemplates/policies walked %s of %s policies — "
                        "set members beyond them will read as unresolved",
                        len(out), total)
     return out
@@ -875,7 +875,7 @@ def policy_set_members(r1, tenant_id: Optional[str], set_id: str) -> List[Dict[s
 
 # ── identity trace (on demand, admin only) ───────────────────
 #
-# Reads for /pisr/{cid}/identity/trace, which follows each DPSK username through
+# Reads for /prism/{cid}/identity/trace, which follows each DPSK username through
 # its policy's conditions to the network, AP groups and APs it lands on. Kept
 # out of the report: the conditions are one call per policy, and a per-unit MDU
 # puts a thousand policies in one venue's set.
@@ -935,7 +935,7 @@ def dpsk_usernames(r1, tenant_id: Optional[str], pool_id: str) -> Dict[str, Any]
     nothing else from those rows.
 
     This endpoint's rows carry the passphrase itself. It is read here because
-    the policy condition PISR is checking (`DPSK Username`) is evaluated
+    the policy condition PRISM is checking (`DPSK Username`) is evaluated
     against THIS username, and it is not the identity's `name`: on about half
     the tenants probed live 2026-09-22 the two differ for some rows. Checking
     the regex against the identity name would report typos that are not there

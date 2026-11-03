@@ -83,7 +83,7 @@ export function VisibilityProvider(
  *
  * Section ids are `<tab>.<thing>` by convention (see api/sections.py), so
  * membership is a prefix test and the frontend needs no copy of the catalogue
- * beyond the id list PISR.tsx registers. `api/tests/test_sections.py` asserts
+ * beyond the id list PRISM.tsx registers. `api/tests/test_sections.py` asserts
  * that convention holds — without it this silently answers "visible" for every
  * tab, which is the safe direction but not the intended one.
  */
@@ -103,7 +103,7 @@ export function tabVisible(hidden: string[] | null | undefined, tab: string): bo
 /**
  * How many sections live on a tab.
  *
- * Filled in by PISR.tsx at module load from the ids it actually renders, so
+ * Filled in by PRISM.tsx at module load from the ids it actually renders, so
  * this file needs no hardcoded copy of the catalogue and cannot fall out of
  * step with the cards. Unregistered tabs answer Infinity, which makes
  * `visibleTab` return true — the safe direction, per the note above.

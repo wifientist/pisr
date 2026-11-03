@@ -8,7 +8,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 /**
  * The accounts portal: create people, hand out enrolment links, revoke.
  *
- * NOTHING IS EMAILED, and that is the whole reason this exists. PISR's gate was
+ * NOTHING IS EMAILED, and that is the whole reason this exists. PRISM's gate was
  * Cloudflare Access until its one-time-PIN mail turned out to be silently
  * discarded by two of three customer domains — so an admin creates an account
  * here, copies the enrolment link, and delivers it however they like. See
@@ -30,7 +30,7 @@ interface AccountRow {
   id: string;
   username: string;
   /**
-   * A ROLE ID. "admin" and "user" ship with PISR; an administrator may have
+   * A ROLE ID. "admin" and "user" ship with PRISM; an administrator may have
    * built others on the Roles page. The role is the ONLY thing conferring a
    * capability — there is no second mechanism.
    */
@@ -76,7 +76,7 @@ interface MintedInvite {
  * The enrolment link the admin actually copies.
  *
  * THE SERVER SENDS A PATH AND THE BROWSER MAKES IT ABSOLUTE, because only the
- * browser knows the address this admin reached PISR on. The server building it
+ * browser knows the address this admin reached PRISM on. The server building it
  * produced `http://backend:8080/...` in dev, where vite proxies to the
  * container's internal name, and in production would have rested on whatever
  * Host the tunnel forwarded — a link that looks right and opens nothing. See
@@ -244,7 +244,7 @@ export default function AdminAccounts({ heldGrants, onClose }: {
               People
             </h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              Accounts that can sign in to PISR. Nothing is emailed — you copy
+              Accounts that can sign in to PRISM. Nothing is emailed — you copy
               the enrolment link and send it however you like.
             </p>
           </div>
@@ -262,7 +262,7 @@ export default function AdminAccounts({ heldGrants, onClose }: {
           <p className="m-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <b>These accounts decide nothing yet.</b> This instance is in{" "}
             <code>{data.mode}</code> mode. Create them now if you like — then set{" "}
-            <code>PISR_AUTH_MODE=accounts</code> and restart, and they take effect.
+            <code>PRISM_AUTH_MODE=accounts</code> and restart, and they take effect.
           </p>
         )}
 
@@ -335,7 +335,7 @@ export default function AdminAccounts({ heldGrants, onClose }: {
             {data.users.length === 0 && (
               <p className="rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-600">
                 No accounts yet. The first one is usually made on the box with{" "}
-                <code>scripts/pisr_admin.py</code>, but you can add one here.
+                <code>scripts/prism_admin.py</code>, but you can add one here.
               </p>
             )}
 

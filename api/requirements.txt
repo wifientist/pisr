@@ -1,11 +1,11 @@
-# PISR runtime dependencies.
+# PRISM runtime dependencies.
 #
 # Versions match rtools2's, so this inherits a combination already proven in
 # production. WeasyPrint's own transitives (pydyf, tinycss2, cssselect2, Pyphen,
 # fontTools, Pillow, tinyhtml5) are deliberately unpinned — let pip resolve what
 # 68.1 actually wants, then lock the result:
 #
-#   docker compose run --rm pisr pip freeze > api/requirements.lock.txt
+#   docker compose run --rm prism pip freeze > api/requirements.lock.txt
 #
 # Dropped from rtools2 (23 packages): SQLAlchemy, alembic, psycopg2-binary,
 # redis, APScheduler, boto3, cryptography, python-jose, python-multipart,
@@ -40,15 +40,15 @@ charset-normalizer==3.4.1
 idna==3.10
 urllib3==2.4.0
 
-# ── Cloudflare Access JWT verification (optional; PISR_ACCESS_TEAM) ──
+# ── Cloudflare Access JWT verification (optional; PRISM_ACCESS_TEAM) ──
 #
-# cryptography was dropped when PISR was extracted — see the note above, it
+# cryptography was dropped when PRISM was extracted — see the note above, it
 # went with the database. It comes back for one reason: verifying an RS256
 # assertion is the difference between proxy mode resting on proof and proxy
 # mode resting on the network boundary alone. Wheels exist for python:3.11-slim
 # so nothing is compiled at build time.
 #
-# Imported only when PISR_ACCESS_TEAM and PISR_ACCESS_AUD are both set. An
+# Imported only when PRISM_ACCESS_TEAM and PRISM_ACCESS_AUD are both set. An
 # oauth2-proxy deployment never loads either package.
 PyJWT==2.10.1
 cryptography==44.0.2

@@ -1,5 +1,5 @@
 """
-PISR report context — an assembled report in, a PDF template context out.
+PRISM report context — an assembled report in, a PDF template context out.
 
 Pure functions, no I/O and no RUCKUS ONE calls. The report handed in is exactly
 what the UI renders, so the PDF and the screen cannot disagree about what was
@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Mirrors evidenceHeader() in the PISR page: evidence keys are dict keys, and
+# Mirrors evidenceHeader() in the PRISM page: evidence keys are dict keys, and
 # naive title-casing turns "ssid" into "Ssid", which is worse than the raw key.
 HEADER_WORDS = {
     "ssid": "SSID", "ssids": "SSIDs", "ip": "IP", "ap": "AP", "aps": "APs",
@@ -552,7 +552,7 @@ def build_context(report: Dict[str, Any], controller_name: str,
         # shape.wired_client_card — the counts here are things plugged in, not
         # learned addresses, and the difference is spelled out in the template.
         # R1's own alarms, already shaped and sorted by shape.incident_card.
-        # Already grouped and ordered by services/pisr/punchlist.py; the
+        # Already grouped and ordered by services/prism/punchlist.py; the
         # template only lays it out.
         "punchlist": report.get("punchlist") or {},
         "incidents": report.get("incidents") or {},

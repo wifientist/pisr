@@ -1,9 +1,9 @@
 """
 The catalogue of report sections that an admin can show or hide.
 
-WHY THIS FILE EXISTS. PISR renders the same report twice — once as React in
-`src/pages/PISR.tsx` and once as HTML-for-print in
-`api/templates/reports/pisr.html` — and the two are meant to be the same
+WHY THIS FILE EXISTS. PRISM renders the same report twice — once as React in
+`src/pages/PRISM.tsx` and once as HTML-for-print in
+`api/templates/reports/prism.html` — and the two are meant to be the same
 picture. Hiding a card by editing markup means editing both, remembering both,
 and getting them to agree forever. They already drifted once (the spectrum
 chart's paint order, noted in CLAUDE.md), and that was a bug nobody could see
@@ -103,8 +103,8 @@ class Section:
     """
     One hideable piece of the report.
 
-    `id`     stable, dotted, `<tab>.<thing>`. It is written into PISR.tsx and
-             pisr.html verbatim, and stored in the policy file, so renaming one
+    `id`     stable, dotted, `<tab>.<thing>`. It is written into PRISM.tsx and
+             prism.html verbatim, and stored in the policy file, so renaming one
              is a migration, not an edit.
     `paths`  dotted paths into the report payload this section OWNS. Owning
              means: if this section is hidden, this data does not leave the
@@ -126,7 +126,7 @@ class Section:
     columns: Tuple["Column", ...] = ()
 
 
-# Tab order matches the tab bar in PISR.tsx. The admin portal groups by this,
+# Tab order matches the tab bar in PRISM.tsx. The admin portal groups by this,
 # and a tab whose every section is hidden is dropped from the bar entirely —
 # an empty tab is worse than a missing one.
 TABS: List[Tuple[str, str]] = [
@@ -178,7 +178,7 @@ SECTIONS: Tuple[Section, ...] = (
         id="overview.verification",
         label="Verification & findings",
         tab="overview",
-        hint="Every check PISR ran, and what it found. Hiding this hides the "
+        hint="Every check PRISM ran, and what it found. Hiding this hides the "
              "findings section of the PDF too.",
         paths=("verification",),
     ),
@@ -187,7 +187,7 @@ SECTIONS: Tuple[Section, ...] = (
         label="RUCKUS ONE alarms",
         tab="overview",
         hint="What R1 is raising about this venue right now — its opinion, "
-             "separate from PISR's own checks.",
+             "separate from PRISM's own checks.",
         paths=("incidents",),
     ),
     Section(
@@ -647,7 +647,7 @@ SECTIONS: Tuple[Section, ...] = (
     # ── Whole report ─────────────────────────────────────────────────
     Section(
         id="report.sources",
-        label="What PISR read",
+        label="What PRISM read",
         tab="report",
         hint="The list of read-only R1 endpoints this report came from.",
         paths=("meta.sources",),
@@ -716,7 +716,7 @@ def check_label(check_id: str) -> str:
     """
     A check id as prose, for anything outside this module.
 
-    The batch roll-up (`services/pisr/rollup.py`) renders check ids it read
+    The batch roll-up (`services/prism/rollup.py`) renders check ids it read
     back off disk, and this is the only place a label for one exists. Public
     so that never becomes a second, drifting copy of `_ACRONYMS`.
     """

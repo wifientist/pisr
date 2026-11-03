@@ -189,7 +189,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
     if (isMsp && !ec) { setVenues(null); return; }
     const q = isMsp ? `?tenant_id=${encodeURIComponent(ec)}` : "";
     setVenues(null); setVenue("");
-    fetch(`${API_BASE_URL}/pisr/${activeControllerId}/venues${q}`, { credentials: "same-origin" })
+    fetch(`${API_BASE_URL}/prism/${activeControllerId}/venues${q}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body) => setVenues((body.venues || []).map((v: any) => ({ id: v.id, name: v.name || v.id }))))
       .catch(() => setVenues([]));
@@ -200,7 +200,7 @@ export default function AdminBaseline({ onClose }: { onClose: () => void }) {
     setLoadingVenue(true); setError(null);
     const q = new URLSearchParams({ venue_id: venue });
     if (isMsp && ec) q.set("tenant_id", ec);
-    fetch(`${API_BASE_URL}/pisr/${activeControllerId}/report?${q}`, { credentials: "same-origin" })
+    fetch(`${API_BASE_URL}/prism/${activeControllerId}/report?${q}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((report) => {
         const map: Record<string, string> = {};

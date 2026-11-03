@@ -1,6 +1,6 @@
 [Unit]
-Description=Pull and redeploy PISR if main has moved
-Documentation=https://github.com/wifientist/pisr/blob/main/deploy/README.md
+Description=Pull and redeploy PRISM if main has moved
+Documentation=https://github.com/wifientist/prism/blob/main/deploy/README.md
 # Rootless podman talks to the user's own socket, so this needs the user
 # session up. It is a --user unit; see deploy/README.md for enable-linger,
 # without which the session ends at logout and the timer stops with it.
@@ -9,7 +9,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/app/deploy/pisr-update.sh
+ExecStart=%h/app/deploy/prism-update.sh
 
 # LOAD-BEARING. Without it this unit kills the container it just deployed.
 #
@@ -21,8 +21,8 @@ ExecStart=%h/app/deploy/pisr-update.sh
 # reported success, and ninety seconds later systemd killed the container it
 # had just brought up:
 #
-#   pisr-update.service: State 'stop-sigterm' timed out. Killing.
-#   pisr-update.service: Killing process 3998 (rootlessport) with signal SIGKILL.
+#   prism-update.service: State 'stop-sigterm' timed out. Killing.
+#   prism-update.service: Killing process 3998 (rootlessport) with signal SIGKILL.
 #
 # KillMode=process confines the kill to the main process — the script, which
 # has already exited — and leaves its descendants alone. The container survives
@@ -37,7 +37,11 @@ TimeoutStopSec=15
 # Settings live here rather than in the script so an operator changes the
 # deployment without editing a tracked file — which would make the working
 # tree dirty and stop the very script that reads it.
+# The pre-rename file first, so a box cut over from PISR keeps its settings
+# without having to rename them; the PRISM one, read second, wins on any name
+# both set. deploy/legacy-names.sh maps PISR_* onto PRISM_* inside the script.
 EnvironmentFile=-%h/.config/pisr-update.env
+EnvironmentFile=-%h/.config/prism-update.env
 
 # A rebuild is slow and this is not urgent; keep it off the back of whatever
 # else the box is doing.

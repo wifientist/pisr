@@ -16,7 +16,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * venues a customer has while one of them is still loading.
  *
  * THE LISTS COME FROM THE ORDINARY ENDPOINTS. An admin is unrestricted, so
- * /api/r1/{cid}/msp/mspEcs and /api/pisr/{cid}/venues return everything for
+ * /api/r1/{cid}/msp/mspEcs and /api/prism/{cid}/venues return everything for
  * them. There is no admin-only mirror of either, deliberately: a second path
  * to the same R1 data is a second place for the scope filter to be forgotten.
  */
@@ -76,7 +76,7 @@ export function useScopeCatalogue(): ScopeCatalogue {
         })
         .catch((e: Error) => setEcError(e.message));
     } else {
-      fetch(`${API_BASE_URL}/pisr/${activeControllerId}/scope`, { credentials: "same-origin" })
+      fetch(`${API_BASE_URL}/prism/${activeControllerId}/scope`, { credentials: "same-origin" })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then((body) => { setSoleTenant(body.tenantId); setEcs([]); })
         .catch((e: Error) => setEcError(e.message));
@@ -102,7 +102,7 @@ export function useScopeCatalogue(): ScopeCatalogue {
     if (!tenant || requested.current.has(tenant)) return;
     requested.current.add(tenant);
     setVenues((v) => ({ ...v, [tenant]: "loading" }));
-    fetch(`${API_BASE_URL}/pisr/${activeControllerId}/venues?tenant_id=${encodeURIComponent(tenant)}`,
+    fetch(`${API_BASE_URL}/prism/${activeControllerId}/venues?tenant_id=${encodeURIComponent(tenant)}`,
           { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body) => setVenues((v) => ({

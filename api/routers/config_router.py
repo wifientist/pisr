@@ -1,7 +1,7 @@
 """
 What the SPA needs to know about the tenant it is pointed at.
 
-Replaces the part of rtools2's auth surface that PISR actually used: the frontend
+Replaces the part of rtools2's auth surface that PRISM actually used: the frontend
 read its controller identity out of a login session, and now reads it from here.
 Serving it at runtime rather than baking VITE_* vars at build time keeps .env the
 single source of truth — flipping R1_EC_TYPE from EC to MSP is a restart, not a

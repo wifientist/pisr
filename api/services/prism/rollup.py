@@ -4,7 +4,7 @@ Batch roll-up: a venue's report reduced to counts, and counts summed upward.
     MSP  ->  tenant (MSP-EC)  ->  venue (property)
 
 Each level is a SUM of the one below and nothing more. The roll-up says WHICH
-checks failed — by id, from PISR's own fixed catalogue — and how many devices
+checks failed — by id, from PRISM's own fixed catalogue — and how many devices
 each names, but never what a finding SAYS. "APs online — 3 devices" is a
 catalogue label and two integers; "3 APs offline in Unit 4B" is the report, and
 the report is not kept. The detail is one click away in the live report, which
@@ -13,14 +13,14 @@ re-polls; that is the whole design.
 `summarise` is the boundary of what `batch_runs.BatchStore` persists. If a
 field is not produced here, it is not on disk. Every check id is checked
 against `sections.ALL_CHECK_IDS` on the way in, so the only strings that can
-reach the file are ones this repository already ships — an id PISR does not
+reach the file are ones this repository already ships — an id PRISM does not
 recognise is dropped rather than written.
 """
 
 from typing import Any, Dict, Iterable, List, Optional
 
 import sections
-from services.pisr import punchlist
+from services.prism import punchlist
 
 SEVERITIES = punchlist.ACTIONABLE          # critical, warning, info
 SEVERITY_RANK = {sev: i for i, sev in enumerate(SEVERITIES)}

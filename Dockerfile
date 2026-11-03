@@ -30,7 +30,7 @@ WORKDIR /app
 
 # WeasyPrint >= 53 renders through Pango directly. It needs NO cairo and NO
 # gdk-pixbuf — rtools2's Dockerfile still installs both from an older era — and
-# no Chromium, since that whole block there belongs to Playwright, which PISR
+# no Chromium, since that whole block there belongs to Playwright, which PRISM
 # does not use.
 #
 #   libpango-1.0-0     text layout (pulls in harfbuzz, glib, fribidi)
@@ -76,17 +76,17 @@ COPY --from=web /web/dist /app/static
 # deploy script confirm that the container now running is the commit it just
 # built — the repo's HEAD cannot answer that, and diverges from the truth in
 # exactly the cases worth catching.
-ARG PISR_BUILD_SHA=unknown
-ARG PISR_BUILD_TIME=
-ENV PISR_BUILD_SHA=${PISR_BUILD_SHA} \
-    PISR_BUILD_TIME=${PISR_BUILD_TIME}
-LABEL org.opencontainers.image.revision="${PISR_BUILD_SHA}" \
-      org.opencontainers.image.created="${PISR_BUILD_TIME}" \
-      org.opencontainers.image.source="https://github.com/wifientist/pisr"
+ARG PRISM_BUILD_SHA=unknown
+ARG PRISM_BUILD_TIME=
+ENV PRISM_BUILD_SHA=${PRISM_BUILD_SHA} \
+    PRISM_BUILD_TIME=${PRISM_BUILD_TIME}
+LABEL org.opencontainers.image.revision="${PRISM_BUILD_SHA}" \
+      org.opencontainers.image.created="${PRISM_BUILD_TIME}" \
+      org.opencontainers.image.source="https://github.com/wifientist/prism"
 
 # /data holds one file: the section visibility policy (see api/visibility.py).
 #
-# Created HERE, owned by pisr, and that ordering is the whole point. Docker and
+# Created HERE, owned by prism, and that ordering is the whole point. Docker and
 # podman seed a fresh NAMED volume from whatever the image has at the mount
 # point, ownership included — so a directory that does not exist in the image,
 # or exists owned by root, produces a root-owned volume that the uid-1000
@@ -96,10 +96,10 @@ LABEL org.opencontainers.image.revision="${PISR_BUILD_SHA}" \
 # This does NOT help a BIND mount, where the host directory's ownership wins.
 # If you bind-mount a config directory, chown it to 1000:1000 on the host (or,
 # rootless, to the uid that maps to 1000 inside).
-RUN useradd -m -u 1000 pisr \
+RUN useradd -m -u 1000 prism \
  && mkdir -p /data \
- && chown -R pisr:pisr /app /data
-USER pisr
+ && chown -R prism:prism /app /data
+USER prism
 
 EXPOSE 8080
 

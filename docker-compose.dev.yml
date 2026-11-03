@@ -3,7 +3,7 @@
 #   docker compose -f docker-compose.dev.yml up
 #
 # Open http://localhost:4173 — vite serves the SPA and proxies /api to the
-# backend container. The backend runs API-only here (PISR_STATIC_DIR points at
+# backend container. The backend runs API-only here (PRISM_STATIC_DIR points at
 # nothing, so main.py skips its StaticFiles mount) and reloads on edits to api/.
 #
 # Production is a different shape entirely: one container on :8080 serving both.
@@ -14,11 +14,11 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    container_name: pisr-backend-dev
+    container_name: prism-backend-dev
     env_file: .env
     environment:
       # Deliberately nonexistent: vite owns the SPA in dev.
-      PISR_STATIC_DIR: /nonexistent
+      PRISM_STATIC_DIR: /nonexistent
       LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
     volumes:
       - ./api:/app
@@ -32,7 +32,7 @@ services:
 
   frontend:
     image: node:20-alpine
-    container_name: pisr-frontend-dev
+    container_name: prism-frontend-dev
     working_dir: /app
     depends_on:
       - backend

@@ -1,9 +1,9 @@
 """
-Probe: does a real tenant populate the fields PISR builds its report from?
+Probe: does a real tenant populate the fields PRISM builds its report from?
 
 The OpenAPI spec documents the *surface*. It does not say whether `IP` and
 `extIp` come back on an AP row, whether a venue has a propertyConfig, or what a
-venue's Wi-Fi activations actually look like. This walks exactly the reads PISR
+venue's Wi-Fi activations actually look like. This walks exactly the reads PRISM
 makes and reports population rates, then builds one real report so the shaping
 and the checks are exercised against live data.
 
@@ -11,10 +11,10 @@ Everything here is a GET or a `*/query` POST — the same read-only surface the
 tool itself uses. Nothing is created, modified, deleted, rebooted or synced.
 
 Usage:
-    docker compose run --rm pisr python scripts/probe_pisr.py [options]
+    docker compose run --rm prism python scripts/probe_prism.py [options]
 
     (or, against the dev stack:
-     docker compose -f docker-compose.dev.yml exec backend python scripts/probe_pisr.py)
+     docker compose -f docker-compose.dev.yml exec backend python scripts/probe_prism.py)
 
 The tenant comes from .env — there is no controller to name on the command line.
 
@@ -34,8 +34,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import CONTROLLER
 from r1_client import build_r1_client
-from services.pisr import fetch
-from services.pisr.collect import build_report, list_venues
+from services.prism import fetch
+from services.prism.collect import build_report, list_venues
 
 
 def population(rows, fields):

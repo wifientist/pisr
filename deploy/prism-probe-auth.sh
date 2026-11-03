@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# Probe PISR's gate from the outside, the way a stranger would.
+# Probe PRISM's gate from the outside, the way a stranger would.
 #
-# WHAT THIS IS FOR. Accounts mode put PISR's login page on the public internet
+# WHAT THIS IS FOR. Accounts mode put PRISM's login page on the public internet
 # with nothing in front of it — before that, Cloudflare Access was the outer
 # gate and this one was the inner. That change makes a handful of properties
 # load-bearing which used to be belt-and-braces, and this asserts them against
 # a RUNNING instance rather than against the source.
 #
-#   ./pisr-probe-auth.sh https://pisr.example.com
-#   ./pisr-probe-auth.sh http://10.10.77.108:8080
+#   ./prism-probe-auth.sh https://prism.example.com
+#   ./prism-probe-auth.sh http://10.10.77.108:8080
 #
-# Defaults to the address deploy/pisr-app-status.sh would probe, derived from
-# PISR_BIND and PISR_PORT in the same env file the deploy script reads.
+# Defaults to the address deploy/prism-app-status.sh would probe, derived from
+# PRISM_BIND and PRISM_PORT in the same env file the deploy script reads.
 #
 # READ-ONLY, AND IT STAYS THAT WAY. It creates nothing, changes no password,
 # disables nobody and needs no session. Every request is either a GET, or a
@@ -35,13 +35,18 @@
 
 set -uo pipefail
 
+# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
+_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# shellcheck source=legacy-names.sh
+[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
+
 BASE="${1:-}"
 
-# Same derivation as pisr-app-status.sh: the published address, not localhost.
+# Same derivation as prism-app-status.sh: the published address, not localhost.
 # Rootless podman forwards through a separate process, and when that dies the
 # container keeps serving to nobody while its own healthcheck still passes.
 if [ -z "$BASE" ]; then
-  _env_file="${PISR_ENV_FILE:-${PISR_APP_DIR:-$HOME/app}/.env}"
+  _env_file="${PRISM_ENV_FILE:-${PRISM_APP_DIR:-$HOME/app}/.env}"
   # REFUSE TO GUESS OFF-BOX. Without that env file there is nothing to derive
   # from, and the fallback would be http://127.0.0.1:8080 — which on a
   # developer's laptop is whatever else happens to be on 8080. Probing the
@@ -50,15 +55,16 @@ if [ -z "$BASE" ]; then
   if [ ! -r "$_env_file" ]; then
     printf 'No URL given and %s is not readable, so there is nothing to\n' "$_env_file" >&2
     printf 'derive an address from. Name the target explicitly:\n\n' >&2
-    printf '  %s https://pisr.example.com\n\n' "$0" >&2
+    printf '  %s https://prism.example.com\n\n' "$0" >&2
     printf 'Running it from your own machine against the public hostname is the\n' >&2
     printf 'better test anyway — it goes through the tunnel and the proxy, which\n' >&2
     printf 'is the path that is actually exposed.\n' >&2
     exit 2
   fi
-  _get() { [ -r "$_env_file" ] && sed -n "s/^$1=//p" "$_env_file" | tail -1 | tr -d '"'"'"'\r'; }
-  _bind="$(_get PISR_BIND)"
-  _port="$(_get PISR_PORT)"
+  _get1() { [ -r "$_env_file" ] && sed -n "s/^$1=//p" "$_env_file" | tail -1 | tr -d '"'"'"'\r'; }
+  _get() { local v; v="$(_get1 "$1")"; [ -n "$v" ] || v="$(_get1 "$(legacy_name "$1")")"; printf '%s' "$v"; }
+  _bind="$(_get PRISM_BIND)"
+  _port="$(_get PRISM_PORT)"
   case "$_bind" in ""|"0.0.0.0"|"::"|"*") _bind="127.0.0.1" ;; esac
   BASE="http://${_bind}:${_port:-8080}"
 fi
@@ -84,7 +90,7 @@ post_code() {
 }
 
 # Same, but the body arrives on stdin. argv has a size limit measured in
-# hundreds of KB and curl dies with "Argument list too long" well before PISR
+# hundreds of KB and curl dies with "Argument list too long" well before PRISM
 # sees anything — which looks like a finding and is not one.
 # Status and body together, tab-separated. The enumeration checks below need
 # both: a 429 and a 401 can carry different bodies and take wildly different
@@ -122,7 +128,7 @@ printf '  gate mode: %s\n' "${MODE:-unknown}"
 head_ "Unauthenticated surface"
 
 for p in /api/status /api/config /api/admin/roles /api/admin/accounts \
-         /api/pisr/1/venues /api/r1/1/msp/mspEcs /api/checks; do
+         /api/prism/1/venues /api/r1/1/msp/mspEcs /api/checks; do
   c="$(code "$BASE$p")"
   case "$c" in
     401|403) ok "$p -> $c" ;;
@@ -205,7 +211,7 @@ else
   # passes ("identical messages" — both were 429) and false failures ("too
   # fast to have hashed" — it never got as far as hashing).
   #
-  # Note the counter is REMEMBERED for PISR_AUTH_LOCKOUT_SECONDS (default 300)
+  # Note the counter is REMEMBERED for PRISM_AUTH_LOCKOUT_SECONDS (default 300)
   # even after a block expires, so a second run inside five minutes starts part
   # way up the backoff curve. Wait it out for a clean measurement.
   if [ "$c1" = "429" ] || [ "$c2" = "429" ]; then
@@ -289,7 +295,7 @@ fi
 
 # ── Enrolment ────────────────────────────────────────────────────────
 #
-# The only unauthenticated WRITE path in PISR. The token is 256 random bits, so
+# The only unauthenticated WRITE path in PRISM. The token is 256 random bits, so
 # guessing is not the threat; what matters is that rubbish is refused and that
 # a bad token cannot be told from an unused one.
 head_ "Enrolment"

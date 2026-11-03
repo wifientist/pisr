@@ -1,8 +1,8 @@
 {
-  "name": "pisr",
+  "name": "prism",
   "version": "1.0.0",
   "private": true,
-  "description": "Property Installation Status Report — a read-only poll of one RUCKUS ONE venue",
+  "description": "Property Rollout & Installation Status Monitor — a read-only poll of one RUCKUS ONE venue",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

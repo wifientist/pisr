@@ -5,7 +5,7 @@
 # matters, because a switch-port crawl on a large venue is exactly the kind of
 # request that brushes up against a default 90s proxy timeout.
 #
-# One volume, and it holds one small JSON file. PISR still stores no TENANT
+# One volume, and it holds one small JSON file. PRISM still stores no TENANT
 # data — no database, no cache, no snapshot directory, no report that outlives
 # the response that carried it. What `pisr-config` holds is the section
 # visibility policy: which report cards an ordinary user is shown, written by
@@ -14,7 +14,7 @@
 # if something later wants to keep a *report* here, that is a different feature
 # with its own argument to make.
 #
-# Without the volume PISR still runs: the policy file lives inside the
+# Without the volume PRISM still runs: the policy file lives inside the
 # container, the portal reports itself read-only, and nothing is hidden from
 # anyone. That is the harmless direction, and it is what a hand-run
 # `docker run` gets.
@@ -26,9 +26,9 @@
 # Better on a shared host: keep the file out of the working tree entirely, so a
 # stray `chmod -R`, a backup job or an editor swapfile cannot reach it.
 #
-#   sudo install -d -m 0750 /etc/pisr
-#   sudo install -m 0600 .env /etc/pisr/pisr.env
-#   PISR_ENV_FILE=/etc/pisr/pisr.env docker compose up -d
+#   sudo install -d -m 0750 /etc/prism
+#   sudo install -m 0600 .env /etc/prism/prism.env
+#   PRISM_ENV_FILE=/etc/prism/prism.env docker compose up -d
 #
 # Best, if you want the shared secret out of the container environment
 # altogether: leave the non-secret settings in the env file and hand the two
@@ -38,38 +38,38 @@
 # change — uncomment the two blocks below and set, in the env file:
 #
 #   R1_SHARED_SECRET_FILE=/run/secrets/r1_shared_secret
-#   PISR_AUTH_PASSPHRASE_FILE=/run/secrets/pisr_passphrase
+#   PRISM_AUTH_PASSPHRASE_FILE=/run/secrets/prism_passphrase
 #
-# (and drop the plain R1_SHARED_SECRET / PISR_AUTH_PASSPHRASE lines).
+# (and drop the plain R1_SHARED_SECRET / PRISM_AUTH_PASSPHRASE lines).
 
 services:
-  pisr:
+  prism:
     build:
       context: .
       args:
-        # deploy/pisr-update.sh exports these. Empty on a hand-run build, which
+        # deploy/prism-update.sh exports these. Empty on a hand-run build, which
         # surfaces as "unknown" on /api/status rather than as a wrong answer.
-        PISR_BUILD_SHA: ${PISR_BUILD_SHA:-unknown}
-        PISR_BUILD_TIME: ${PISR_BUILD_TIME:-}
-    container_name: pisr
+        PRISM_BUILD_SHA: ${PRISM_BUILD_SHA:-unknown}
+        PRISM_BUILD_TIME: ${PRISM_BUILD_TIME:-}
+    container_name: prism
     # `always`, not `unless-stopped`: rootless podman has no daemon, so the
     # policy only matters at boot, where podman-restart.service starts
     # `--filter restart-policy=always` and nothing else. `unless-stopped` left
-    # PISR down after an LXC reboot (2026-10-15). Needs, once per box:
+    # PRISM down after an LXC reboot (2026-10-15). Needs, once per box:
     #   systemctl --user enable podman-restart.service
     restart: always
-    env_file: ${PISR_ENV_FILE:-.env}
+    env_file: ${PRISM_ENV_FILE:-.env}
     ports:
-      # Defaults to every interface, which is what makes PISR reachable from
+      # Defaults to every interface, which is what makes PRISM reachable from
       # the rest of the LAN — the intent, and also why the gate in
-      # api/auth.py is not optional. Set PISR_BIND in .env to narrow it:
-      #   PISR_BIND=127.0.0.1     this host only
-      #   PISR_BIND=10.0.25.25    one interface, e.g. the VPN side
+      # api/auth.py is not optional. Set PRISM_BIND in .env to narrow it:
+      #   PRISM_BIND=127.0.0.1     this host only
+      #   PRISM_BIND=10.0.25.25    one interface, e.g. the VPN side
       #
-      # In PISR_AUTH_MODE=proxy, delete this block entirely and use
+      # In PRISM_AUTH_MODE=proxy, delete this block entirely and use
       # `expose: ["8080"]` instead — a published port there is an
       # authentication bypass, not a convenience. See README, "SSO".
-      - "${PISR_BIND:-0.0.0.0}:${PISR_PORT:-8080}:8080"
+      - "${PRISM_BIND:-0.0.0.0}:${PRISM_PORT:-8080}:8080"
     volumes:
       # The visibility policy, accounts, org baseline and batch record. Named rather than a bind mount
       # so it survives `docker compose down` and the image rebuild that every
@@ -79,7 +79,7 @@ services:
       - pisr-config:/data
     # secrets:
     #   - r1_shared_secret
-    #   - pisr_passphrase
+    #   - prism_passphrase
     logging:
       driver: json-file
       options:
@@ -87,10 +87,16 @@ services:
         max-file: "3"
 
 volumes:
+  # STILL `pisr-config`, from before the rename to PRISM, and deliberately so.
+  # Compose names the real volume after this key (`<project>_pisr-config`), so
+  # renaming the key does not rename the volume — it creates a NEW, EMPTY one
+  # and mounts that instead. Every account, role, baseline and batch record
+  # would appear to vanish on the next deploy, with the old volume sitting
+  # intact and unmounted beside it. The name is never shown to anyone; leave it.
   pisr-config:
 
 # secrets:
 #   r1_shared_secret:
-#     file: /etc/pisr/r1_shared_secret
-#   pisr_passphrase:
-#     file: /etc/pisr/pisr_passphrase
+#     file: /etc/prism/r1_shared_secret
+#   prism_passphrase:
+#     file: /etc/prism/prism_passphrase

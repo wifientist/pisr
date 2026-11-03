@@ -111,10 +111,10 @@ function AuthCard({ children, onSubmit }: {
       >
         <div className="flex items-center gap-2 text-gray-900">
           <Lock size={18} className="text-gray-400 shrink-0" />
-          <h1 className="font-semibold">PISR</h1>
+          <h1 className="font-semibold">PRISM</h1>
         </div>
         <p className="mt-1 text-sm text-gray-500">
-          Property Installation Status Report
+          Property Rollout & Installation Status Monitor
         </p>
         {children}
       </form>
@@ -133,7 +133,7 @@ function AuthCard({ children, onSubmit }: {
  * In ACCOUNTS mode it asks for a username and password; in passphrase mode,
  * one passphrase. THERE IS NO THIRD OPTION: accounts mode once offered a
  * break-glass passphrase behind a link, and that door has been removed —
- * recovery is another admin, or `pisr_admin.py invite <name>` on the box,
+ * recovery is another admin, or `prism_admin.py invite <name>` on the box,
  * which mints a single-use link attributed to a named person instead of
  * handing out a standing secret that leaves no name in the audit trail.
  */
@@ -187,7 +187,7 @@ function LoginScreen({ status, onSignedIn }: {
           <b>No accounts exist yet</b>, so nobody can sign in. Create the first
           administrator on the box:
           <code className="mt-1 block break-all text-[11px]">
-            docker compose run --rm pisr python scripts/pisr_admin.py add-user
+            docker compose run --rm prism python scripts/prism_admin.py add-user
             &lt;name&gt; --admin
           </code>
         </p>
@@ -195,20 +195,20 @@ function LoginScreen({ status, onSignedIn }: {
 
       {!usingPassphrase && (
         <>
-          <label htmlFor="pisr-username"
+          <label htmlFor="prism-username"
                  className="mt-6 block text-sm font-medium text-gray-700">
             Username
           </label>
-          <input id="pisr-username" autoFocus autoComplete="username"
+          <input id="prism-username" autoFocus autoComplete="username"
                  value={username}
                  onChange={(e) => setUsername(e.target.value)}
                  className={FIELD} />
 
-          <label htmlFor="pisr-password"
+          <label htmlFor="prism-password"
                  className="mt-4 block text-sm font-medium text-gray-700">
             Password
           </label>
-          <input id="pisr-password" type="password" autoComplete="current-password"
+          <input id="prism-password" type="password" autoComplete="current-password"
                  value={password}
                  onChange={(e) => setPassword(e.target.value)}
                  className={FIELD} />
@@ -217,11 +217,11 @@ function LoginScreen({ status, onSignedIn }: {
 
       {usingPassphrase && (
         <>
-          <label htmlFor="pisr-passphrase"
+          <label htmlFor="prism-passphrase"
                  className="mt-6 block text-sm font-medium text-gray-700">
             Passphrase
           </label>
-          <input id="pisr-passphrase" type="password" autoFocus
+          <input id="prism-passphrase" type="password" autoFocus
                  autoComplete="current-password"
                  value={passphrase}
                  onChange={(e) => setPassphrase(e.target.value)}
@@ -242,7 +242,7 @@ function LoginScreen({ status, onSignedIn }: {
       {accounts && (
         <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-500">
           Forgotten your password? Ask an administrator to send you a reset
-          link — PISR cannot email you one.
+          link — PRISM cannot email you one.
         </p>
       )}
     </AuthCard>
@@ -398,13 +398,13 @@ function ProxyDeadEnd() {
           <h1 className="font-semibold text-amber-900">Not signed in</h1>
         </div>
         <p className="mt-2 text-sm text-amber-800">
-          This PISR instance authenticates through your organisation's single
+          This PRISM instance authenticates through your organisation's single
           sign-on, and no identity arrived with this request.
         </p>
         <p className="mt-3 text-sm text-amber-800">
           Reach it through the usual address rather than directly, and sign in
           when your identity provider asks. If you already did, the proxy in
-          front of PISR may not be forwarding the identity header — its logs
+          front of PRISM may not be forwarding the identity header — its logs
           will say.
         </p>
       </div>
@@ -413,12 +413,12 @@ function ProxyDeadEnd() {
 }
 
 /**
- * There are no user accounts in standalone PISR.
+ * There are no user accounts in standalone PRISM.
  *
- * This shim exists so that PISR.tsx can be carried across from rtools2
+ * This shim exists so that PRISM.tsx can be carried across from rtools2
  * unmodified. There, it read its tenant identity out of a login session via
  * useAuth(); here the same hook is backed by .env, fetched once from
- * /api/config. The five keys below are exactly what PISR.tsx destructures.
+ * /api/config. The five keys below are exactly what PRISM.tsx destructures.
  *
  * What this provider added on top of the original shim is the gate: one shared
  * passphrase in exchange for a signed HttpOnly session cookie, checked by
@@ -443,7 +443,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // three times below, and a useState added under one of those is called only
   // on some renders — which React sees as the hook count changing mid-session
   // ("rendered more hooks than during the previous render") and a blank page.
-  // CLAUDE.md documents the same trap in PISR.tsx.
+  // CLAUDE.md documents the same trap in PRISM.tsx.
   //
   // Read once from the URL rather than watched: the token arrives in the
   // initial navigation and nothing else ever puts one there.
@@ -504,7 +504,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [status, controller]);
 
   const signOut = async () => {
-    // In proxy mode PISR holds no session to end — the SSO cookie belongs to
+    // In proxy mode PRISM holds no session to end — the SSO cookie belongs to
     // the proxy. Hand off to its sign-out URL if the operator configured one.
     if (status?.mode === "proxy") {
       if (status.logoutUrl) window.location.href = status.logoutUrl;
@@ -544,7 +544,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       <div className="min-h-screen flex items-center justify-center p-8">
         <div className="max-w-lg rounded-lg border border-red-200 bg-red-50 p-6">
           <h1 className="font-semibold text-red-800">
-            Could not read the PISR configuration
+            Could not read the PRISM configuration
           </h1>
           <p className="mt-2 text-sm text-red-700">{error}</p>
           <p className="mt-3 text-sm text-red-700">
@@ -570,7 +570,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : <LoginScreen status={status} onSignedIn={refresh} />;
   }
 
-  // Gate rendering on the fetch. PISR.tsx shows a "pick a RUCKUS ONE
+  // Gate rendering on the fetch. PRISM.tsx shows a "pick a RUCKUS ONE
   // controller" panel whenever activeControllerId is null, and without this
   // gate that panel flashes for one frame on every page load.
   if (!controller) {
@@ -604,21 +604,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     >
       {children}
       {/*
-        Rendered here rather than in PISR.tsx's Header: that file is kept as
+        Rendered here rather than in PRISM.tsx's Header: that file is kept as
         close to its rtools2 original as possible, and Header would additionally
         need signOut threaded down to it, which the context does not expose.
         Fixed to the corner so it lands on top of whichever tab is showing, and
         hidden entirely when there is no gate to sign out of.
 
         Top right, because that is where a browser user looks for whoever they
-        are signed in as. It overlays PISR.tsx's own header row, which is left
+        are signed in as. It overlays PRISM.tsx's own header row, which is left
         aligned and so has the space — except on a narrow phone, where the
         Read-only pill reaches far enough right to collide. There the
         label is dropped and the icon stands alone.
       */}
       {(() => {
         // In proxy mode the sign-out is only a button if there is somewhere to
-        // send them; otherwise it is a label saying who PISR thinks you are.
+        // send them; otherwise it is a label saying who PRISM thinks you are.
         const canSignOut =
           !status || status.mode !== "proxy" || Boolean(status.logoutUrl);
         const shell =
@@ -696,7 +696,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             {status?.required && (canSignOut ? (
               <button
                 onClick={signOut}
-                title={status.user ? `Signed in as ${status.user}` : "Sign out of PISR"}
+                title={status.user ? `Signed in as ${status.user}` : "Sign out of PRISM"}
                 className={`${shell} hover:bg-white hover:text-gray-900`}
               >
                 <LogOut size={13} className="shrink-0" />

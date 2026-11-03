@@ -4,7 +4,7 @@ Turning R1's raw configuration keys into something a person reads.
 The pattern is lifted from rtools2's bulk WLAN editor, which solved the same
 problem for one known object: a label table, an enum table, a units table, and
 one `format_value`. What is different here is that the Config tab renders about
-thirty-five arbitrary blobs whose shape PISR does not control and which RUCKUS
+thirty-five arbitrary blobs whose shape PRISM does not control and which RUCKUS
 changes without telling anyone — so this CANNOT be an exhaustive hand-written
 map the way the WLAN editor's was.
 

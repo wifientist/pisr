@@ -28,12 +28,12 @@ sys.path.insert(0, str(API))
 # config's controller half needs these to import.
 for _n, _v in (("R1_TENANT_ID", "t"), ("R1_CLIENT_ID", "c"), ("R1_SHARED_SECRET", "s")):
     os.environ.setdefault(_n, _v)
-os.environ.setdefault("PISR_AUTH_PASSPHRASE", "test-passphrase-123")
+os.environ.setdefault("PRISM_AUTH_PASSPHRASE", "test-passphrase-123")
 
 import baselines                              # noqa: E402
-from services.pisr import shape               # noqa: E402
+from services.prism import shape               # noqa: E402
 
-_TMP = Path(tempfile.mkdtemp(prefix="pisr-baseline-test-"))
+_TMP = Path(tempfile.mkdtemp(prefix="prism-baseline-test-"))
 
 
 def _fresh():

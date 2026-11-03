@@ -7,7 +7,7 @@ used to be a hand-edited file mounted read-only; this lets an admin edit it from
 the app, set each field to a recommended value, mark it explicitly "not
 applicable", or leave it unreviewed, and see the RUCKUS recommendation beside it
 as read-only reference. See api/baselines.py for the three-state model and why
-the org baseline is a file PISR writes.
+the org baseline is a file PRISM writes.
 
   GET /api/admin/baseline   the org baseline (per-level values, notApplicable,
                             meta, whether it can be saved), the RUCKUS values
@@ -121,7 +121,7 @@ class BaselineBody(BaseModel):
 
 
 def _actor(request: Request) -> str:
-    return getattr(request.state, "pisr_user", None) or "admin"
+    return getattr(request.state, "prism_user", None) or "admin"
 
 
 @router.get("")
@@ -155,7 +155,7 @@ async def put_baseline(body: BaselineBody, request: Request):
     if not baselines.ORG.path:
         raise HTTPException(
             status_code=503,
-            detail="PISR_ORG_BASELINE_FILE is not set, so there is nowhere to "
+            detail="PRISM_ORG_BASELINE_FILE is not set, so there is nowhere to "
                    "save recommendations. Set it and mount a writable volume "
                    "at its directory.")
     if not baselines.ORG.writable:

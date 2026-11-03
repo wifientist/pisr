@@ -1,4 +1,4 @@
-# PISR — Property Installation Status Report
+# PRISM — Property Rollout & Installation Status Monitor
 
 A read-only poll of one RUCKUS ONE venue: what was installed, what is online, how
 it is addressed, what VLANs and PoE it uses, which SSIDs are activated, and which
@@ -11,13 +11,18 @@ single-purpose tool: no database, no Redis, no scheduler. Credentials come from
 passphrase by default, an SSO proxy, or [local accounts](#local-accounts) when
 neither of those is available.
 
+Formerly **PISR**. Settings are spelt `PRISM_<X>`; an env file still written
+with the old `PISR_<X>` names keeps working, and the container log names any
+such line at start-up. Upgrading a deployed box: [`deploy/README.md`,
+"Renaming a box from PISR"](deploy/README.md#renaming-a-box-from-pisr).
+
 ## Quick start
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 $EDITOR .env                 # R1_TENANT_ID, R1_CLIENT_ID, R1_SHARED_SECRET
-                             # and PISR_AUTH_PASSPHRASE
+                             # and PRISM_AUTH_PASSPHRASE
 docker compose up --build
 ```
 
@@ -25,7 +30,7 @@ Open <http://localhost:8090>, enter the passphrase, pick a venue, wait a few
 seconds, read the report. "Download PDF" gives you
 `site-review-<venue>-<timestamp>.pdf`.
 
-The container will not start without `PISR_AUTH_PASSPHRASE` set. That is
+The container will not start without `PRISM_AUTH_PASSPHRASE` set. That is
 deliberate — see [Securing this app](#securing-this-app).
 
 For hot reload while working on it:
@@ -39,13 +44,13 @@ reloading on save.
 
 ## What it guarantees
 
-**Read-only by construction.** Every call PISR makes is a `GET` or a `POST` to a
+**Read-only by construction.** Every call PRISM makes is a `GET` or a `POST` to a
 `*/query` path. It creates nothing, changes nothing, activates nothing, reboots
 nothing, and stores no report — no snapshot files, no database rows, no cache. A
 report exists for the length of one HTTP response. The one thing kept from a
 venue is the **batch record** (`/data/batch-runs.json`): when each venue was
 last checked by an admin's batch run, its punch-list *counts*, and which checks
-failed as ids from PISR's own catalogue — never a finding's text, a device name
+failed as ids from PRISM's own catalogue — never a finding's text, a device name
 or a config value.
 
 You can verify this rather than take its word for it: set `R1_VERBOSE=1`, run a
@@ -72,22 +77,22 @@ the same origin, so there is no nginx, no node at runtime, no CORS, and no proxy
 timeout to tune.
 
 ```
-src/pages/PISR.tsx          the whole UI — six tabs, ~20 private components
-   │  GET /api/pisr/{id}/venues · /report · /report.pdf
+src/pages/PRISM.tsx          the whole UI — six tabs, ~20 private components
+   │  GET /api/prism/{id}/venues · /report · /report.pdf
    ▼
-api/routers/pisr_router.py
+api/routers/prism_router.py
    ├─ api/config.py          the pseudo-controller, from .env
    ├─ api/r1_client.py       builds an R1Client per request
-   └─ api/services/pisr/
+   └─ api/services/prism/
         ├─ collect.py        fans 21 reads out concurrently, assembles
-        ├─ fetch.py          every read PISR makes (stdlib only)
+        ├─ fetch.py          every read PRISM makes (stdlib only)
         ├─ shape.py          raw R1 rows -> card payloads (stdlib only)
         └─ checks.py         ~30 checks over the shaped report (stdlib only)
-   └─ api/reports/pisr.py -> templates/reports/pisr.html -> WeasyPrint -> PDF
+   └─ api/reports/prism.py -> templates/reports/prism.html -> WeasyPrint -> PDF
 ```
 
 `api/r1api/` is the RUCKUS ONE client, copied wholesale from rtools2 and
-unmodified. PISR uses four of its service methods; the rest is carried along so
+unmodified. PRISM uses four of its service methods; the rest is carried along so
 the package stays diffable against its origin.
 
 ## Things worth knowing before you change something
@@ -142,15 +147,15 @@ rather than optional.
 
 Two different things need protecting and they fail in different ways.
 
-**The credential.** `.env` holds a RUCKUS ONE client ID and shared secret. PISR
+**The credential.** `.env` holds a RUCKUS ONE client ID and shared secret. PRISM
 is read-only by construction, but the credential need not be — a copy of it is
 worth whatever the role behind it can do. That is a *secrets* problem.
 
 **The report.** A venue report is AP serials, MACs, IP addressing, VLANs, SSIDs
 and connected clients for a property. Anyone who can reach the port and get
-past the gate sees all of it, and PISR will happily make the RUCKUS ONE calls
+past the gate sees all of it, and PRISM will happily make the RUCKUS ONE calls
 on their behalf. That is an *access* problem, and it is the larger one: an
-attacker who can use PISR does not need to steal the credential.
+attacker who can use PRISM does not need to steal the credential.
 
 Neither is solved by the other. The sections below take them in the order you
 would actually do them.
@@ -161,9 +166,9 @@ would actually do them.
 |---|---|
 | `chmod 600 .env` | It is the whole secret store |
 | Scope the R1 credential to a **read-only** role | Makes a leak cost what the tool costs, not what an admin costs |
-| Set `PISR_AUTH_PASSPHRASE` | Not optional — the container will not start without it |
-| Set `PISR_BIND` to one interface | Fewer people can reach it at all |
-| Get a certificate, set `PISR_COOKIE_SECURE=1` | Otherwise the passphrase crosses the wire in clear text |
+| Set `PRISM_AUTH_PASSPHRASE` | Not optional — the container will not start without it |
+| Set `PRISM_BIND` to one interface | Fewer people can reach it at all |
+| Get a certificate, set `PRISM_COOKIE_SECURE=1` | Otherwise the passphrase crosses the wire in clear text |
 | Leave `R1_VERBOSE=0` | It logs tenant data to disk |
 
 Everything after this is detail on those six lines, plus what to do when a
@@ -171,11 +176,11 @@ shared passphrase stops being enough.
 
 ### Access control
 
-PISR serves a full venue inventory — AP serials, MACs, IP addressing, VLANs,
+PRISM serves a full venue inventory — AP serials, MACs, IP addressing, VLANs,
 SSIDs, connected clients — to anyone who can reach its port. It publishes on
 every interface so the rest of the LAN can use it. Those two facts together are
 why there is a gate, and why the gate is not optional: an unset
-`PISR_AUTH_PASSPHRASE` stops the container from starting rather than quietly
+`PRISM_AUTH_PASSPHRASE` stops the container from starting rather than quietly
 opening the inventory to the network.
 
 **What it is.** One shared passphrase, exchanged once at `POST /api/login` for
@@ -193,15 +198,15 @@ route — is behind the cookie.
 
 **What it is not.** A shared passphrase is not identity. It does not record who
 ran a report, and it cannot be revoked for one person without changing it for
-everyone. Rotating `PISR_AUTH_PASSPHRASE` or `PISR_SESSION_SECRET` invalidates
+everyone. Rotating `PRISM_AUTH_PASSPHRASE` or `PRISM_SESSION_SECRET` invalidates
 every outstanding session immediately, which is the whole revocation story.
 When that stops being enough, see [Local accounts](#local-accounts) or
 [SSO](#sso).
 
 ### Local accounts
 
-`PISR_AUTH_MODE=accounts` gives each person their own username and password,
-kept by PISR in `/data/accounts.json`.
+`PRISM_AUTH_MODE=accounts` gives each person their own username and password,
+kept by PRISM in `/data/accounts.json`.
 
 **Why it exists, rather than SSO.** It was written after Cloudflare Access
 stopped being usable: its one-time-PIN emails were silently discarded by two of
@@ -210,7 +215,7 @@ alternative inherits that failure — the problem is somebody else's mail policy
 and a brand-new sending domain is a *worse* signal to a corporate filter than
 `cloudflare.com`, not a better one. So this mode never sends mail at all.
 
-**How somebody gets in.** An admin creates the account; PISR mints a single-use
+**How somebody gets in.** An admin creates the account; PRISM mints a single-use
 enrolment link; the admin delivers it **out of band** — Teams, SMS, in person,
 read out over the phone. The person opens it, sets a password, and is signed
 in. Nothing has to arrive by email at the moment they are trying to log in.
@@ -219,7 +224,7 @@ The first admin is made on the box, because there is no self-registration and
 no default login:
 
 ```bash
-docker compose run --rm pisr python scripts/pisr_admin.py add-user alice --admin
+docker compose run --rm prism python scripts/prism_admin.py add-user alice --admin
 ```
 
 That prints an enrolment link. Everything after that happens in the **People**
@@ -243,27 +248,27 @@ the address and the username instead of locking out — a hard lockout on a logi
 page anyone can reach is an off switch anyone can flip.
 
 *Keep two admins enrolled.* There is no break-glass passphrase in this mode.
-`PISR_AUTH_ADMIN_PASSPHRASE` used to open one and no longer does — it was a
+`PRISM_AUTH_ADMIN_PASSPHRASE` used to open one and no longer does — it was a
 standing shared secret that bypassed per-person revocation and left no name in
 the audit trail, and rotating it needed shell access on the box, which is the
 very thing it existed to avoid. Every recovery it offered, the CLI offers
 better:
 
 ```
-docker compose run --rm pisr python scripts/pisr_admin.py invite <name>
+docker compose run --rm prism python scripts/prism_admin.py invite <name>
 ```
 
 That mints a single-use, expiring link for an existing account — the same flow
 the portal's password reset uses. So the first line of recovery is the other
-admin, and the second is the box. PISR refuses to delete or demote the last
+admin, and the second is the box. PRISM refuses to delete or demote the last
 admin who can sign in, so the commonest lockout cannot happen at all.
 
 ### SSO
 
-`PISR_AUTH_MODE=proxy` hands authentication to a reverse proxy in front —
+`PRISM_AUTH_MODE=proxy` hands authentication to a reverse proxy in front —
 normally [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy) against
 Entra, Okta or Google Workspace. The proxy does the whole OIDC exchange and
-forwards the caller's identity in a header; PISR reads the header and nothing
+forwards the caller's identity in a header; PRISM reads the header and nothing
 else. It validates no tokens, fetches no JWKS, holds no client secret and has
 no callback route, because implementing OIDC inside a read-only reporting tool
 is how you acquire a security surface you did not need.
@@ -272,9 +277,9 @@ Concretely, that is one container and four settings:
 
 ```yaml
 services:
-  pisr:
+  prism:
     build: .
-    env_file: ${PISR_ENV_FILE:-.env}
+    env_file: ${PRISM_ENV_FILE:-.env}
     # NOT 0.0.0.0 and NOT a published port. Only the proxy may reach it.
     expose: ["8080"]
 
@@ -284,7 +289,7 @@ services:
     command:
       - --provider=oidc
       - --oidc-issuer-url=https://login.microsoftonline.com/<tenant>/v2.0
-      - --upstream=http://pisr:8080
+      - --upstream=http://prism:8080
       - --set-xauthrequest          # emits X-Forwarded-Email
       - --email-domain=yourcompany.com
       - --http-address=0.0.0.0:4180
@@ -295,17 +300,17 @@ services:
 ```
 
 ```
-PISR_AUTH_MODE=proxy
-PISR_TRUSTED_PROXY_HEADER=X-Forwarded-Email
-PISR_TRUSTED_PROXY_IPS=172.20.0.0/16      # the compose network
-PISR_PROXY_LOGOUT_URL=/oauth2/sign_out
+PRISM_AUTH_MODE=proxy
+PRISM_TRUSTED_PROXY_HEADER=X-Forwarded-Email
+PRISM_TRUSTED_PROXY_IPS=172.20.0.0/16      # the compose network
+PRISM_PROXY_LOGOUT_URL=/oauth2/sign_out
 ```
 
-**The header is a claim, not proof.** Anyone who can open a socket to PISR can
+**The header is a claim, not proof.** Anyone who can open a socket to PRISM can
 send `X-Forwarded-Email: someone.important@corp.example`. Two things stop that
-and you need both: `PISR_TRUSTED_PROXY_IPS`, which is required in proxy mode
-and has no default, and the port binding — `expose`, not `ports`, so PISR is
-reachable only from the proxy's network. Publishing PISR on `0.0.0.0` in proxy
+and you need both: `PRISM_TRUSTED_PROXY_IPS`, which is required in proxy mode
+and has no default, and the port binding — `expose`, not `ports`, so PRISM is
+reachable only from the proxy's network. Publishing PRISM on `0.0.0.0` in proxy
 mode turns the proxy into a suggestion.
 
 In proxy mode the passphrase is switched off and `/api/login` returns a 400
@@ -316,8 +321,8 @@ reasons to adopt it.
 **What SSO actually buys here.** Everyone who gets in sees the same one
 tenant's report — there is no per-user authorization, because there are no
 differing permission levels. What changes is that there is no shared secret to
-rotate when someone leaves, the report log names who ran it (`pisr: user=...`
-in `pisr_router.py`, `-` under a shared passphrase), and a security review has
+rotate when someone leaves, the report log names who ran it (`prism: user=...`
+in `prism_router.py`, `-` under a shared passphrase), and a security review has
 an answer to "how does this authenticate."
 
 **The long pole is not the wiring.** It is getting corporate IT to register an
@@ -325,10 +330,10 @@ application and issue a client ID and secret. Plan accordingly.
 
 **It needs TLS to mean much.** Over plain HTTP the passphrase and the cookie
 both cross the wire in the clear. On a trusted office LAN that is a considered
-trade; on guest wifi or the public internet it is not one to make. If PISR ever
+trade; on guest wifi or the public internet it is not one to make. If PRISM ever
 needs to be reachable from outside a network you control, put an
 identity-aware proxy in front of it — Cloudflare Access, Tailscale, or a
-reverse proxy terminating TLS — and set `PISR_COOKIE_SECURE=1` so the browser
+reverse proxy terminating TLS — and set `PRISM_COOKIE_SECURE=1` so the browser
 refuses to send the cookie over anything but HTTPS.
 
 ### TLS
@@ -341,10 +346,10 @@ not one to make on guest wifi.
 
 Options, best first, and the best one depends on where you are:
 
-**A certificate from your corporate PKI.** If PISR is going on a corp network,
+**A certificate from your corporate PKI.** If PRISM is going on a corp network,
 the organisation almost certainly already runs an internal CA that every
 domain-joined machine already trusts. Ask IT for a cert for
-`pisr.corp.internal`. Nothing to install on clients, nothing in public
+`prism.corp.internal`. Nothing to install on clients, nothing in public
 Certificate Transparency logs, no public DNS record, no outbound internet
 needed to renew. In a corporate setting this beats everything below it.
 
@@ -360,11 +365,11 @@ not the first.
 **Your own CA.** `step-ca` runs a private ACME server that Caddy renews against
 automatically — the right answer if internal services will accumulate. `mkcert`
 is the five-minute version with no renewal story. Either way the root CA has to
-land in the trust store of every device that browses to PISR, which is trivial
+land in the trust store of every device that browses to PRISM, which is trivial
 with MDM and a recurring support task without it. Phones are the annoying part.
 
 **Self-signed.** It stops passive sniffing and does not stop an active attacker.
-Mostly it is worth avoiding on different grounds: PISR's entire job is telling
+Mostly it is worth avoiding on different grounds: PRISM's entire job is telling
 people what is misconfigured, and training its users to click through
 certificate warnings undercuts that. Use it knowing it is a placeholder.
 
@@ -382,21 +387,21 @@ default — worth confirming against your slowest venue rather than taking this
 paragraph's word for it, because a switch-port crawl is exactly the request
 that would find such a limit.
 
-Once there is a certificate, set `PISR_COOKIE_SECURE=1`. The cookie is then
+Once there is a certificate, set `PRISM_COOKIE_SECURE=1`. The cookie is then
 marked `Secure` and a browser will not send it over plain HTTP at all. Setting
 it *before* there is TLS locks you out — the cookie is set and then never sent.
 
 ### Network exposure
 
-By default PISR publishes on `0.0.0.0`, which is what makes it reachable from
+By default PRISM publishes on `0.0.0.0`, which is what makes it reachable from
 the rest of the LAN. That is the intent, and it is also exactly why the gate is
 not optional.
 
-`PISR_BIND` narrows it without touching `docker-compose.yml`:
+`PRISM_BIND` narrows it without touching `docker-compose.yml`:
 
 ```
-PISR_BIND=127.0.0.1     # this host only
-PISR_BIND=10.0.25.25    # one interface — the VPN side, say
+PRISM_BIND=127.0.0.1     # this host only
+PRISM_BIND=10.0.25.25    # one interface — the VPN side, say
 ```
 
 This is a network control and not a substitute for the gate. Run both. A bind
@@ -404,7 +409,7 @@ address is the difference between "an attacker must already be on the right
 network" and "an attacker must only be on some network", which is worth having,
 but it authenticates nobody.
 
-**In `PISR_AUTH_MODE=proxy` this stops being advice and becomes a requirement.**
+**In `PRISM_AUTH_MODE=proxy` this stops being advice and becomes a requirement.**
 ### Switching to proxy mode without locking yourself out
 
 Proxy mode turns the passphrase **off**. If the proxy is not forwarding an
@@ -416,7 +421,7 @@ So check first, from behind the existing gate, while the passphrase still
 works:
 
 ```bash
-curl -b jar https://pisr.example.com/api/status | jq .proxyPreview
+curl -b jar https://prism.example.com/api/status | jq .proxyPreview
 ```
 
 ```json
@@ -433,15 +438,15 @@ curl -b jar https://pisr.example.com/api/status | jq .proxyPreview
 
 `wouldAuthenticate: true` is the whole test — it is the same question the gate
 asks, answered against this very request. Anything else tells you which half is
-wrong: `peerTrusted: false` means `PISR_TRUSTED_PROXY_IPS` does not name the
-address PISR really sees, and `headerPresent: false` means the proxy is not
+wrong: `peerTrusted: false` means `PRISM_TRUSTED_PROXY_IPS` does not name the
+address PRISM really sees, and `headerPresent: false` means the proxy is not
 sending `header` (check the name, and check the proxy is configured to forward
 it at all).
 
 Get `true`, then switch. Order matters: enable the authenticating proxy first,
-confirm with the preview, and flip PISR last.
+confirm with the preview, and flip PRISM last.
 
-Replace the `ports:` block with `expose: ["8080"]` so PISR is reachable only
+Replace the `ports:` block with `expose: ["8080"]` so PRISM is reachable only
 from the proxy's network. A published port in proxy mode is an authentication
 bypass: the identity header is a claim, and anyone who can open a socket can
 make it.
@@ -459,9 +464,9 @@ in it. Three levels, in increasing order of paranoia:
    or an editor swapfile cannot reach it:
 
    ```bash
-   sudo install -d -m 0750 /etc/pisr
-   sudo install -m 0600 .env /etc/pisr/pisr.env
-   PISR_ENV_FILE=/etc/pisr/pisr.env docker compose up -d
+   sudo install -d -m 0750 /etc/prism
+   sudo install -m 0600 .env /etc/prism/prism.env
+   PRISM_ENV_FILE=/etc/prism/prism.env docker compose up -d
    ```
 
 3. **The credentials as mounted files rather than environment variables.**
@@ -471,15 +476,15 @@ in it. Three levels, in increasing order of paranoia:
 
    ```
    R1_SHARED_SECRET_FILE=/run/secrets/r1_shared_secret
-   PISR_AUTH_PASSPHRASE_FILE=/run/secrets/pisr_passphrase
+   PRISM_AUTH_PASSPHRASE_FILE=/run/secrets/prism_passphrase
    ```
 
    with the `secrets:` blocks in `docker-compose.yml` uncommented.
 
 **Scope the RUCKUS ONE credential to a read-only role.** This is worth more
-than any of the above. PISR is read-only by construction, but a credential
+than any of the above. PRISM is read-only by construction, but a credential
 minted from a full-admin role is not — a copy of it can reboot APs whatever
-PISR does with it. A read-only API client makes the blast radius of a leak
+PRISM does with it. A read-only API client makes the blast radius of a leak
 match the guarantee the tool advertises.
 
 **`R1_VERBOSE=1` writes tenant data to the container log.** Not credentials —
@@ -491,7 +496,7 @@ x 3. Fine for a debugging session, not a setting to leave on.
 
 ```bash
 # does a live tenant populate the fields the report is built from?
-docker compose run --rm pisr python scripts/probe_pisr.py
+docker compose run --rm prism python scripts/probe_prism.py
 
 # is the process alive? (public — this is what the healthcheck uses)
 curl localhost:8090/healthz
@@ -499,10 +504,10 @@ curl localhost:8090/healthz
 # everything under /api needs a session, so get one first
 curl -c jar -X POST localhost:8090/api/login \
      -H 'Content-Type: application/json' \
-     -d '{"passphrase":"'"$PISR_AUTH_PASSPHRASE"'"}'
+     -d '{"passphrase":"'"$PRISM_AUTH_PASSPHRASE"'"}'
 
 # the check catalogue, without running a report (touches R1 not at all)
-curl -b jar localhost:8090/api/pisr/1/checks | jq
+curl -b jar localhost:8090/api/prism/1/checks | jq
 
 # what tenant is this pointed at?
 curl -b jar localhost:8090/api/status
@@ -514,15 +519,15 @@ curl -b jar localhost:8090/api/config
 Extracted from rtools2 at commit `c332420`, originally carrying the report logic
 across verbatim so that upstream changes stayed a readable diff.
 
-**That is no longer the case, deliberately.** PISR is freestanding. The report
-pipeline (`shape.py`, `fetch.py`, `collect.py`), both renderers (`PISR.tsx`, the
-PDF template and `reports/pisr.py`) and the whole role-and-visibility layer have
+**That is no longer the case, deliberately.** PRISM is freestanding. The report
+pipeline (`shape.py`, `fetch.py`, `collect.py`), both renderers (`PRISM.tsx`, the
+PDF template and `reports/prism.py`) and the whole role-and-visibility layer have
 diverged on their own merits — wired clients, channel-plan bucketing, the
 section policy, the Wired/PoE split. Judge a change here by whether it is right
 for this tool, not by whether it would merge cleanly somewhere else.
 
 Two things are still close to their originals, for reasons of their own:
 `api/r1api/**`, a general RUCKUS ONE client whose pagination and windowing
-quirks took live tenants to work out and which PISR uses a fraction of; and
+quirks took live tenants to work out and which PRISM uses a fraction of; and
 `checks.py`, which stays a pure reader over the report — the visibility layer
 filters findings by id rather than teaching the checks that a policy exists.

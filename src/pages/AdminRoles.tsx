@@ -678,7 +678,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
               A role is a job: the <b>capabilities</b> somebody holds and the{" "}
               <b>cards they are not shown</b>. It is the only thing that confers
               either — there is no second mechanism. <b>admin</b> and <b>user</b>{" "}
-              ship with PISR and always resolve, so an unreadable policy file
+              ship with PRISM and always resolve, so an unreadable policy file
               cannot lock everybody out; you can edit them, and deleting one
               resets it rather than removing it.
             </p>
@@ -1453,7 +1453,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
           <div className="max-h-[62vh] overflow-y-auto p-4">
             <p className="mb-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2
                           text-xs text-gray-600">
-              Capabilities are <b>fixed and ship with PISR</b> — a route names
+              Capabilities are <b>fixed and ship with PRISM</b> — a route names
               one in code, so one invented here would be a permission nothing
               enforces. What you compose is which of them a role carries.
             </p>
@@ -1493,13 +1493,13 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                 Why can a particular person not see something?
               </label>
               <div className="mt-1 flex flex-wrap gap-2">
-                <input list="pisr-roles-people" value={previewOf}
+                <input list="prism-roles-people" value={previewOf}
                        onChange={(e) => setPreviewOf(e.target.value)}
                        onKeyDown={(e) => { if (e.key === "Enter") runPreview(previewOf); }}
                        placeholder="Username"
                        className="min-w-0 flex-1 rounded-md border border-gray-300
                                   px-2 py-1.5 text-sm" />
-                <datalist id="pisr-roles-people">
+                <datalist id="prism-roles-people">
                   {everyone.map((p) => <option key={p} value={p} />)}
                 </datalist>
                 <button onClick={() => runPreview(previewOf)} disabled={!previewOf.trim()}

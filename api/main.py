@@ -1,5 +1,5 @@
 """
-PISR — Property Installation Status Report.
+PRISM — Property Rollout & Installation Status Monitor.
 
 One process serves both the API and the built single-page app. There is no
 database, no user accounts, no Redis, no scheduler and no background work: the
@@ -28,24 +28,25 @@ logger = logging.getLogger(__name__)
 # raises if anything required is missing or malformed, so a misconfigured
 # container fails to start rather than failing every request.
 from config import AUTH, CONTROLLER, FETCH_WORKERS, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
+import config as _config  # noqa: E402
 from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
 from routers import (  # noqa: E402
     accounts_router, admin_router, baseline_router, batch_router, config_router,
-    msp_router, pisr_router)
+    msp_router, prism_router)
 import accounts  # noqa: E402
 import visibility  # noqa: E402
 
 app = FastAPI(
-    title="PISR",
+    title="PRISM",
     version="1.0.0",
-    description="Property Installation Status Report — a read-only poll of one venue.",
+    description="Property Rollout & Installation Status Monitor — a read-only poll of one venue.",
 )
 
 # Normally empty and normally unnecessary: the SPA is served from this same
 # origin, so the browser never makes a cross-origin request. Only needed if you
-# front PISR with a separate web server on another origin.
+# front PRISM with a separate web server on another origin.
 _origins = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
 if _origins:
     app.add_middleware(
@@ -83,16 +84,24 @@ async def _widen_report_executor() -> None:
     """
     loop = asyncio.get_running_loop()
     loop.set_default_executor(
-        ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefix="pisr-io"))
+        ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefix="prism-io"))
     logger.info("report I/O executor set to %d workers (R1 pool_maxsize=%s)",
                 FETCH_WORKERS, os.environ.get("R1_POOL_MAXSIZE"))
 
 # Outermost of all, so it also covers the SPA, the 401s and the error pages.
 app.add_middleware(SecurityHeadersMiddleware)
 
+# Every start, so an env file still written for the old name is visible rather
+# than merely tolerated. Values only ever come from these — see config._env.
+if _config.LEGACY_USED:
+    logger.warning(
+        "Settings: %d still use the pre-rename PISR_ name and are being honoured "
+        "— rename them to PRISM_ when convenient: %s",
+        len(_config.LEGACY_USED), ", ".join(sorted(_config.LEGACY_USED)))
+
 if not AUTH.enabled:
     logger.warning(
-        "PISR_AUTH_DISABLED=1 — every endpoint is open to anyone who can reach "
+        "PRISM_AUTH_DISABLED=1 — every endpoint is open to anyone who can reach "
         "this port, including the full venue inventory. This is only sane if "
         "the port is bound to localhost.")
 else:
@@ -126,8 +135,8 @@ else:
                 "%s is trusted on the strength of the peer address alone. "
                 "Under rootless podman that address is rewritten and "
                 "distinguishes nothing, so the network the port is published "
-                "on is the only control. Set PISR_ACCESS_TEAM and "
-                "PISR_ACCESS_AUD to verify signatures instead.",
+                "on is the only control. Set PRISM_ACCESS_TEAM and "
+                "PRISM_ACCESS_AUD to verify signatures instead.",
                 AUTH.proxy_header)
 
     if AUTH.client_ip_header and not AUTH.trusted_proxies:
@@ -135,27 +144,27 @@ else:
         # rather than a fact, because whoever set the header believed they
         # were fixing the throttle and did not.
         logger.warning(
-            "PISR_CLIENT_IP_HEADER=%s is set but PISR_TRUSTED_PROXY_IPS is "
+            "PRISM_CLIENT_IP_HEADER=%s is set but PRISM_TRUSTED_PROXY_IPS is "
             "empty, so the header is ignored and the login throttle still "
             "counts every caller as one. Set the trusted list to the peer "
-            "address PISR actually sees — under rootless podman that is an "
+            "address PRISM actually sees — under rootless podman that is an "
             "address on podman's own network, not the proxy's.",
             AUTH.client_ip_header)
 
     if SESSION_SECRET_IS_EPHEMERAL:
         logger.info(
-            "No PISR_SESSION_SECRET set — a random one was generated, so existing "
+            "No PRISM_SESSION_SECRET set — a random one was generated, so existing "
             "sessions end at every restart. Set one in .env to keep them.")
 
     # Roles, on their own line for the same reason the gate is: the way to find
-    # out whether PISR_ADMIN_EMAILS reached the container should not be to sign
+    # out whether PRISM_ADMIN_EMAILS reached the container should not be to sign
     # in as someone and see whether the portal appears.
     if AUTH.mode == "proxy":
         logger.info("Roles: %d admin identit(ies) configured; everyone else is a user.",
                     len(AUTH.admin_emails))
         if not AUTH.admin_emails:
             logger.warning(
-                "Roles: PISR_ADMIN_EMAILS is empty, so nobody is an admin and "
+                "Roles: PRISM_ADMIN_EMAILS is empty, so nobody is an admin and "
                 "the section visibility portal is unreachable. That is the safe "
                 "default — an empty list is not 'everyone' — but if you meant to "
                 "name someone, this is why they cannot see it.")
@@ -168,9 +177,9 @@ else:
             logger.error(
                 "Accounts: %s exists but could not be read, so NOBODY CAN SIGN "
                 "IN. Repair or move it. %s", AUTH.accounts_file,
-                "Sign in with PISR_AUTH_ADMIN_PASSPHRASE meanwhile."
+                "Sign in with PRISM_AUTH_ADMIN_PASSPHRASE meanwhile."
                 if AUTH.admin_passphrase else
-                "There is no PISR_AUTH_ADMIN_PASSPHRASE set, so there is no "
+                "There is no PRISM_AUTH_ADMIN_PASSPHRASE set, so there is no "
                 "way in at all until the file is fixed.")
         else:
             people = accounts.STORE.list()
@@ -182,13 +191,13 @@ else:
             if not people:
                 logger.warning(
                     "Accounts: none exist yet, so nobody can sign in. Create "
-                    "the first admin with:  docker compose run --rm pisr "
-                    "python scripts/pisr_admin.py add-user --admin <name>")
+                    "the first admin with:  docker compose run --rm prism "
+                    "python scripts/prism_admin.py add-user --admin <name>")
             elif not admins:
                 logger.warning(
                     "Accounts: no admin can sign in, so the portals are "
-                    "unreachable. Promote somebody with scripts/pisr_admin.py, "
-                    "or use PISR_AUTH_ADMIN_PASSPHRASE if it is set.")
+                    "unreachable. Promote somebody with scripts/prism_admin.py, "
+                    "or use PRISM_AUTH_ADMIN_PASSPHRASE if it is set.")
             elif not any(a.role != "user" for a in people if a.can_sign_in):
                 # Said once at startup because the symptom is a chip that is
                 # not there, which is indistinguishable from a broken release.
@@ -198,7 +207,7 @@ else:
                 logger.warning(
                     "Accounts: everybody holds the ordinary `user` role, so "
                     "nothing beyond a venue report is reachable. Build a role "
-                    "in the portal, or:  python scripts/pisr_admin.py "
+                    "in the portal, or:  python scripts/prism_admin.py "
                     "set-role <name> admin")
 
         if AUTH.admin_passphrase:
@@ -208,25 +217,25 @@ else:
             # way in that no longer exists, and would find out at the worst
             # possible moment. Say so until they clear it.
             logger.warning(
-                "Accounts: PISR_AUTH_ADMIN_PASSPHRASE is set but DECIDES "
+                "Accounts: PRISM_AUTH_ADMIN_PASSPHRASE is set but DECIDES "
                 "NOTHING in this mode — the break-glass door was removed. "
                 "Clear it from the environment so nobody plans around it. "
-                "Recovery is: docker compose run --rm pisr python "
-                "scripts/pisr_admin.py invite <name>")
+                "Recovery is: docker compose run --rm prism python "
+                "scripts/prism_admin.py invite <name>")
         logger.info(
             "Accounts: there is no break-glass door. Recovery is another "
-            "admin, or scripts/pisr_admin.py on the box — keep two admins "
+            "admin, or scripts/prism_admin.py on the box — keep two admins "
             "enrolled so the first is never the only one. File: %s",
             AUTH.accounts_file)
     elif AUTH.admin_passphrase:
         logger.info(
-            "Roles: PISR_AUTH_ADMIN_PASSPHRASE is set, so the ordinary "
+            "Roles: PRISM_AUTH_ADMIN_PASSPHRASE is set, so the ordinary "
             "passphrase signs in as a user and the second one as an admin. "
             "This is the development shim — a shared secret is not identity, "
             "and it cannot be revoked for one person.")
     else:
         logger.info(
-            "Roles: no PISR_AUTH_ADMIN_PASSPHRASE, so every passphrase session "
+            "Roles: no PRISM_AUTH_ADMIN_PASSPHRASE, so every passphrase session "
             "is an admin and no section is hidden from anyone.")
 
 if visibility.STORE.configured and not visibility.STORE.writable:
@@ -248,7 +257,7 @@ if AUTH.org_baseline_file and not baselines.ORG.writable:
     logger.warning(
         "Baseline: %s is not writable, so the recommendation editor is "
         "read-only. Mount a writable volume at its directory, or leave "
-        "PISR_ORG_BASELINE_FILE unset to hide the column.",
+        "PRISM_ORG_BASELINE_FILE unset to hide the column.",
         AUTH.org_baseline_file)
 
 import batch_runs  # noqa: E402
@@ -279,8 +288,8 @@ async def healthz():
 # it — this is what the RUNNING container is, which is a different question
 # from what the repository on the box says, and they disagree exactly when
 # something has gone wrong with a deploy.
-BUILD_SHA = os.getenv("PISR_BUILD_SHA") or "unknown"
-BUILD_TIME = os.getenv("PISR_BUILD_TIME") or None
+BUILD_SHA = os.getenv("PRISM_BUILD_SHA") or "unknown"
+BUILD_TIME = os.getenv("PRISM_BUILD_TIME") or None
 
 
 @app.get("/api/status")
@@ -295,7 +304,7 @@ async def status(request: Request):
             "short": BUILD_SHA[:12] if BUILD_SHA != "unknown" else "unknown",
             "builtAt": BUILD_TIME,
         },
-        # What PISR_AUTH_MODE=proxy would decide about this very request, so a
+        # What PRISM_AUTH_MODE=proxy would decide about this very request, so a
         # switch to it can be checked before it is made rather than after.
         "proxyPreview": proxy_preview(request),
     }
@@ -316,13 +325,13 @@ app.include_router(batch_router.router, prefix="/api")
 app.include_router(batch_router.read_router, prefix="/api")
 app.include_router(batch_router.estate_router, prefix="/api")
 app.include_router(msp_router.router, prefix="/api")
-app.include_router(pisr_router.router, prefix="/api")
+app.include_router(prism_router.router, prefix="/api")
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    # Both keys, deliberately. PISR.tsx reads `detail`; useSingleEc.tsx reads
-    # `error`. rtools2 emitted only `error`, which is why PISR's banner there
+    # Both keys, deliberately. PRISM.tsx reads `detail`; useSingleEc.tsx reads
+    # `error`. rtools2 emitted only `error`, which is why PRISM's banner there
     # shows a bare status code where the message should be.
     return JSONResponse(status_code=exc.status_code,
                         content={"detail": exc.detail, "error": exc.detail})
@@ -352,7 +361,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 #
 # The isdir guard lets this same file run under docker-compose.dev.yml, where
 # vite serves the SPA and the image has no dist/ in it.
-_static = os.getenv("PISR_STATIC_DIR", "/app/static")
+_static = os.getenv("PRISM_STATIC_DIR", "/app/static")
 if os.path.isdir(_static):
     app.mount("/", StaticFiles(directory=_static, html=True), name="spa")
     logger.info("Serving SPA from %s", _static)

@@ -3,7 +3,7 @@ The MSP-EC list, for the picker the UI shows when R1_EC_TYPE=MSP.
 
 Path-compatible with rtools2's `/r1/{controller_id}/msp/mspEcs` so the frontend
 hook that consumes it (src/hooks/useSingleEc.tsx) is carried across unmodified.
-Only mspEcs is ported — PISR uses none of the other seven MSP endpoints.
+Only mspEcs is ported — PRISM uses none of the other seven MSP endpoints.
 """
 
 import logging
@@ -26,7 +26,7 @@ async def get_msp_ecs(request: Request, controller_id: int):
 
     Filtered by role. On an MSP tenant the ECs are different companies, so this
     list is not merely a convenience — it names one customer to another. It is
-    the courtesy half of the control, though: `pisr_router._require_scope` is
+    the courtesy half of the control, though: `prism_router._require_scope` is
     what refuses a hand-written tenant_id, and it does so whether or not the id
     ever appeared in this list.
 

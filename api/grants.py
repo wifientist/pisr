@@ -11,7 +11,7 @@ READ THIS APART FROM THE OTHER TWO CONTROLS. All three are administered from
 the same portal and they all sound like "permissions", and they are not the
 same kind of control:
 
-  CAPABILITIES — this module — decide WHICH TOOLS OF PISR exist for a caller:
+  CAPABILITIES — this module — decide WHICH TOOLS OF PRISM exist for a caller:
   a venue report, the estate roll-up, the identity trace, the admin portals. A
   route names one in code. Fails CLOSED — an unknown id is dropped, and a
   caller whose role names none holds none.
@@ -123,7 +123,7 @@ GRANT_ADMIN_PORTAL = "admin.portal"
 
 #: BUILD ROLES — create, edit and delete them, and hand out any capability
 #: including this one. The super-admin tier, and the only capability here that
-#: is about administering PISR rather than reading a customer's network.
+#: is about administering PRISM rather than reading a customer's network.
 #:
 #: Kept separate from `admin.portal` because they are different jobs: curating
 #: what a report shows is not the same as deciding who may do what. An MSP can
@@ -199,7 +199,7 @@ GRANT_BATCH_RUN = "batch.run"
 #: so a typo in a dependency is a failed test rather than a route nobody can
 #: reach.
 #: Ordered by the LEVEL each one operates at — across every tenant, across one
-#: tenant, within a venue, then administering PISR itself. That is the ladder
+#: tenant, within a venue, then administering PRISM itself. That is the ladder
 #: an administrator composes a role down, and the portal renders them in this
 #: order for the same reason.
 ALL_GRANTS: Tuple[str, ...] = (
@@ -214,7 +214,7 @@ ALL_GRANTS: Tuple[str, ...] = (
     GRANT_VENUE_REPORT,
     GRANT_CONFIG_DETAIL,
     GRANT_IDENTITY_TRACE,
-    # PISR itself
+    # PRISM itself
     GRANT_ADMIN_PORTAL,
     GRANT_ADMIN_ACCOUNTS,
     GRANT_ADMIN_ROLES,
@@ -224,7 +224,7 @@ ALL_GRANTS: Tuple[str, ...] = (
 #: anybody has composed anything.
 #:
 #: IT EXISTS SO THE APP DOES NOT GO DARK. `venue.report` is the whole point of
-#: PISR, and putting it behind a capability with no default would have meant
+#: PRISM, and putting it behind a capability with no default would have meant
 #: the release that introduced them locking every existing user out of the only
 #: thing they use. It is a capability at all because "a leader who reads estate
 #: roll-ups and never opens a venue" is a real persona — and a ROLE REPLACES
@@ -245,7 +245,7 @@ DEFAULT_GRANTS: Tuple[str, ...] = (GRANT_VENUE_REPORT,)
 #: ticking a box they do not understand.
 _GRANT_PROSE: Dict[str, Tuple[str, str]] = {
     GRANT_ADMIN_PORTAL: (
-        "Administer PISR",
+        "Administer PRISM",
         "Reach the admin portals: accounts, the report policy, the baselines. "
         "Not the same as building roles — see below."),
     GRANT_ADMIN_ACCOUNTS: (
@@ -257,7 +257,7 @@ _GRANT_PROSE: Dict[str, Tuple[str, str]] = {
     GRANT_ADMIN_ROLES: (
         "Build roles",
         "Create, edit and delete roles, and hand out any capability including "
-        "this one. The super-admin tier. Somebody with 'Administer PISR' but "
+        "this one. The super-admin tier. Somebody with 'Administer PRISM' but "
         "not this can still ASSIGN the roles that exist, but only ones whose "
         "capabilities they hold themselves."),
     GRANT_VENUE_REPORT: (

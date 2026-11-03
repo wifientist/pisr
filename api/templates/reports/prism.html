@@ -204,7 +204,7 @@
 </div>
 
 {#  Section guards. `visible()` and `visible_tab()` come from
-    redact.template_helpers, passed in at render time by pisr_router.
+    redact.template_helpers, passed in at render time by prism_router.
 
     These are COSMETIC. The data behind a hidden section has already been
     emptied by redact.py before this template sees it, so a guard that was
@@ -379,7 +379,7 @@
 <h2>RUCKUS ONE alarms</h2>
 <p class="note">Raised by RUCKUS ONE itself, not by the checks above — the
   platform's view of whether this venue is healthy right now, as opposed to
-  PISR's view of whether the install looks finished. Active alarms only: R1
+  PRISM's view of whether the install looks finished. Active alarms only: R1
   exposes no cleared or acknowledged state here, so nothing can be said about
   what has already been dealt with.</p>
 <table>
@@ -742,7 +742,7 @@
       tests is absent — and is not a pass.</li>
     <li>Subnet prefixes marked <i>inferred</i> or <i>assumed</i> are derived, not read from
       the device. Only <i>reported</i> comes from a device's own netmask.</li>
-    <li>PISR reads only. It changes nothing in RUCKUS ONE, and stores nothing after the
+    <li>PRISM reads only. It changes nothing in RUCKUS ONE, and stores nothing after the
       report is delivered.</li>
     {% if report_visibility and report_visibility.redacted %}
     {#  Said out loud, because a PDF outlives the session that made it. Without

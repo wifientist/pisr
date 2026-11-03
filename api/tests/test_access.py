@@ -62,11 +62,11 @@ PUBLIC = {
 # more people hold.
 #
 # THERE IS NO SEPARATE "ADMIN" CATEGORY ANY MORE. `admin.portal` is a
-# capability like every other, so administering PISR appears here beside
+# capability like every other, so administering PRISM appears here beside
 # reading a venue — which is the whole point of collapsing roles, tags and
 # profiles into one concept.
 GRANTED = {
-    # Administering PISR: who may sign in, what a report contains, what
+    # Administering PRISM: who may sign in, what a report contains, what
     # "recommended" means, and who holds which role.
     # Creating a login is not the same act as curating a report, so the
     # People portal needs its own capability ON TOP of reaching the portals.
@@ -79,13 +79,13 @@ GRANTED = {
     "/api/admin/roles": ("admin.portal",),
     # Reading a venue. In DEFAULT_GRANTS via the built-in `user` role, so
     # everybody has it unless a role says otherwise.
-    "/api/pisr/{controller_id}/report": ("venue.report",),
-    "/api/pisr/{controller_id}/report.pdf": ("venue.report",),
+    "/api/prism/{controller_id}/report": ("venue.report",),
+    "/api/prism/{controller_id}/report.pdf": ("venue.report",),
     # A separate, deeper READ: hundreds of R1 calls, AP-group and per-network
     # settings the report never fetches, and it can carry guest-portal secrets.
-    "/api/pisr/{controller_id}/config/detail": ("config.detail",),
+    "/api/prism/{controller_id}/config/detail": ("config.detail",),
     # Names residents' DPSK usernames, which a report will not show at all.
-    "/api/pisr/{controller_id}/identity/trace": ("identity.trace",),
+    "/api/prism/{controller_id}/identity/trace": ("identity.trace",),
     # The two halves of batch, told apart by capability rather than by prefix.
     # The aggregation ladder: one tenant, and the whole estate. Different
     # questions asked by different people, so different capabilities — and
@@ -107,9 +107,9 @@ UNGATED = {
     "/api/status",
     "/api/config",
     "/api/account/password",
-    "/api/pisr/{controller_id}/scope",
-    "/api/pisr/{controller_id}/venues",
-    "/api/pisr/{controller_id}/checks",
+    "/api/prism/{controller_id}/scope",
+    "/api/prism/{controller_id}/venues",
+    "/api/prism/{controller_id}/checks",
     "/api/r1/{controller_id}/msp/mspEcs",
 }
 
@@ -132,7 +132,7 @@ def _grants_of(route):
     held: set = set()
     for dep in route.dependant.dependencies:
         if getattr(dep.call, "__name__", "") == "require_grants":
-            held.update(getattr(dep.call, "pisr_grants", ()))
+            held.update(getattr(dep.call, "prism_grants", ()))
     return tuple(sorted(held))
 
 
@@ -140,7 +140,7 @@ def _grant_of(route):
     """Which grant this route requires, or None. Set by `auth.require_grant`."""
     for dep in route.dependant.dependencies:
         if getattr(dep.call, "__name__", "") == "require_grants":
-            return getattr(dep.call, "pisr_grants", "<unnamed>")
+            return getattr(dep.call, "prism_grants", "<unnamed>")
     return None
 
 
@@ -224,10 +224,10 @@ def _request(path: str, cookies=None, role=None, tags=()) -> Request:
                        "client": ("10.89.0.5", 5000), "server": ("test", 80),
                        "state": {}})
     if role:
-        request.state.pisr_role = role
+        request.state.prism_role = role
     if tags:
-        request.state.pisr_tags = tuple(tags)
-    request.state.pisr_user = "tester"
+        request.state.prism_tags = tuple(tags)
+    request.state.prism_user = "tester"
     return request
 
 
@@ -280,10 +280,10 @@ def test_auth_status_answers_in_every_state():
 
 def test_gated_paths_refuse_an_uncookied_caller():
     if not AUTH.enabled:
-        print("      (skipped: PISR_AUTH_DISABLED=1 in this environment)")
+        print("      (skipped: PRISM_AUTH_DISABLED=1 in this environment)")
         return
-    for path in ("/api/status", "/api/config", "/api/pisr/1/report",
-                 "/api/pisr/1/report.pdf", "/api/pisr/1/venues",
+    for path in ("/api/status", "/api/config", "/api/prism/1/report",
+                 "/api/prism/1/report.pdf", "/api/prism/1/venues",
                  "/api/admin/roles", "/api/batch/runs",
                  # Both halves of batch: the gate keys on the /api/ prefix, so
                  # a grant-gated route is refused a session the same way an
@@ -322,7 +322,7 @@ def test_a_bad_cookie_is_no_cookie():
         return
     for value in ("", "rubbish", "u_1.9999999999.deadbeef", "..",
                   "!breakglass.9999999999.0000"):
-        assert _through_gate("/api/pisr/1/report",
+        assert _through_gate("/api/prism/1/report",
                              {auth.COOKIE_NAME: value}) == 401, value
 
 
@@ -348,7 +348,7 @@ def test_a_request_with_no_role_is_a_user_not_an_admin():
     middleware having run (which should not happen) must not be an admin
     session by omission.
     """
-    assert auth.role_of(_request("/api/pisr/1/report")) == "user"
+    assert auth.role_of(_request("/api/prism/1/report")) == "user"
     try:
         auth.require_admin(_request("/api/admin/roles"))
     except HTTPException as exc:
@@ -477,19 +477,19 @@ def test_every_route_that_reaches_r1_checks_scope_or_is_admin_only():
     Admin-only routes are exempt because an admin is unrestricted by
     construction (`visibility.STORE.scope_for` short-circuits on the role).
     """
-    for name, decorators, called in _routes_in("pisr_router"):
+    for name, decorators, called in _routes_in("prism_router"):
         if "build_r1_client" not in called:
             continue
         admin_only = "require_admin" in decorators
         assert admin_only or "_require_scope" in called, (
-            f"pisr_router.{name} reaches RUCKUS ONE without checking scope")
+            f"prism_router.{name} reaches RUCKUS ONE without checking scope")
 
 
 def test_an_id_from_a_caller_cannot_name_another_endpoint():
     """
     `fetch` builds R1 paths by interpolation, so an id with a slash in it is a
     different endpoint, not a venue. The live check that mattered:
-    `<venue>/aps/<serial>/passwords` made PISR issue
+    `<venue>/aps/<serial>/passwords` made PRISM issue
     `GET /venues/<venue>/aps/<serial>/passwords`, which is "Get AP Password" —
     the one endpoint the tool promises never to call.
     """
@@ -524,18 +524,18 @@ def test_the_scope_check_validates_the_venue_id_for_every_r1_route():
     into a broken build.
     """
     import visibility
-    from routers import pisr_router
+    from routers import prism_router
     original, visibility.STORE = visibility.STORE, visibility.PolicyStore(None)
     try:
         try:
-            pisr_router._require_scope(_request("/api/pisr/1/report", role="admin"),
+            prism_router._require_scope(_request("/api/prism/1/report", role="admin"),
                                        None, "9c6f70/aps/SERIAL/passwords")
         except HTTPException as exc:
             assert exc.status_code == 400
         else:
             raise AssertionError("a path-shaped venue id passed the scope check")
         # A real id still passes, for an unrestricted caller.
-        pisr_router._require_scope(_request("/api/pisr/1/report", role="admin"),
+        prism_router._require_scope(_request("/api/prism/1/report", role="admin"),
                                    None, "9c6f70c0140b49089c3fb92b9d6d8ec6")
     finally:
         visibility.STORE = original
@@ -563,7 +563,7 @@ def test_every_route_that_reaches_r1_validates_its_ids():
     (an admin is unrestricted) but NOT from id validation, because the id
     still steers the R1 path.
     """
-    for module in ("pisr_router", "batch_router"):
+    for module in ("prism_router", "batch_router"):
         for name, _decorators, called in _routes_in(module):
             if "build_r1_client" not in called:
                 continue
@@ -600,7 +600,7 @@ def test_the_narrowing_takes_the_denominator_with_it():
     not name is gone from the record entirely, rather than present and unnamed.
     """
     import scope
-    from services.pisr import rollup
+    from services.prism import rollup
 
     snapshot = {
         "tenants": {"ec1": {"name": "One", "venues": {"v1": "Mine", "v2": "Theirs"}},
@@ -725,10 +725,10 @@ def test_both_report_routes_redact():
     point for element visibility AND the credential scrub, so a report route
     that skips it is the way around both.
     """
-    for name, _decorators, called in _routes_in("pisr_router"):
+    for name, _decorators, called in _routes_in("prism_router"):
         if "build_report" not in called:
             continue
-        assert "redact" in called, f"pisr_router.{name} returns an unredacted report"
+        assert "redact" in called, f"prism_router.{name} returns an unredacted report"
     # The batch route builds reports too, and only keeps counts — but it goes
     # through `redact` for the credential scrub like everything else.
     for name, _decorators, called in _routes_in("batch_router"):
@@ -898,10 +898,10 @@ def test_the_derived_surface_agrees_with_this_inventory():
     # AND narrowed. Every route that reaches R1 or reads the batch record has
     # to be in here, or the matrix draws a tick where it owes a caveat.
     narrowing = {p for p, r in by_path.items() if r["checksScope"]}
-    for path in ("/api/pisr/{controller_id}/report",
-                 "/api/pisr/{controller_id}/report.pdf",
-                 "/api/pisr/{controller_id}/venues",
-                 "/api/pisr/{controller_id}/config/detail",
+    for path in ("/api/prism/{controller_id}/report",
+                 "/api/prism/{controller_id}/report.pdf",
+                 "/api/prism/{controller_id}/venues",
+                 "/api/prism/{controller_id}/config/detail",
                  "/api/batch/state",
                  "/api/batch/rollup.pdf",
                  # New in R4: a scoped user can now hold `batch.run`, so the
@@ -947,7 +947,7 @@ def test_a_refusal_says_what_is_missing_and_not_how_it_is_configured():
     }
 
     for where, detail in messages.items():
-        assert "PISR_" not in detail, (
+        assert "PRISM_" not in detail, (
             f"{where} names an environment variable to the caller it refused: "
             f"{detail!r}")
         for word in ("passphrase", "SSO", "proxy", "env"):
@@ -1202,19 +1202,19 @@ def test_grants_come_from_the_role_and_nowhere_else():
     visibility.STORE = store
     try:
         request = _request("/api/batch/state", role=rid)
-        request.state.pisr_user = "dana"
+        request.state.prism_user = "dana"
         assert auth.grants_of(request) == frozenset({grants.GRANT_MSP_ROLLUP})
 
         # The built-in `user` role, for anybody without one of their own.
         plain = _request("/api/batch/state", role="user")
-        plain.state.pisr_user = "morgan"
+        plain.state.prism_user = "morgan"
         assert auth.grants_of(plain) == frozenset(grants.DEFAULT_GRANTS)
 
         # And a role id naming nothing confers NOTHING — not the defaults.
         # Somebody was deliberately given a job; losing its definition must not
         # promote them back to what everybody else gets.
         gone = _request("/api/batch/state", role="r_deleted000")
-        gone.state.pisr_user = "sam"
+        gone.state.prism_user = "sam"
         assert auth.grants_of(gone) == frozenset()
     finally:
         visibility.STORE = original
@@ -1241,7 +1241,7 @@ def test_every_hidden_lookup_passes_an_identity():
     # passes an identity explicitly and `auth.hidden_of(request)` would be the
     # wrong call, not the right one. A separate test holds it to resolving
     # rather than working the answer out itself.
-    for module in ("pisr_router", "msp_router", "batch_router"):
+    for module in ("prism_router", "msp_router", "batch_router"):
         source = (API / "routers" / f"{module}.py").read_text(encoding="utf-8")
         assert "visibility.hidden_for(" not in source, (
             f"{module} calls visibility.hidden_for directly; use "
@@ -1316,7 +1316,7 @@ def test_the_super_tier_does_not_exist_until_somebody_holds_it():
     store = _role_store(tmp, {}, {})           # no roles at all
 
     admin = _request("/api/admin/roles", role="admin")
-    admin.state.pisr_user = "alex"
+    admin.state.prism_user = "alex"
 
     def check_open():
         assert admin_router._role_authority(admin), \
@@ -1339,7 +1339,7 @@ def test_the_super_tier_does_not_exist_until_somebody_holds_it():
     # somebody who administers and does not decide who may do what.
     ordinary = role_rules.new_id()
     other = _request("/api/admin/roles", role=ordinary)
-    other.state.pisr_user = "sam"
+    other.state.prism_user = "sam"
 
     def check_closed():
         assert not admin_router._role_authority(other), \
@@ -1377,7 +1377,7 @@ def test_an_admin_cannot_assign_a_grant_they_do_not_hold():
     # AN ADMIN WHO IS NOT A SUPER. `role="admin"` would be the built-in
     # Administrator, which carries every capability including `admin.roles` —
     # so testing rule 2 against it would be testing nothing. This is the role
-    # an organisation actually builds: administer PISR, but do not decide who
+    # an organisation actually builds: administer PRISM, but do not decide who
     # may do what.
     plain_admin = role_rules.new_id()
     body[plain_admin] = {"id": plain_admin, "label": "Ordinary admin",
@@ -1391,7 +1391,7 @@ def test_an_admin_cannot_assign_a_grant_they_do_not_hold():
     store = _role_store(tmp, body, {"alex": {"role": super_id},
                                     "sam": {"role": plain_admin}})
     sam = _request("/api/admin/roles", role=plain_admin)
-    sam.state.pisr_user = "sam"
+    sam.state.prism_user = "sam"
 
     def check():
         # Helping themselves to the super role: refused.
@@ -1443,7 +1443,7 @@ def test_the_last_super_cannot_be_unassigned():
     store = _role_store(tmp, body, {"alex": {"role": super_id}})
 
     alex = _request("/api/admin/roles", role="admin")
-    alex.state.pisr_user = "alex"
+    alex.state.prism_user = "alex"
 
     def check():
         try:
@@ -1503,7 +1503,7 @@ def test_an_unchanged_role_list_is_not_an_edit():
     body = {
         super_id: {"id": super_id, "label": "Super",
                    "grants": [grants.GRANT_ADMIN_ROLES], "visible": []},
-        # AN ADMINISTRATOR WHO IS NOT A SUPER: administers PISR, does not
+        # AN ADMINISTRATOR WHO IS NOT A SUPER: administers PRISM, does not
         # decide who may do what. Testing rule 1 against the built-in `admin`
         # would be testing nothing, since it carries `admin.roles`.
         plain_admin: {"id": plain_admin, "label": "Ordinary admin",
@@ -1514,7 +1514,7 @@ def test_an_unchanged_role_list_is_not_an_edit():
     as_stored = {r["id"]: r for r in store.policy()["roles"]}
 
     sam = _request("/api/admin/roles", role=plain_admin)
-    sam.state.pisr_user = "sam"
+    sam.state.prism_user = "sam"
 
     def check():
         # Same roles, different assignment: allowed.
@@ -1615,7 +1615,7 @@ def test_a_deleted_profile_confers_nothing_not_even_the_defaults():
 
 def test_the_default_grants_keep_the_app_from_going_dark():
     """
-    `venue.report` is the whole point of PISR, so putting it behind a grant
+    `venue.report` is the whole point of PRISM, so putting it behind a grant
     without a default would mean the release that introduced roles took the
     only thing most people use away from all of them at once.
 
@@ -1697,7 +1697,7 @@ def test_nobody_can_create_somebody_more_privileged_than_themselves():
     }, {})
 
     request = _request("/api/admin/accounts", role=desk)
-    request.state.pisr_user = "dana"
+    request.state.prism_user = "dana"
 
     def check():
         # Handing out a role carrying only what they hold: fine.
@@ -1763,7 +1763,7 @@ def test_every_scope_lookup_passes_an_identity():
         "forgets it would silently get the role's scope")
 
     # admin_router exempt — see the note in the hidden-lookup test above.
-    for module in ("pisr_router", "msp_router", "batch_router"):
+    for module in ("prism_router", "msp_router", "batch_router"):
         source = (API / "routers" / f"{module}.py").read_text(encoding="utf-8")
         assert "visibility.scope_for(" not in source, (
             f"{module} calls visibility.scope_for directly; use "

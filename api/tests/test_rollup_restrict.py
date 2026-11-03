@@ -53,7 +53,7 @@ sys.path.insert(0, str(API))
 
 import batch_runs                              # noqa: E402
 import scope as scope_rules                    # noqa: E402
-from services.pisr import punchlist, rollup    # noqa: E402
+from services.prism import punchlist, rollup    # noqa: E402
 
 DAYS = 7.0
 

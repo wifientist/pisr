@@ -93,7 +93,7 @@ export default function AdminResourceGroups({
    * THE DRIFT CHECK, and the counterpart to the stale-id warning inside the
    * tree. A customer in no group is one nobody can open — which is the
    * correct behaviour for a fail-closed model and is indistinguishable, from
-   * a user's seat, from PISR being broken. Onboarding a customer and
+   * a user's seat, from PRISM being broken. Onboarding a customer and
    * forgetting this screen is the obvious way to arrive there, so the screen
    * says it rather than waiting for the support call.
    */

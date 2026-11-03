@@ -1,7 +1,7 @@
 """
 The guard on local accounts — the gate itself, so the bar is higher here.
 
-WHY THIS EXISTS. `api/accounts.py` is the first thing PISR has that holds a
+WHY THIS EXISTS. `api/accounts.py` is the first thing PRISM has that holds a
 secret and decides who gets in. Everything it does wrong fails quietly: a hash
 that verifies when it should not, an invite that works twice, a cookie that
 survives the password change meant to kill it, a last admin deleted leaving an
@@ -33,15 +33,15 @@ from pathlib import Path
 API = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API))
 
-_TMP = Path(tempfile.mkdtemp(prefix="pisr-accounts-test-"))
+_TMP = Path(tempfile.mkdtemp(prefix="prism-accounts-test-"))
 
 # Set BEFORE importing config. See the module docstring.
-os.environ["PISR_AUTH_MODE"] = "accounts"
-os.environ["PISR_ACCOUNTS_FILE"] = str(_TMP / "accounts.json")
-os.environ["PISR_INVITE_DAYS"] = "7"
-os.environ["PISR_ACCOUNTS_MIN_PASSWORD"] = "12"
-os.environ["PISR_SESSION_SECRET"] = "test-session-secret-not-a-real-one"
-os.environ["PISR_AUTH_ADMIN_PASSPHRASE"] = "break-glass-passphrase"
+os.environ["PRISM_AUTH_MODE"] = "accounts"
+os.environ["PRISM_ACCOUNTS_FILE"] = str(_TMP / "accounts.json")
+os.environ["PRISM_INVITE_DAYS"] = "7"
+os.environ["PRISM_ACCOUNTS_MIN_PASSWORD"] = "12"
+os.environ["PRISM_SESSION_SECRET"] = "test-session-secret-not-a-real-one"
+os.environ["PRISM_AUTH_ADMIN_PASSPHRASE"] = "break-glass-passphrase"
 # Only so config's controller half can load without a real .env present.
 for _name, _value in (("R1_TENANT_ID", "t"), ("R1_CLIENT_ID", "c"),
                       ("R1_SHARED_SECRET", "s")):
@@ -445,7 +445,7 @@ def test_an_unreadable_file_fails_closed_and_is_not_overwritten():
 def test_a_newer_format_version_is_refused():
     store = _fresh()
     store.path.write_text('{"version": 99, "users": []}', encoding="utf-8")
-    assert store.broken, "a file from a future PISR must not be acted on"
+    assert store.broken, "a file from a future PRISM must not be acted on"
 
 
 def test_a_second_writer_is_picked_up():
@@ -549,7 +549,7 @@ def test_there_is_no_passphrase_door_in_accounts_mode():
     access it existed to avoid. The lockout it was mainly justified by,
     deleting the last admin, `accounts.py` refuses outright.
 
-    Note the environment here still SETS PISR_AUTH_ADMIN_PASSPHRASE (see the
+    Note the environment here still SETS PRISM_AUTH_ADMIN_PASSPHRASE (see the
     top of this file), because in passphrase mode it is the legitimate admin
     door. Being set must not open anything here.
     """

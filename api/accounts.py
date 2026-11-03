@@ -1,7 +1,7 @@
 """
-Local accounts: the second file PISR writes, and the first one holding secrets.
+Local accounts: the second file PRISM writes, and the first one holding secrets.
 
-WHY THIS EXISTS. PISR's production gate was Cloudflare Access, and it stopped
+WHY THIS EXISTS. PRISM's production gate was Cloudflare Access, and it stopped
 working for a reason no amount of configuration fixes: Access's one-time-PIN
 emails are silently discarded by the recipients' corporate mail filters, with
 no bounce and no Access log row. Every email-based alternative — SES, magic
@@ -9,7 +9,7 @@ links, our own OTP — inherits that failure, because the failure is in somebody
 else's mail policy and a brand-new sending domain is a *worse* signal to a
 corporate filter than cloudflare.com, not a better one.
 
-So this mode does not send mail. An admin creates an account here, PISR mints a
+So this mode does not send mail. An admin creates an account here, PRISM mints a
 single-use enrolment link, and the admin delivers it OUT OF BAND — Teams, SMS,
 read out over the phone, typed in by hand. The person sets a password and signs
 in with it from then on. No IDP, no mail, no second factor, nothing that has to
@@ -18,7 +18,7 @@ be delivered at the moment somebody is trying to log in.
   Read `api/auth.py`'s docstring for how this fits the other two modes, and
   `api/visibility.py` for the file-on-a-volume pattern this copies.
 
-THIS IS THE SECOND FILE PISR WRITES, and CLAUDE.md's "the ONE file it writes"
+THIS IS THE SECOND FILE PRISM WRITES, and CLAUDE.md's "the ONE file it writes"
 needed rewriting for it. The rule that matters — no snapshot files, no cache, no
 database — is about TENANT data: a report is a live poll and must never be
 persisted. This file holds usernames, roles and scrypt hashes for the OPERATORS
@@ -62,13 +62,13 @@ FAILS CLOSED, unlike the visibility half of the policy file. That one is
 de-cluttering and a corrupt file resolves to "hide nothing"; this one is the
 gate itself, and a file that cannot be read means nobody signs in — there is
 no passphrase door behind it any more. The recovery path is this module's own
-CLI on the box: `scripts/pisr_admin.py invite <name>` mints a single-use,
+CLI on the box: `scripts/prism_admin.py invite <name>` mints a single-use,
 expiring link attributed to a named person. KEEP TWO ADMINS ENROLLED so the
 first line of recovery is the other one. See auth.py.
 
 TWO WRITERS, WHICH IS THE ONE REAL DIFFERENCE FROM visibility.py. That file is
 only ever written by the admin portal, inside this process. This one is also
-written by `scripts/pisr_admin.py`, running in a SEPARATE container against the
+written by `scripts/prism_admin.py`, running in a SEPARATE container against the
 same volume — that is how the first admin comes to exist. So:
 
   * the freshness check uses st_mtime_ns rather than st_mtime, because two
@@ -106,7 +106,7 @@ FORMAT_VERSION = 1
 
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
-#: The two roles that ship with PISR. Any number of others may exist — an
+#: The two roles that ship with PRISM. Any number of others may exist — an
 #: administrator builds them — so this is a floor rather than the vocabulary.
 ROLES: Tuple[str, ...] = (ROLE_ADMIN, ROLE_USER)
 
@@ -134,7 +134,7 @@ def known_role(role_id: str) -> bool:
 # ── Password hashing ─────────────────────────────────────────────────
 #
 # hashlib.scrypt, which is stdlib. That is not a small point: requirements.txt
-# lists 23 packages deliberately dropped when PISR was extracted, and adding
+# lists 23 packages deliberately dropped when PRISM was extracted, and adding
 # argon2-cffi to hash a handful of passwords would be a real cost against a
 # real principle. scrypt is memory-hard, it is in OpenSSL, and it is right
 # here.
@@ -320,7 +320,7 @@ class Invite:
 
 @dataclass(frozen=True)
 class Account:
-    """One row, as the rest of PISR sees it."""
+    """One row, as the rest of PRISM sees it."""
 
     id: str
     username: str
@@ -486,7 +486,7 @@ class AccountStore:
         means sign-in is impossible for EVERYONE — there is no passphrase
         door any more — so main.py says so at startup rather than leaving it
         to be discovered at a login prompt. The way back is repairing the file
-        on the box with scripts/pisr_admin.py.
+        on the box with scripts/prism_admin.py.
         """
         with self._lock:
             self._load()
@@ -519,7 +519,7 @@ class AccountStore:
 
         if stamp is None:
             # No file yet — a fresh deployment, not an error. Nobody can sign
-            # in until `scripts/pisr_admin.py` creates the first admin, which
+            # in until `scripts/prism_admin.py` creates the first admin, which
             # main.py says at startup.
             self._users = []
             self._stamp = None
@@ -550,7 +550,7 @@ class AccountStore:
         version = raw.get("version")
         if not isinstance(version, int) or version > FORMAT_VERSION:
             logger.error(
-                "accounts: %s declares version %r, which this PISR does not "
+                "accounts: %s declares version %r, which this PRISM does not "
                 "understand (it writes version %d). Refusing to act on half of "
                 "it — a login file read with a key missing is how a disabled "
                 "account signs in.", self.path, version, FORMAT_VERSION)
@@ -645,7 +645,7 @@ class AccountStore:
         """
         if not self.path:
             raise AccountsError(
-                "PISR_ACCOUNTS_FILE is not set, so there is nowhere to save an "
+                "PRISM_ACCOUNTS_FILE is not set, so there is nowhere to save an "
                 "account. Set it and mount a writable volume at its directory.")
 
         payload = {

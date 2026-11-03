@@ -2,8 +2,8 @@
 The drift guard for section visibility.
 
 WHY THIS EXISTS. Section ids are written by hand into three places — the
-catalogue in `api/sections.py`, the cards in `src/pages/PISR.tsx`, and the
-guards in `api/templates/reports/pisr.html` — because there is no shared module
+catalogue in `api/sections.py`, the cards in `src/pages/PRISM.tsx`, and the
+guards in `api/templates/reports/prism.html` — because there is no shared module
 the frontend build and the Python process can both import (the Dockerfile's web
 stage does not copy `api/`, deliberately). Three hand-kept lists drift. This is
 the thing that notices.
@@ -19,7 +19,7 @@ test framework in the production image for one file. Under pytest the `test_*`
 functions are collected normally; run directly it executes them itself.
 
 NEEDS THE REPO, NOT THE IMAGE. Half of what this checks lives in
-`src/pages/PISR.tsx`, and the runtime image contains only `api/` — so running
+`src/pages/PRISM.tsx`, and the runtime image contains only `api/` — so running
 it inside the app container finds no frontend and fails on a missing file.
 Mount the working tree:
 
@@ -56,32 +56,32 @@ def _repo_root() -> Path:
     the same answer on a host checkout and an explicit failure everywhere else.
     """
     for candidate in [API.parent, *API.parents]:
-        if (candidate / "src" / "pages" / "PISR.tsx").is_file():
+        if (candidate / "src" / "pages" / "PRISM.tsx").is_file():
             return candidate
     raise SystemExit(
-        "Could not find src/pages/PISR.tsx above " + str(API) + ".\n"
+        "Could not find src/pages/PRISM.tsx above " + str(API) + ".\n"
         "This test needs the working tree, not just the runtime image. Run it as:\n"
         "  docker compose -f docker-compose.dev.yml run --rm --no-deps \\\n"
         '    -v "$PWD:/repo" backend python /repo/api/tests/test_sections.py')
 
 
 REPO = _repo_root()
-PISR_TSX = REPO / "src" / "pages" / "PISR.tsx"
-TEMPLATE = API / "templates" / "reports" / "pisr.html"
-CHECKS_PY = API / "services" / "pisr" / "checks.py"
+PRISM_TSX = REPO / "src" / "pages" / "PRISM.tsx"
+TEMPLATE = API / "templates" / "reports" / "prism.html"
+CHECKS_PY = API / "services" / "prism" / "checks.py"
 
 
 def _tsx_rendered_ids():
     """Ids actually tagged onto a Card or Section in the React page."""
-    text = PISR_TSX.read_text(encoding="utf-8")
+    text = PRISM_TSX.read_text(encoding="utf-8")
     return set(re.findall(r'<(?:Card|Section)[^>]*?\sid="([a-z][a-z.\-]+)"', text, re.S))
 
 
 def _tsx_declared_ids():
     """The SECTION_IDS array the page registers for tab-emptiness counting."""
-    text = PISR_TSX.read_text(encoding="utf-8")
+    text = PRISM_TSX.read_text(encoding="utf-8")
     block = re.search(r"export const SECTION_IDS = \[(.*?)\] as const;", text, re.S)
-    assert block, "PISR.tsx no longer exports a SECTION_IDS array"
+    assert block, "PRISM.tsx no longer exports a SECTION_IDS array"
     return set(re.findall(r'"([a-z][a-z.\-]+)"', block.group(1)))
 
 
@@ -186,14 +186,14 @@ def test_frontend_renders_every_section():
     """
     missing = set(catalogue.IDS) - _tsx_declared_ids()
     assert not missing, (
-        f"in api/sections.py but not in SECTION_IDS in src/pages/PISR.tsx: "
+        f"in api/sections.py but not in SECTION_IDS in src/pages/PRISM.tsx: "
         f"{sorted(missing)}")
 
 
 def test_frontend_renders_nothing_extra():
     extra = _tsx_rendered_ids() - set(catalogue.IDS)
     assert not extra, (
-        f"tagged in src/pages/PISR.tsx but unknown to api/sections.py "
+        f"tagged in src/pages/PRISM.tsx but unknown to api/sections.py "
         f"(so it can never be hidden): {sorted(extra)}")
 
 
@@ -203,7 +203,7 @@ def test_frontend_declaration_matches():
     eagerly or not eagerly enough — both silent.
     """
     assert _tsx_declared_ids() == set(catalogue.IDS), (
-        "SECTION_IDS in src/pages/PISR.tsx does not match api/sections.py: "
+        "SECTION_IDS in src/pages/PRISM.tsx does not match api/sections.py: "
         f"missing {sorted(set(catalogue.IDS) - _tsx_declared_ids())}, "
         f"extra {sorted(_tsx_declared_ids() - set(catalogue.IDS))}")
 
@@ -221,14 +221,14 @@ def test_template_guards_are_known():
     """
     unknown = _template_guard_ids() - set(catalogue.IDS)
     assert not unknown, (
-        f"api/templates/reports/pisr.html guards on unknown section id(s): "
+        f"api/templates/reports/prism.html guards on unknown section id(s): "
         f"{sorted(unknown)}")
 
 
 def test_template_tab_guards_are_known():
     unknown = _template_guard_tabs() - {tab for tab, _ in catalogue.TABS}
     assert not unknown, (
-        f"api/templates/reports/pisr.html guards on unknown tab(s): {sorted(unknown)}")
+        f"api/templates/reports/prism.html guards on unknown tab(s): {sorted(unknown)}")
 
 
 # ── the redactor does what the catalogue promises ────────────────────
@@ -600,7 +600,7 @@ def test_a_deleted_id_is_dropped():
 
 # ── wired clients ────────────────────────────────────────────────────
 
-from services.pisr.shape import wired_client_card    # noqa: E402
+from services.prism.shape import wired_client_card    # noqa: E402
 
 
 def _wired_fixture():
@@ -674,7 +674,7 @@ def test_wired_handles_an_empty_table():
 
 # ── R1 alarms ────────────────────────────────────────────────────────
 
-from services.pisr.shape import incident_card            # noqa: E402
+from services.prism.shape import incident_card            # noqa: E402
 
 
 def _alarm(**kw):
@@ -696,7 +696,7 @@ def test_alarm_message_template_is_unwrapped_and_named():
 
 
 def test_alarm_falls_back_to_the_serial_when_the_device_is_unknown():
-    """An Edge alarm names a device PISR has no inventory for."""
+    """An Edge alarm names a device PRISM has no inventory for."""
     card = incident_card([_alarm(entityType="EDGE", serialNumber="EDGE9",
                                  entityId="EDGE9")], [], [])
     assert "EDGE9" in card["rows"][0]["text"]
@@ -741,8 +741,8 @@ def test_no_alarms_is_an_empty_card_not_an_error():
 
 # ── punch list ───────────────────────────────────────────────────────
 
-from services.pisr import punchlist as punchlist_builder     # noqa: E402
-from services.pisr import checks as check_registry           # noqa: E402
+from services.prism import punchlist as punchlist_builder     # noqa: E402
+from services.prism import checks as check_registry           # noqa: E402
 
 
 def test_every_check_has_a_category():
@@ -768,7 +768,7 @@ def test_categories_referenced_are_declared():
 
 # ── port link speed: infra is a warning, endpoints are info ──────────
 
-from services.pisr import shape as shape_mod                  # noqa: E402
+from services.prism import shape as shape_mod                  # noqa: E402
 
 
 def _up(port_id, speed, neighbor="", neighbor_mac=""):
@@ -1146,7 +1146,7 @@ def test_missing_is_distinct_from_a_recommended_null():
 
 # ── AP subnet grouping ───────────────────────────────────────────────
 
-from services.pisr.shape import _subnet_groups                # noqa: E402
+from services.prism.shape import _subnet_groups                # noqa: E402
 
 
 def _dev(ip, netmask=None, gateway=None):
@@ -1203,8 +1203,8 @@ def test_gateway_inferred_devices_fold_into_a_reported_subnet():
 
 # ── floor plans ──────────────────────────────────────────────────────
 
-from services.pisr.shape import floorplan_summary              # noqa: E402
-from services.pisr.checks import check_floorplans               # noqa: E402
+from services.prism.shape import floorplan_summary              # noqa: E402
+from services.prism.checks import check_floorplans               # noqa: E402
 
 
 def test_floorplan_scale_is_read_from_either_unit():
@@ -1280,9 +1280,9 @@ def test_pdf_template_autoescapes():
     a local path — a `user`-triggered SSRF from a role that should only be able
     to read one venue's report.
 
-    Found by deploy/pisr-probe-authed.sh, which is why that script exists.
+    Found by deploy/prism-probe-authed.sh, which is why that script exists.
     """
-    from routers.pisr_router import _jinja
+    from routers.prism_router import _jinja
 
     env = _jinja()
     assert env.autoescape, (
@@ -1301,7 +1301,7 @@ def test_pdf_template_never_uses_safe():
     A `|safe` filter added later would punch a hole through the check above
     without failing it — so the template is asserted to contain none.
     """
-    template = (_repo_root() / "api" / "templates" / "reports" / "pisr.html")
+    template = (_repo_root() / "api" / "templates" / "reports" / "prism.html")
     body = template.read_text(encoding="utf-8")
     assert "|safe" not in body and "| safe" not in body, (
         "the PDF template uses |safe, which bypasses autoescaping. If that is "

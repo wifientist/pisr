@@ -32,7 +32,7 @@ API = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API))
 
 import config_labels                                   # noqa: E402
-from services.pisr import fetch as fetch_module        # noqa: E402
+from services.prism import fetch as fetch_module        # noqa: E402
 
 SPEC_DIR = API.parent / "spec"
 OUT = API / "baselines" / "field_catalogue.json"

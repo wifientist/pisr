@@ -52,9 +52,9 @@ stored distinctly and the admin editor lets an admin move a field between all
 three. RUCKUS has no `notApplicable` — it is vendor guidance, read-only, and a
 field it says nothing about is simply absent.
 
-THE ORG BASELINE IS NOW A FILE PISR WRITES, joining the visibility policy and
+THE ORG BASELINE IS NOW A FILE PRISM WRITES, joining the visibility policy and
 the accounts file on the pisr-config volume. That is not a contradiction of
-"PISR stores nothing" for the same reason those two are not: it holds
+"PRISM stores nothing" for the same reason those two are not: it holds
 recommended values keyed by R1 path — operator configuration, no venue data, no
 device, no credential. See visibility.py for the fuller version of the
 argument. RUCKUS stays repo-sourced and is never written.
@@ -459,7 +459,7 @@ class Baseline:
         """
         if not self.path:
             raise RuntimeError(
-                "PISR_ORG_BASELINE_FILE is not set, so there is nowhere to save "
+                "PRISM_ORG_BASELINE_FILE is not set, so there is nowhere to save "
                 "the baseline. Set it and mount a writable volume at its "
                 "directory.")
 
@@ -497,7 +497,7 @@ class Baseline:
 
         payload = {
             # The name travels with the file for a human reading it, but the UI
-            # always labels the column from PISR_ORG_NAME (see describe()), so a
+            # always labels the column from PRISM_ORG_NAME (see describe()), so a
             # file copied between deployments cannot mislabel itself.
             "name": AUTH.org_name,
             "status": status,

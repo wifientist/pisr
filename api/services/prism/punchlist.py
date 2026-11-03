@@ -20,10 +20,10 @@ the check, not here. This module decides grouping, ordering and wording, and
 nothing else.
 
 WHAT IT DELIBERATELY CANNOT DO. There is no "fixed since yesterday", no ticking
-items off, and no history — PISR stores nothing, so every list is built fresh
+items off, and no history — PRISM stores nothing, so every list is built fresh
 from the poll in front of it. That is a real limitation for a crew working a
 site over days, and the honest workaround today is to export the PDF at the end
-of each visit. Making it stateful means giving PISR somewhere to write, which
+of each visit. Making it stateful means giving PRISM somewhere to write, which
 is a decision about the whole tool rather than a feature of this file.
 """
 
@@ -49,7 +49,7 @@ CATEGORIES: Tuple[Tuple[str, str, str], ...] = (
      "DPSK pools, identity groups, adaptive policy and RADIUS."),
     # RUCKUS ONE alarms are NOT a punch-list group: the platform raises them and
     # they already have their own place on Overview beside Verification. Re-cutting
-    # them here duplicated them, so the punch list stays PISR's own findings only.
+    # them here duplicated them, so the punch list stays PRISM's own findings only.
     ("documentation", "Documentation & handover",
      "Naming placement. Does not stop the site working, and is the group that "
      "never gets done after the crew leaves."),
@@ -142,7 +142,7 @@ def build(verification: Dict[str, Any]) -> Dict[str, Any]:
     """
     One list of outstanding work, grouped by trade and ordered by severity.
 
-    PISR's own findings only — R1 alarms live on Overview, not here, and the
+    PRISM's own findings only — R1 alarms live on Overview, not here, and the
     checks in PUNCHLIST_EXCLUDE (floor plans) are Overview notices rather than
     visits a crew plans around.
 

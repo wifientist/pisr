@@ -1,7 +1,7 @@
 """
 The identity trace's verdicts, on a hand-built venue.
 
-`services/pisr/trace.py` is pure, so every fault it names can be built here
+`services/prism/trace.py` is pure, so every fault it names can be built here
 without R1: a clean per-unit resident, a username regex with a typo, an SSID
 regex naming a network that is not activated, a tiered set where most users
 fall through to the pool default, and a reject-by-default pool.
@@ -18,7 +18,7 @@ from pathlib import Path
 API = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API))
 
-from services.pisr import trace  # noqa: E402
+from services.prism import trace  # noqa: E402
 
 SET = "set-1"
 POOL = "pool-1"

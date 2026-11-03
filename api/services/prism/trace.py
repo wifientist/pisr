@@ -15,7 +15,7 @@ policy named for a unit whose username regex has a typo; an SSID regex naming a
 network that was renamed; a network that exists but is not activated here; an
 AP group with nothing in it.
 
-PURE. Everything R1 said arrives as arguments, from the route in pisr_router,
+PURE. Everything R1 said arrives as arguments, from the route in prism_router,
 and nothing here fetches. The regexes are evaluated with Python's `re`; R1's
 are Java's, which differ only at the edges (possessive and lookbehind corners),
 and the patterns seen live are anchored literals where the two agree exactly. A
@@ -24,13 +24,13 @@ pattern `re` cannot compile is reported as unverifiable, never as a mismatch.
 NOT PART OF THE REPORT, and that is a boundary rather than an accident. The
 rows name residents' DPSK usernames, which `shape._dpsk_safe` refuses to put
 in a report on purpose. The route serves this to admins only, on a button
-press, and it is never persisted — the same as every other PISR response.
+press, and it is never persisted — the same as every other PRISM response.
 """
 
 import re
 from functools import lru_cache
 
-from services.pisr.shape import _rate_limits
+from services.prism.shape import _rate_limits
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # Condition attributes, by R1's stable machine name (`attributeTextMatch`).

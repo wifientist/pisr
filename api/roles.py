@@ -82,7 +82,7 @@ def new_id() -> str:
 
 @dataclass(frozen=True)
 class Role:
-    """One job, as the rest of PISR sees it."""
+    """One job, as the rest of PRISM sees it."""
 
     id: str
     label: str

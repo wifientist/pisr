@@ -1,5 +1,5 @@
 """
-Logging configuration for PISR
+Logging configuration for PRISM
 
 This module sets up a comprehensive logging configuration for the entire application.
 Call setup_logging() at application startup to configure logging.
@@ -144,5 +144,5 @@ def setup_logging(log_level: str = "INFO"):
     logger = logging.getLogger(__name__)
     logger.info(f"Logging configured with level: {log_level}")
     logger.info("=" * 60)
-    logger.info("PISR - Logging initialized")
+    logger.info("PRISM - Logging initialized")
     logger.info("=" * 60)

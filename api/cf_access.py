@@ -1,8 +1,8 @@
 """
 Cloudflare Access JWT verification.
 
-PISR's proxy mode trusts an identity header from a peer in
-PISR_TRUSTED_PROXY_IPS. That is sound when the peer address means something.
+PRISM's proxy mode trusts an identity header from a peer in
+PRISM_TRUSTED_PROXY_IPS. That is sound when the peer address means something.
 Under rootless podman it does not: publishing a port rewrites the source, so
 every caller arrives from inside podman's own network and the check cannot tell
 the proxy from anything else that reached the port. What actually keeps a
@@ -15,7 +15,7 @@ for; checking the signature establishes the caller came through *this* Access
 application, whatever address the packet claims to be from. The network
 boundary stays as defence, but it stops being the only thing there.
 
-  Enabled by setting BOTH PISR_ACCESS_TEAM and PISR_ACCESS_AUD. Unset, proxy
+  Enabled by setting BOTH PRISM_ACCESS_TEAM and PRISM_ACCESS_AUD. Unset, proxy
   mode behaves exactly as before, so an oauth2-proxy deployment is unaffected
   and this file is never imported into the request path.
 

@@ -32,15 +32,15 @@ queue here. An admin clicks Run in the browser and the BROWSER walks the venue
 list, calling `POST /runs/{id}/venues/{venueId}` once per venue. So:
 
   * no request outlives Cloudflare's 100-second origin timeout — each is one
-    venue's report, the same work `/pisr/{cid}/report` already does;
+    venue's report, the same work `/prism/{cid}/report` already does;
   * closing the tab stops the batch, and the run reads "interrupted" rather
     than anything finishing it behind the admin's back;
   * a stopped or failed batch is resumed by running the stale venues again,
     which is a filter in the dialog, not state in a worker.
 
-WHAT IS KEPT. Counts only — see `services/pisr/rollup.summarise`, which is the
+WHAT IS KEPT. Counts only — see `services/prism/rollup.summarise`, which is the
 allowlist, and `batch_runs.py`, which explains why this file is the one place
-PISR keeps anything read off a customer's network.
+PRISM keeps anything read off a customer's network.
 
   GET  /api/batch/state                history, roll-ups and runs for the dialog
   GET  /api/batch/rollup.pdf           the roll-up, from the record — no re-poll
@@ -74,8 +74,8 @@ from grants import (GRANT_BATCH_RUN, GRANT_MSP_BATCH, GRANT_MSP_ROLLUP,
                     GRANT_TENANT_ROLLUP)
 from r1_client import build_r1_client, require_id, resolve_tenant
 from redact import redact
-from services.pisr import rollup
-from services.pisr.collect import build_report
+from services.prism import rollup
+from services.prism.collect import build_report
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$")
 
 
 def _actor(request: Request) -> str:
-    return getattr(request.state, "pisr_user", None) or "admin (passphrase)"
+    return getattr(request.state, "prism_user", None) or "admin (passphrase)"
 
 
 def _tenant_key(tenant_id: Optional[str]) -> str:
@@ -146,7 +146,7 @@ def _override_for(tenant_key: str) -> Optional[str]:
 def _require_store() -> None:
     store = batch_runs.STORE
     if not store.configured:
-        raise HTTPException(503, "PISR_BATCH_FILE is not set, so there is "
+        raise HTTPException(503, "PRISM_BATCH_FILE is not set, so there is "
                                  "nowhere to record a run.")
     if store.broken:
         raise HTTPException(503, f"{store.path} could not be read. It is left "
@@ -167,7 +167,7 @@ def _readable(request: Request) -> Dict[str, Any]:
 
     Both read routes start here. The scope comes back too because the routes
     still have to REFUSE a tenant outside it — narrowing a response is the
-    courtesy, a 403 at the route is the control, and `pisr_router._require_scope`
+    courtesy, a 403 at the route is the control, and `prism_router._require_scope`
     makes the same distinction for the same reason. A caller who names a
     tenant they may not reach gets told so, rather than being handed a roll-up
     of nothing and left to wonder whether the batch ever ran.
@@ -185,7 +185,7 @@ def _require_ec(request: Request, allowed, tenant_key: str) -> None:
     """403 if this caller is not scoped to the tenant they named."""
     if not allowed.allows_ec(tenant_key):
         logger.warning("scope: refused batch tenant=%s to user=%s role=%s",
-                       tenant_key, getattr(request.state, "pisr_user", "-"),
+                       tenant_key, getattr(request.state, "prism_user", "-"),
                        role_of(request))
         raise HTTPException(
             403, "This account is not scoped to that RUCKUS ONE customer.")
@@ -205,7 +205,7 @@ async def get_state(request: Request,
     tenant's per-venue rows and recent runs.
 
     Makes NO R1 call. The dialog lists the tenant's venues itself, through the
-    ordinary `/pisr/{cid}/venues` route, and merges them; this is only the
+    ordinary `/prism/{cid}/venues` route, and merges them; this is only the
     record.
     """
     store = batch_runs.STORE
@@ -298,7 +298,7 @@ async def plan_sweep(request: Request):
     tenants = allowed.filter_ecs(
         [{"id": tid, "name": name} for tid, name in rows.items()])
     logger.info("batch: sweep planned over %d tenant(s) for user=%s",
-                len(tenants), getattr(request.state, "pisr_user", "-"))
+                len(tenants), getattr(request.state, "prism_user", "-"))
     return {"tenants": sorted(tenants, key=lambda r: str(r["name"]).lower())}
 
 
@@ -327,7 +327,7 @@ async def start_run(body: StartBody, request: Request):
     beyond = [vid for vid in body.venueIds if not allowed.allows_venue(key, vid)]
     if beyond:
         logger.warning("scope: refused %d venue(s) in a batch for user=%s",
-                       len(beyond), getattr(request.state, "pisr_user", "-"))
+                       len(beyond), getattr(request.state, "prism_user", "-"))
         raise HTTPException(
             403, f"{len(beyond)} of those venues are outside this account's "
                  "scope. Run the ones it covers, or ask for wider access.")
@@ -352,7 +352,7 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
     One venue: poll it, reduce the report to counts, record the counts.
 
     The server builds the report itself rather than accepting counts from the
-    browser, so the record is PISR's reading of R1 and not whatever a client
+    browser, so the record is PRISM's reading of R1 and not whatever a client
     posted. The report is then dropped — only `rollup.summarise`'s integers
     survive this function.
 
@@ -376,7 +376,7 @@ async def check_venue(run_id: str, venue_id: str, request: Request):
     _require_ec(request, scope_of(request), run.get("tenantId") or "")
     if not scope_of(request).allows_venue(run.get("tenantId"), venue_id):
         logger.warning("scope: refused batch venue=%s to user=%s", venue_id,
-                       getattr(request.state, "pisr_user", "-"))
+                       getattr(request.state, "prism_user", "-"))
         raise HTTPException(403, "This account is not scoped to that venue.")
 
     tenant_key = run["tenantId"]
@@ -455,7 +455,7 @@ def _origin(value: Optional[str]) -> Optional[str]:
 
 def _report_link(origin: Optional[str], tenant_id: str, tenant_name: Optional[str],
                  venue_id: str) -> Optional[str]:
-    """The deep link PISR.tsx reads on load — see `readDeepLink` there."""
+    """The deep link PRISM.tsx reads on load — see `readDeepLink` there."""
     if not origin:
         return None
     params = {"venue": venue_id}
@@ -529,7 +529,7 @@ async def get_rollup_pdf(request: Request,
     MSP without one it is every tenant, summarised, then each tenant's venues
     on its own page.
     """
-    from routers.pisr_router import _jinja
+    from routers.prism_router import _jinja
 
     window = _days(days)
     link_base = _origin(origin)

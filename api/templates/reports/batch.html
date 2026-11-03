@@ -4,7 +4,7 @@
   detail is in the live report, which each venue name links to when the
   browser supplied an origin (see batch_router._origin).
 
-  Autoescape is on (pisr_router._jinja). Tenant and venue names come from the
+  Autoescape is on (prism_router._jinja). Tenant and venue names come from the
   RUCKUS ONE tenant; nothing here may be marked |safe.
 #}
 {% macro sev(n, kind) %}<td class="num {% if n %}{{ kind }}{% else %}zero{% endif %}">{{ n }}</td>{% endmacro %}
@@ -161,7 +161,7 @@
   {% endfor %}
   </tbody>
 </table>
-<p class="note">“—” venues: never batched, so PISR has not listed that tenant's venues yet.
+<p class="note">“—” venues: never batched, so PRISM has not listed that tenant's venues yet.
   “Not clean”: venues whose latest attempt failed or came back partial.</p>
 {% endif %}
 

@@ -1,7 +1,28 @@
-# Project: pisr
+# Project: PRISM — Property Rollout & Installation Status Monitor
 
 Poll one RUCKUS ONE venue, shape it, check it, render it. One purpose, done
 properly.
+
+**Renamed from PISR in 2026-11.** Everything in the repo says PRISM except
+what is deliberately left on the OLD name, and each of those is a data address
+or an outside reference, not an oversight — do not "finish the rename" on them:
+
+- **The `pisr-config` / `pisr-config-dev` volume keys** in both compose files.
+  Compose derives the real volume name from the key, so renaming it mounts a
+  new EMPTY volume and every account, role, baseline and batch record appears
+  to vanish.
+- **`PISR_<X>` is still read as `PRISM_<X>`** — `config._env` in Python,
+  `deploy/legacy-names.sh` in shell — because production's env file lives
+  outside the repo and still says PISR_. `config.LEGACY_USED` names the ones
+  that supplied a value and `main.py` logs them at every start.
+- **`deploy/pisr-{update,app-status,deploy-status}.sh` are shims** onto the
+  prism- scripts: an installed unit and operators' symlinks name those paths.
+- **The deploy script treats a container named `pisr` as its own to remove**
+  (`prism-update.sh`, `container_name`): compose does not remove a container
+  whose service was renamed, and the old one holds the port and answers the
+  health check.
+
+The cutover runbook is `deploy/README.md`, "Renaming a box from PISR".
 
 It began as an extraction from rtools2 and has since diverged into its own
 thing — see "Lineage" below before assuming any file is meant to match an
@@ -13,12 +34,12 @@ upstream copy. It is not.
 - Production: `docker compose up --build` → <http://localhost:8090>
 - Dev (hot reload): `docker compose -f docker-compose.dev.yml up` → frontend
   <http://localhost:4173>, API <http://127.0.0.1:4174>
-- Run backend commands with `docker compose run --rm pisr <cmd>` (prod compose)
+- Run backend commands with `docker compose run --rm prism <cmd>` (prod compose)
   or `docker compose -f docker-compose.dev.yml exec backend <cmd>` (dev).
 - Production redeploys itself by polling this repo — a systemd user timer on
   the box, not a webhook. See `deploy/README.md`. Nothing listens inbound for
   it, deliberately: the box reaches GitHub, GitHub never reaches the box, which
-  is the same property the tunnel is there for. A deploy endpoint inside PISR
+  is the same property the tunnel is there for. A deploy endpoint inside PRISM
   would need the podman socket, and that makes the container host-root.
 
 ## Architecture
@@ -49,7 +70,7 @@ upstream copy. It is not.
   are no tags and no second bundle — see "RBAC: one concept, and why" below for
   what was collapsed and why. `admin` and `user` ship compiled into
   `roles._BUILTINS`; everything else is data an admin builds. In proxy mode the
-  role comes from the verified identity against `PISR_ADMIN_EMAILS` or the
+  role comes from the verified identity against `PRISM_ADMIN_EMAILS` or the
   policy's per-person map; in accounts mode it is stored per account; in
   passphrase mode it comes from which of two passphrases signed the cookie.
 - **A CAPABILITY IS A LENS, NEVER A KEY.** It decides which VIEW exists, and
@@ -63,7 +84,7 @@ upstream copy. It is not.
   reach fourteen venues discloses an estate they were not told about, and
   discloses it as a number, which no amount of hiding names would catch.
   Nothing is implied by holding `admin.portal`: an administrator without
-  `msp.rollup` does not get the views. `PISR_MSP_EMAILS` and `PISR_MSP_ROLES`
+  `msp.rollup` does not get the views. `PRISM_MSP_EMAILS` and `PRISM_MSP_ROLES`
   are GONE and inert if still set; `.env.example` says so at length, because an
   upgraded deployment will still have them.
 - **External API**: RuckusONE only. R1 has a 15-SSID-per-AP-Group limit, which
@@ -77,19 +98,19 @@ upstream copy. It is not.
   docstrings and the README.
 - **Human-triggered.** No scheduler, no background tasks, no recurring polls. If
   something needs to happen repeatedly, a person clicks the button.
-- **PISR stores no report.** No snapshot files, no cache, no database, no
+- **PRISM stores no report.** No snapshot files, no cache, no database, no
   report that outlives the response carrying it. It writes exactly FOUR files,
   all on the `pisr-config` volume. Three are configuration and hold nothing
   read off the customer's network; the fourth — the batch record — is the one
   deliberate exception, and holds counts only:
 
-  - the role policy at `PISR_VISIBILITY_FILE` (`/data/visibility.json`) — a
+  - the role policy at `PRISM_VISIBILITY_FILE` (`/data/visibility.json`) — a
     list of section ids and venue ids, no venue data, no device, no credential.
     See `api/visibility.py`.
-  - local accounts at `PISR_ACCOUNTS_FILE` (`/data/accounts.json`), in
+  - local accounts at `PRISM_ACCOUNTS_FILE` (`/data/accounts.json`), in
     `accounts` mode only — usernames, roles and scrypt hashes for the OPERATORS
     of the tool. See `api/accounts.py`.
-  - the org config baseline at `PISR_ORG_BASELINE_FILE`
+  - the org config baseline at `PRISM_ORG_BASELINE_FILE`
     (`/data/org-baseline.json`) — recommended values keyed by R1 path, edited by
     an admin. No venue data: it is the customer's *agreed configuration*, not a
     reading from their network. Its `networkGroups` may carry an SSID-name glob
@@ -97,7 +118,7 @@ upstream copy. It is not.
     class as the venue ids in the visibility policy, not a reading; still no
     device, credential or config value read off the network. See `api/baselines.py`.
 
-  - the batch record at `PISR_BATCH_FILE` (`/data/batch-runs.json`) — per
+  - the batch record at `PRISM_BATCH_FILE` (`/data/batch-runs.json`) — per
     venue, when an admin's batch last checked it, whether that came back
     ok/partial/failed, the punch-list COUNTS (by severity and by trade), and
     WHICH checks fired: `{severity: {checkId: deviceCount}}`, ids from
@@ -105,7 +126,7 @@ upstream copy. It is not.
     ones this repo ships. Plus run history ("48/58"). Never a finding's text,
     its evidence, a device name, a config value or an R1 error body — "APs
     online · 3" is a catalogue label and an integer, "3 APs offline in Unit 4B"
-    is the report and is not kept. `services/pisr/rollup.summarise` is the
+    is the report and is not kept. `services/prism/rollup.summarise` is the
     allowlist of what crosses into it, and
     `test_batch.py::test_summary_holds_only_counts` enforces it, KEYS INCLUDED.
     See `api/batch_runs.py`.
@@ -171,7 +192,7 @@ keep the counts, roll them up MSP → tenant (MSP-EC) → venue.
   renamed in `checks.py` but not in `sections.py` is caught by
   `test_sections.py::test_checks_exist`, not by silently landing on disk.
 - **The server builds the report itself** and records `summarise(report)`. It
-  never accepts counts from the browser, so the record is PISR's reading of R1.
+  never accepts counts from the browser, so the record is PRISM's reading of R1.
   The report passes through `redact(report, ())` (admin, nothing hidden) so the
   credential scrub still runs, and is then dropped.
 - **Only `ok` moves `lastComplete`.** `partial` (any read in `meta.errors`
@@ -214,7 +235,7 @@ keep the counts, roll them up MSP → tenant (MSP-EC) → venue.
   `check_aps_online` refuses to pass it. A roll-up that read `offline` alone
   would be more optimistic than the check it summarises. An older record with
   no device states shows the fleet size alone rather than a fabricated split. Its links are deep links
-  (`/?ec=&ecName=&venue=`, read by `PISR.tsx` on load) built from an `origin`
+  (`/?ec=&ecName=&venue=`, read by `PRISM.tsx` on load) built from an `origin`
   the BROWSER passes — the server does not know its own address (see the
   enrolment-link trap) — and `_origin` accepts scheme://host[:port] only.
 - **Single uvicorn worker assumed.** The store's lock is in-process. More
@@ -234,7 +255,7 @@ that": **the role they were assigned**.
   each operates at: `msp.batch`, `msp.rollup`, `msp.fleet` (across every
   tenant); `tenant.rollup`, `batch.run` (one tenant); `venue.report`,
   `config.detail`, `identity.trace` (one venue); `admin.portal`,
-  `admin.accounts`, `admin.roles` (administering PISR itself). A route names
+  `admin.accounts`, `admin.roles` (administering PRISM itself). A route names
   one in code, so a capability an admin could invent would be enforced by
   nothing. `grants.ALL_GRANTS` is the list and `test_access.py` holds every
   route to naming one from it.
@@ -290,17 +311,17 @@ that": **the role they were assigned**.
     the estate. Unassign everybody in the same save and it is allowed, which is
     exactly the dismantling-vs-orphaning line `_guard_last_super` draws.
   - **PASSPHRASE MODE NEVER FAILS CLOSED HERE.** That mode has no identities,
-    so an assignment can never match, and applying the rule would leave PISR's
+    so an assignment can never match, and applying the rule would leave PRISM's
     DEFAULT auth mode showing every user nothing with no screen that could fix
     it. Groups need somebody to assign them to. Same reasoning as the super
     tier, which cannot exist there either.
   - **`PolicyStore._shadow_scope` is the rollback guard, and is why groups did
-    not need `FORMAT_VERSION` bumped.** An older PISR refuses a version it does
+    not need `FORMAT_VERSION` bumped.** An older PRISM refuses a version it does
     not understand OUTRIGHT, which for scope means every restriction vanishing
     at once. So groups ride under a key it cannot see, and the territory they
     resolve to is ALSO written to `people[x].scope`, where it already looks.
     Never wider than live; `all-access` resolves to "no restriction", which is
-    what that older PISR would have done anyway. WRITE-ONLY from then on —
+    what that older PRISM would have done anyway. WRITE-ONLY from then on —
     `scope_for` reads the groups.
   - **`all-access` is COMPILED IN**, like `roles._BUILTINS` and
     `baselines/ruckus.json`: an unreadable policy must still leave somebody
@@ -320,7 +341,7 @@ that": **the role they were assigned**.
     territory, so a diff between two response bodies isolates scope with
     nothing else moving.
   - **THE RULES ARE NOT STORED, THE IDS ARE.** A group could match on venue
-    tag, name, city or AP count — the venue rows PISR already fetches carry all
+    tag, name, city or AP count — the venue rows PRISM already fetches carry all
     four. It does not, and that is the decision: scope is checked before any R1
     client is built, so a refusal costs no upstream call; a stored rule would
     move the refusal behind a network call and turn an R1 blip into "you are
@@ -457,7 +478,7 @@ do.
   function and the single enforcement point both the JSON and PDF routes pass
   through, so this polls R1 ZERO times and runs in about a second.
 - **The fixture is GENERATED FROM `sections.py`, never captured.** A real
-  report cannot live in this repository — PISR stores no report, and a
+  report cannot live in this repository — PRISM stores no report, and a
   captured one is a customer's network in git. Generating it means a card
   added next release is covered the day it is added: 113 elements became 115
   and 226 roles became 230, with no edit to the test.
@@ -494,16 +515,16 @@ covered on the next run with nothing edited.
 
 - **An id from a caller is validated before it reaches an R1 path.**
   `r1_client.require_id` — `[A-Za-z0-9_-]{1,64}`, enforced in
-  `pisr_router._require_scope` (which every R1 route calls) and in
+  `prism_router._require_scope` (which every R1 route calls) and in
   `resolve_tenant` and `batch_router`. `fetch` builds paths by interpolation,
   so before this any signed-in caller — a plain `user` — could pass
-  `<venue>/aps/<serial>/passwords` as `venue_id` and make PISR issue
+  `<venue>/aps/<serial>/passwords` as `venue_id` and make PRISM issue
   `GET /venues/<venue>/aps/<serial>/passwords`, the "Get AP Password" endpoint
   this tool promises never to call. Nothing obviously leaked, because the
   shapers allowlist and `scrub.py` blanks the key — but the promise is not to
   make the call, and a promise the caller can steer is not a promise. Live R1
   ids are 32-hex (verified 2026-09-22), so the pattern costs nothing. Do not
-  move this check into `fetch`: that layer is called with ids PISR read back
+  move this check into `fetch`: that layer is called with ids PRISM read back
   from R1, and the boundary is where a value stops being input.
 
 - **THE ROLE ID IS IN THE SESSION KEY, but what the role CONFERS is read
@@ -559,7 +580,7 @@ covered on the next run with nothing edited.
   exports" list or a temporary download URL without deciding, explicitly, that
   a report may live on the volume — today none may.
 
-- **`hashlib.scrypt` needs `maxmem` passed explicitly.** At PISR's parameters
+- **`hashlib.scrypt` needs `maxmem` passed explicitly.** At PRISM's parameters
   (N=2^15, r=8) it wants 128·N·r = *exactly* 32 MiB, which is also OpenSSL's
   default ceiling — so the default raises `ValueError: memory limit exceeded`
   rather than being merely slow, and it raises at the first sign-in rather than
@@ -602,7 +623,7 @@ covered on the next run with nothing edited.
   precisely what `auth.py` is careful never to do.
 
 - **There is NO break-glass door in `accounts` mode, and that was a deliberate
-  removal.** `PISR_AUTH_ADMIN_PASSPHRASE` once opened one; it now decides
+  removal.** `PRISM_AUTH_ADMIN_PASSPHRASE` once opened one; it now decides
   nothing there and `main.py` warns at startup if it is still set, because an
   operator who has one believes they have a way in that does not exist. It
   REMAINS passphrase mode's admin door, which is a different job — there the
@@ -610,7 +631,7 @@ covered on the next run with nothing edited.
 
   Two things undid it. The lockout it was mainly justified by, deleting the
   last admin, `accounts.py` refuses outright in three places. And every other
-  recovery it offered, the CLI offers better: `pisr_admin.py invite <name>`
+  recovery it offered, the CLI offers better: `prism_admin.py invite <name>`
   mints a single-use, expiring link attributed to a named person, which is the
   same flow the portal's reset button uses. The one thing it did that the CLI
   cannot is recover WITHOUT SHELL ACCESS — and rotating a leaked passphrase
@@ -628,7 +649,7 @@ covered on the next run with nothing edited.
   accounts file admits nobody and is *not overwritten* — a damaged but
   recoverable file is worth more than our idea of what was in it.
 
-- **`scripts/pisr_admin.py` is a SECOND WRITER of `/data/accounts.json`**,
+- **`scripts/prism_admin.py` is a SECOND WRITER of `/data/accounts.json`**,
   running in its own container against the same volume. That is why
   `AccountStore` compares `st_mtime_ns` rather than `st_mtime` (two writes in
   one second is a real sequence here) and re-reads before every mutation. Drop
@@ -643,12 +664,12 @@ covered on the next run with nothing edited.
   the difference is the SPA mount. Starlette treats "path matched, method did
   not" as a PARTIAL match and keeps looking; the `Mount("/")` then matches
   everything and `StaticFiles` answers 404. Dev sets
-  `PISR_STATIC_DIR=/nonexistent`, so there is nothing to fall through to and the
+  `PRISM_STATIC_DIR=/nonexistent`, so there is nothing to fall through to and the
   405 survives. Harmless — 404 arguably leaks less — but it means a method error
   never surfaces in production, and anything asserting on 405 passes in dev and
   fails on the box. Do not "fix" it by moving the mount above the routers: that
   trades a cosmetic difference for every API call returning index.html with a
-  200. `deploy/pisr-probe-auth.sh` accepts both for this reason.
+  200. `deploy/prism-probe-auth.sh` accepts both for this reason.
 
 - **The SPA bundle is served unauthenticated, on purpose.** It has to load in
   order to render the login form, and it carries no tenant data. Everything
@@ -657,16 +678,16 @@ covered on the next run with nothing edited.
 - **The container healthcheck hits `/healthz`, not `/api/status`.** The latter
   is gated now, and names the tenant besides. If you add a healthcheck
   anywhere, point it at `/healthz`. It also needs `BUILDAH_FORMAT=docker`,
-  which `deploy/pisr-update.sh` exports — podman's default OCI format has no
+  which `deploy/prism-update.sh` exports — podman's default OCI format has no
   healthcheck field and discards it with a build warning. And it checks
   localhost from inside the container, so it cannot see a dead published port;
   the deploy script's external probe is what catches that.
-- **Proxy mode's security is `PISR_TRUSTED_PROXY_IPS` plus the port binding,
-  not the header.** A header is a claim anyone can make. If you ever find PISR
+- **Proxy mode's security is `PRISM_TRUSTED_PROXY_IPS` plus the port binding,
+  not the header.** A header is a claim anyone can make. If you ever find PRISM
   in proxy mode published on `0.0.0.0`, that is a live authentication bypass —
   `expose:`, not `ports:`. A bind to a specific address is not automatically
   wrong, though: what matters is whether anything other than the proxy can
-  open a socket to it. An isolated bridge carrying only the proxy and PISR is
+  open a socket to it. An isolated bridge carrying only the proxy and PRISM is
   as sound as loopback, and unlike loopback it works with the proxy on another
   host.
 - **`SessionGateMiddleware` gates by path prefix, not by route**, so a router
@@ -678,19 +699,19 @@ covered on the next run with nothing edited.
   its own origin.
 - **Under rootless podman the peer is never the proxy's real address.**
   Publishing a port rootlessly rewrites the source, so everything arrives from
-  inside podman's network (10.89.0.0/24 and friends). `PISR_TRUSTED_PROXY_IPS`
+  inside podman's network (10.89.0.0/24 and friends). `PRISM_TRUSTED_PROXY_IPS`
   has to name *that*, found by logging in once and reading "Signed in from" out
   of the container log — and it then distinguishes nothing, because every
   caller looks the same. The network boundary is the real control there; the
   IP check is a backstop for deployments where the peer is genuine.
 - **A forwarded header is believed only from a peer in
-  `PISR_TRUSTED_PROXY_IPS`** — `X-Forwarded-Proto` for the cookie's `Secure`
-  flag, and `PISR_CLIENT_IP_HEADER` for the address the login throttle counts
+  `PRISM_TRUSTED_PROXY_IPS`** — `X-Forwarded-Proto` for the cookie's `Secure`
+  flag, and `PRISM_CLIENT_IP_HEADER` for the address the login throttle counts
   against. Both fail closed to the TCP peer. Do not "simplify" either into
   reading the header unconditionally: a client-address header any caller can
   set makes the throttle *weaker* than no header at all, because an attacker
   varies it per request and is never counted twice.
-- **When `PISR_ACCESS_TEAM`/`PISR_ACCESS_AUD` are set, the verified assertion
+- **When `PRISM_ACCESS_TEAM`/`PRISM_ACCESS_AUD` are set, the verified assertion
   is the identity and the peer address is not consulted at all** — that is the
   point of it, since under rootless podman the peer distinguishes nothing.
   `api/cf_access.py` fails closed on every path: bad signature, wrong `aud`,
@@ -723,7 +744,7 @@ covered on the next run with nothing edited.
   sitting above it.
 
 - **Scope is enforced at the route, not by filtering a response.**
-  `pisr_router._require_scope` 403s on the report, the PDF and the venue list;
+  `prism_router._require_scope` 403s on the report, the PDF and the venue list;
   the filtering in `msp_router` and `get_venues` only keeps other customers'
   names off a picker. Both exist on purpose — a filter that is also the check
   is a filter somebody later "optimises" into a UI concern.
@@ -749,45 +770,45 @@ covered on the next run with nothing edited.
 
 - **`api/tests/test_sections.py` is the only thing stopping the three id lists
   drifting.** Section ids are hand-written into `api/sections.py`,
-  `src/pages/PISR.tsx` and `api/templates/reports/pisr.html`, because the
+  `src/pages/PRISM.tsx` and `api/templates/reports/prism.html`, because the
   Dockerfile's web stage does not copy `api/` and there is no module both sides
   can import. It needs the working tree, not the runtime image:
 
       docker compose -f docker-compose.dev.yml run --rm --no-deps \
         -v "$PWD:/repo" backend python /repo/api/tests/test_sections.py
 
-- **Hooks in `PISR.tsx` must sit above its early returns.** The component
+- **Hooks in `PRISM.tsx` must sit above its early returns.** The component
   returns early three times before a venue is chosen (no controller, no EC, no
   venue). A `useEffect` added below one of those is called only after a venue
   is picked, which React sees as the hook count changing mid-session — "rendered
   more hooks than during the previous render", and a blank page. The tab
   fallback effect is up with the other hooks for exactly this reason.
 
-- **`/data` is created and chowned in the Dockerfile before `USER pisr`.**
+- **`/data` is created and chowned in the Dockerfile before `USER prism`.**
   Docker and podman seed a fresh named volume from what the image has at the
   mount point, ownership included — so without that `mkdir`/`chown` the volume
   arrives root-owned, the uid-1000 process cannot write it, and the portal
   silently reports itself read-only. This does not help a BIND mount, where the
   host's ownership wins.
 
-- **`R1_EC_TYPE` and `R1_VERBOSE` are literal-compared** in `api/services/pisr/fetch.py`
+- **`R1_EC_TYPE` and `R1_VERBOSE` are literal-compared** in `api/services/prism/fetch.py`
   and `api/r1api/client.py` respectively. Don't rename `R1_VERBOSE`; don't
   lowercase `MSP`.
-- **`_jinja()` in `pisr_router.py` walks two `.parent`s** to reach
+- **`_jinja()` in `prism_router.py` walks two `.parent`s** to reach
   `api/templates`. It fails at PDF-request time, not import time.
-- **Anything long-lived spawned by `deploy/pisr-update.sh` must close the lock
+- **Anything long-lived spawned by `deploy/prism-update.sh` must close the lock
   fd with `9>&-`.** `exec 9>` does not set close-on-exec, so conmon and
   rootlessport would inherit the flock and hold it for the life of the
   container — every later run then declines with "Another deploy is in
   progress" on a box where none is. This only became reachable once
   `KillMode=process` let those processes survive; the two interact.
-- **`KillMode=process` in `deploy/pisr-update.service` is load-bearing.**
+- **`KillMode=process` in `deploy/prism-update.service` is load-bearing.**
   podman leaves `conmon` and `rootlessport` in the unit's cgroup, and a oneshot
   unit's default `KillMode=control-group` SIGKILLs them ~90s after the script
   exits — killing the container the deploy just brought up, having already
   reported success. Do not remove it.
 - **The build SHA on `/api/status` comes from a Dockerfile `ARG`,** passed by
-  `docker-compose.yml` from the environment and set by `deploy/pisr-update.sh`.
+  `docker-compose.yml` from the environment and set by `deploy/prism-update.sh`.
   It is also an OCI label, which is what lets the deploy script confirm the
   running container without a session cookie. A hand-built image says
   `unknown`; that is correct, not a bug. Do not move it to `/healthz` — that
@@ -800,7 +821,7 @@ covered on the next run with nothing edited.
   a rootless subuid range usually does not map, and the build fails in apt. It
   does nothing under Docker, which is exactly why someone will delete it.
 
-## Lineage: PISR is freestanding now
+## Lineage: PRISM is freestanding now
 
 This started as an extraction from rtools2, and for a while the rule was to keep
 the carried-over files byte-identical so upstream changes stayed a readable
@@ -814,17 +835,17 @@ What that changes, practically:
 
 - **Edit any file here on its merits.** No file is frozen. If `shape.py` wants
   a new tally, give it one; if `collect.py` should read another endpoint, add
-  it. Judge the change by whether it is right for PISR.
+  it. Judge the change by whether it is right for PRISM.
 - **The constraints in the section above still bind.** Read-only,
   human-triggered, no tenant data stored. Those were never about rtools2 — they
   are what this tool promises in its own docstrings and README.
 - **`api/r1api/**` is still the odd one out**, and worth leaving alone by
   default. Not because of upstream, but because it is a general RUCKUS ONE
   client with its own semantics (pagination quirks, the ES window, the
-  page-0/1 alias) that took live tenants to work out, and PISR uses a fraction
+  page-0/1 alias) that took live tenants to work out, and PRISM uses a fraction
   of it. Changing it to suit one caller is how those hard-won notes rot.
 - If something here would genuinely help rtools2, port it deliberately as a
-  patch. Do not shape PISR around making that easy.
+  patch. Do not shape PRISM around making that easy.
 
 The notes below started life as a divergence list. They are kept because the
 reasoning is still load-bearing, not because anything is being tracked against
@@ -849,7 +870,7 @@ an upstream.
   **The default executor is widened at startup, and the pool is coupled to it.**
   `min(32, cpu+4)` is six threads on the 2-core prod box, but a report fires ~50
   network-bound reads at once, so `main._widen_report_executor` sets the loop's
-  default executor to `config.FETCH_WORKERS` (`PISR_FETCH_WORKERS`, default 24)
+  default executor to `config.FETCH_WORKERS` (`PRISM_FETCH_WORKERS`, default 24)
   and `config.py` `setdefault`s `R1_POOL_MAXSIZE` to the same value. They MUST
   move together: a wide executor over a pool of ten just reintroduces the
   discard above. This is a floor for medium venues, not a fix for a single slow
@@ -857,8 +878,8 @@ an upstream.
   per-unit MDU is the unpaginated `/venues/wifiNetworks/query` activations call
   (~14s, no `fields`/page knobs on that endpoint), not by the worker count.
 
-- **Spectrum chart paint order** — `src/pages/PISR.tsx` (`SpectrumChart`) and
-  `api/reports/pisr.py` (`_spectrum`). Both sorted blocks by `inUse` alone, so
+- **Spectrum chart paint order** — `src/pages/PRISM.tsx` (`SpectrumChart`) and
+  `api/reports/prism.py` (`_spectrum`). Both sorted blocks by `inUse` alone, so
   states differing only by colour painted in channel order and a translucent
   not-permitted slot could cover a permitted-but-unused neighbour — 2.4 GHz
   channel 10 under channel 12. Both now sort by a `rank` of grey < green <
@@ -869,7 +890,7 @@ an upstream.
   categories, one per R1 endpoint) load with the report. AP-group and per-AP
   settings do NOT — they are one R1 call per object, and an MDU with a
   per-unit AP group would put several hundred requests behind every report for
-  a tab most readers never open. `/pisr/{cid}/config/detail` fetches them on a
+  a tab most readers never open. `/prism/{cid}/config/detail` fetches them on a
   button press, capped at `fetch.AP_CONFIG_LIMIT` APs and
   `fetch.AP_GROUP_CONFIG_LIMIT` AP groups.
 
@@ -946,7 +967,7 @@ an upstream.
   say what it looked for.
 
 - **`GET /venues/{venueId}/aps/{serialNumber}/passwords` exists. Never call
-  it.** The spec calls it "Get AP Password". Nothing in PISR has any use for
+  it.** The spec calls it "Get AP Password". Nothing in PRISM has any use for
   it, and the scrubber should not be the reason it is safe.
 
 - **Config values are labelled and compared, not dumped.** `api/config_labels.py`
@@ -979,8 +1000,8 @@ an upstream.
   values back, set the status back to `"unverified"` and the caption goes amber
   again; do not leave invented values under a green "recommends".
 
-  **The customer's name is `PISR_ORG_NAME` and their baseline is on the volume
-  at `PISR_ORG_BASELINE_FILE`.** Neither belongs in this repository. Unset, the
+  **The customer's name is `PRISM_ORG_NAME` and their baseline is on the volume
+  at `PRISM_ORG_BASELINE_FILE`.** Neither belongs in this repository. Unset, the
   column reads "Org".
 
   **The baseline editor's field list is a STATIC catalogue built from the
@@ -1059,7 +1080,7 @@ an upstream.
     SSIDs, `networkClusters` the collapsed rows. It decides how the tab GROUPS
     networks, never what they are compared against — that is the baseline's job.
 
-  **The org baseline has THREE states per field, and PISR writes it now.**
+  **The org baseline has THREE states per field, and PRISM writes it now.**
   `api/baselines.py` + `api/routers/baseline_router.py` + the admin editor
   (`src/pages/AdminBaseline.tsx`, the "Baselines" chip). A field is in `values`
   (a recommended value, compared, may mismatch), in `notApplicable` (reviewed,
@@ -1105,7 +1126,7 @@ an upstream.
 
   It is a BACKSTOP, not the control. The shapers allowlist what they emit; the
   scrubber catches the next person who passes a config dict through without
-  reading every key, and R1 adding a field to an endpoint PISR already reads.
+  reading every key, and R1 adding a field to an endpoint PRISM already reads.
   **If a config block exists only to be scrubbed, do not fetch it at all.**
 
   **Matching is tokenised, and that was learned the hard way.** The first
@@ -1116,7 +1137,7 @@ an upstream.
   only as whole camelCase tokens. A false positive here is not a safe trade:
   it deletes real content silently.
 
-- **The punch list** — `api/services/pisr/punchlist.py`, its own tab, leftmost
+- **The punch list** — `api/services/prism/punchlist.py`, its own tab, leftmost
   and the one a venue lands on. It ADDS NO DATA: every task is a finding
   `checks.py` already produced or an alarm R1 already raised, re-cut by TRADE
   instead of by subsystem. A port error and a mesh fallback are the same visit
@@ -1152,13 +1173,13 @@ an upstream.
   `test_every_check_has_a_category` stops that becoming normal.
 
   **No history, and that is a design boundary, not an oversight.** There is no
-  "fixed since yesterday" and no ticking items off, because PISR stores
-  nothing. Making the list stateful means giving PISR somewhere to write, which
+  "fixed since yesterday" and no ticking items off, because PRISM stores
+  nothing. Making the list stateful means giving PRISM somewhere to write, which
   is a decision about the whole tool. The honest workaround is exporting the
   PDF at the end of each visit.
 
-- **Identity trace** — `api/services/pisr/trace.py`, route
-  `/pisr/{cid}/identity/trace`, the "Trace identities" button at the bottom of
+- **Identity trace** — `api/services/prism/trace.py`, route
+  `/prism/{cid}/identity/trace`, the "Trace identities" button at the bottom of
   the Identity tab. Follows every DPSK username → the policy its username
   regex selects (in priority order) → that policy's SSID regex → the network →
   activated here? → AP groups → APs. Built for the per-unit MDU pattern (one
@@ -1264,15 +1285,15 @@ an upstream.
   `startTime` is epoch milliseconds and arrives as an int *and* as a float
   (`1785702964230.0`), hence the `int()` in `_epoch_ms_iso`.
 
-  `entityType` includes `EDGE`. PISR has no Edge inventory, so those alarms
+  `entityType` includes `EDGE`. PRISM has no Edge inventory, so those alarms
   name a bare serial — honest, and the reason the fallback exists.
 
-  Kept separate from `verification` on purpose: that is PISR's opinion about
+  Kept separate from `verification` on purpose: that is PRISM's opinion about
   whether the install looks finished, this is the platform's about whether the
   venue is healthy now. They disagree usefully and merging them would lose that.
 
-- **Wired clients** — `api/services/pisr/{fetch,collect,shape}.py`,
-  `api/reports/pisr.py`, the PDF template and `PISR.tsx`. PISR read wireless
+- **Wired clients** — `api/services/prism/{fetch,collect,shape}.py`,
+  `api/reports/prism.py`, the PDF template and `PRISM.tsx`. PRISM read wireless
   clients only: `/venues/aps/clients/query` is AP-scoped despite its service
   being named for both, so a report could see every association and nothing
   plugged into a wall. `fetch.wired_clients` adds the switch MAC table
@@ -1316,8 +1337,8 @@ an upstream.
   and still in the payload, now owned by no section — harmless, and cheaper
   than another divergence in `shape.py` to delete it.
 
-- **Channel plan by width** — `api/services/pisr/shape.py` (`radio_card`) and
-  `src/pages/PISR.tsx`. The band tallies counted channels and widths
+- **Channel plan by width** — `api/services/prism/shape.py` (`radio_card`) and
+  `src/pages/PRISM.tsx`. The band tallies counted channels and widths
   independently, which cannot answer "which channels at which width" — and on a
   band running more than one width those are different questions, since a
   40 MHz and a 20 MHz radio on the same channel number are not co-channel in
@@ -1340,8 +1361,8 @@ an upstream.
   The PDF does NOT render this list — it draws the spectrum chart from
   `radios.plan` instead — so this divergence is screen-only.
 
-- **Section visibility markup** — `src/pages/PISR.tsx` and
-  `api/templates/reports/pisr.html`. Both carry section ids: `Card` takes an
+- **Section visibility markup** — `src/pages/PRISM.tsx` and
+  `api/templates/reports/prism.html`. Both carry section ids: `Card` takes an
   `id` and returns null when hidden, non-card blocks are wrapped in `Section`,
   and the template guards blocks with `{% if visible('...') %}` /
   `{% if visible_tab('...') %}`.
@@ -1350,17 +1371,17 @@ an upstream.
   that was forgotten leaves an empty table rather than a leak. What they buy is
   the difference between "there are none" and "you are not shown these".
 
-  `visible`/`visible_tab` are injected at `template.render()` in `pisr_router`
+  `visible`/`visible_tab` are injected at `template.render()` in `prism_router`
   rather than added to `build_context`. That began as a way to leave
-  `api/reports/pisr.py` untouched; it is worth keeping anyway, because the
+  `api/reports/prism.py` untouched; it is worth keeping anyway, because the
   guards are a rendering concern and the context builder has no other reason
   to know a policy exists.
 
   **A hideable COLUMN is guarded on both renderers, and the PDF does it
   server-side.** `redact._blank_column` empties the field in every row, so a
   missed guard leaks an empty column, not values — same guarantee as the
-  section guards. On screen (`PISR.tsx`) the column reads `useVisible('<column
-  id>')` and drops both the `<th>` and the `<td>`. The PDF cannot: `pisr.py`
+  section guards. On screen (`PRISM.tsx`) the column reads `useVisible('<column
+  id>')` and drops both the `<th>` and the `<td>`. The PDF cannot: `prism.py`
   builds `wireless_table` as POSITIONAL column/row lists, so `_wireless_table`
   takes `show_vlan` (read off the redacted report's `visibility.hidden` stamp)
   and omits the VLAN column from both the header list and every row. The column
@@ -1375,7 +1396,7 @@ an upstream.
   title, summary and detail — fixing only the title left the summary widening
   the card. Found by the 320px check below, which is the only way it shows.
 
-- **`min-w-0` on flex and grid children** — `src/pages/PISR.tsx`, in `Card`,
+- **`min-w-0` on flex and grid children** — `src/pages/PRISM.tsx`, in `Card`,
   `MiniTable`, `BarList`, `Meter`, the venue card and the external-address row.
   A flex or grid item defaults to `min-width: auto`, so it will not shrink
   below its content's minimum. Anything with `truncate` (`white-space: nowrap`)

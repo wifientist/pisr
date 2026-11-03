@@ -1,5 +1,5 @@
 """
-PISR checks — the verification half of the report.
+PRISM checks — the verification half of the report.
 
 Each check reads the shaped sections and returns one finding, always. A check
 that passes says so ("ok"), and a check that could not run says that too
@@ -8,7 +8,7 @@ can see what was looked at as well as what was wrong.
 
 Severities: critical | warning | info | ok | skipped.
 
-Nothing here talks to RUCKUS ONE, and nothing here fixes anything. PISR reports.
+Nothing here talks to RUCKUS ONE, and nothing here fixes anything. PRISM reports.
 """
 
 import logging
@@ -1132,7 +1132,7 @@ def check_ap_uptime(report: Dict[str, Any]) -> Dict[str, Any]:
     while its neighbours do not is usually a marginal PoE budget, a failing
     injector, or a cable moving in a duct.
 
-    No history is needed, and none is available — PISR stores nothing. One
+    No history is needed, and none is available — PRISM stores nothing. One
     poll, one comparison.
     """
     rows = [r for r in report["inventory"]["rows"]["aps"]
@@ -1333,7 +1333,7 @@ def run_checks(report: Dict[str, Any]) -> Dict[str, Any]:
             findings.append(check(report))
         except Exception as exc:  # a bad row must not cost the whole report
             name = getattr(check, "__name__", "unknown")
-            logger.exception("pisr: check %s failed", name)
+            logger.exception("prism: check %s failed", name)
             findings.append(_finding(
                 name,
                 f"{_check_label(check)} — check failed to run",

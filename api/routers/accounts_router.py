@@ -1,7 +1,7 @@
 """
 The accounts portal: create people, hand out enrolment links, revoke.
 
-WHAT THIS IS FOR. In accounts mode PISR keeps its own logins, because the
+WHAT THIS IS FOR. In accounts mode PRISM keeps its own logins, because the
 identity provider in front of it stopped being usable — Cloudflare Access's
 one-time PINs are silently eaten by two of three customer mail domains. An
 admin creates an account here and delivers the enrolment link OUT OF BAND.
@@ -63,7 +63,7 @@ class CreateBody(BaseModel):
     username: str = Field(description="Lowercase; see accounts.USERNAME_RULE.")
     role: str = Field(default=accounts.ROLE_USER,
                       description="A role id. 'admin' and 'user' ship with "
-                                  "PISR; an administrator may have built "
+                                  "PRISM; an administrator may have built "
                                   "others. See api/roles.py.")
 
 
@@ -184,7 +184,7 @@ def _guard_writable() -> None:
     if not accounts.STORE.configured:
         raise HTTPException(
             status_code=503,
-            detail="PISR_ACCOUNTS_FILE is not set, so there is nowhere to keep "
+            detail="PRISM_ACCOUNTS_FILE is not set, so there is nowhere to keep "
                    "accounts.")
     if not accounts.STORE.writable:
         raise HTTPException(
@@ -199,11 +199,11 @@ def _require_accounts_mode() -> None:
         raise HTTPException(
             status_code=400,
             detail=f"This instance is in {AUTH.mode!r} mode, so local accounts "
-                   "decide nothing. Set PISR_AUTH_MODE=accounts to use them.")
+                   "decide nothing. Set PRISM_AUTH_MODE=accounts to use them.")
 
 
 def _actor(request: Request) -> str:
-    return getattr(request.state, "pisr_user", None) or "admin"
+    return getattr(request.state, "prism_user", None) or "admin"
 
 
 @router.get("")
@@ -213,7 +213,7 @@ async def list_accounts():
 
     Served even when the mode is not `accounts`, deliberately: an operator
     preparing to switch wants to create the accounts BEFORE flipping the mode,
-    exactly as they would set PISR_ADMIN_EMAILS before switching to proxy. The
+    exactly as they would set PRISM_ADMIN_EMAILS before switching to proxy. The
     mode check sits on the writes, where acting on the wrong one would matter.
     """
     return {**accounts.STORE.summary(), "mode": AUTH.mode}

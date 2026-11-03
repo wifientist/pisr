@@ -5,7 +5,7 @@ This is the enforcement point, and it is deliberately the ONLY one. Both
 renderers — the React page and the PDF template — are handed the output of this
 function and draw whatever they are given, so there is no path by which the PDF
 can disagree with the screen about what a reader is allowed to see. That
-matters more than it sounds: `/pisr/{cid}/report.pdf` re-polls the venue and
+matters more than it sounds: `/prism/{cid}/report.pdf` re-polls the venue and
 rebuilds the report from scratch rather than rendering the one the browser
 already has, so a filter applied in the JSON route only would leave the PDF as
 an unauthenticated-by-role copy of everything.
@@ -36,7 +36,7 @@ from typing import Any, Dict, Iterable, List
 
 import scrub as secret_scrub
 import sections as section_catalogue
-from services.pisr import punchlist as punchlist_builder
+from services.prism import punchlist as punchlist_builder
 
 logger = logging.getLogger(__name__)
 
