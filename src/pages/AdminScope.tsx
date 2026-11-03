@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, TriangleAlert } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+import {
+  ALL_VENUES, type EcRow, type ScopeCatalogue, type ScopeState,
+} from "@/hooks/useScopeCatalogue";
 
 /**
- * Which RUCKUS ONE customers and venues an ordinary user may report on.
+ * ONE PERSON's customers and venues — the by-person direction, and the only
+ * place the venue level can be edited in full.
  *
  * A DIFFERENT KIND OF SETTING FROM THE SECTIONS TAB, and the dialog says so
  * rather than letting them look alike. Hiding a section tidies a report. This
@@ -19,71 +20,99 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * which is where that is enforced. The banner below exists to make sure nobody
  * discovers that by locking a team out on a Friday.
  *
- * THE LISTS COME FROM THE ORDINARY ENDPOINTS. An admin is unrestricted, so
- * /api/r1/{cid}/msp/mspEcs and /api/pisr/{cid}/venues return everything for
- * them. There is no admin-only mirror of either, deliberately: a second path to
- * the same R1 data is a second place for the scope filter to be forgotten.
+ * THE MODE IS TWO RADIOS AND THE TREE IS ALWAYS LIVE, which is a deliberate
+ * reversal. It was one "can reach everything" tick box, and while that was on
+ * — its default — the customer list below rendered greyed out and
+ * `pointer-events-none`. So an admin looking for where to scope somebody
+ * arrived at a list of their own customers that could not be clicked, which
+ * reads as a feature that was never finished rather than as a mode. Now
+ * narrowing is a choice you can see, and a click in the tree makes it: see
+ * `narrow` below.
+ *
+ * IT NAMES THE PERSON. The old label said "Users can reach every customer and
+ * venue" — plural and generic, left over from when this control belonged to
+ * the `user` role rather than to one person. Scope is per person now
+ * (visibility.scope_for), so the labels say whose it is; a control that talks
+ * about "users" while sitting under one person's name is the kind of thing
+ * that gets read as a global switch and left alone.
+ *
+ * THE CUSTOMER LIST ARRIVES AS A PROP (`useScopeCatalogue`), because the
+ * by-customer direction needs the same one. See that hook for why there is
+ * only one copy.
+ *
+ * IT ALSO EDITS A ROLE'S DEFAULT (`kind="role"`), which is the same control
+ * over the same stored shape — `visibility` keys scope blocks by role id
+ * beside the per-person ones, and `scope.clean` validates both identically.
+ * Only the prose differs, so a second component would have been this file
+ * twice, with the fail-closed rule stated once in each and no test holding
+ * them together.
+ *
+ * AND IT RESOLVES INHERITANCE, which is the part worth reading before
+ * changing anything. `visibility.scope_for` answers person → role default →
+ * unrestricted, so somebody with no entry of their own under a scoped role
+ * already reaches a definite list of customers. Reading only their own entry
+ * would draw an empty tree beside a radio claiming they reach everything —
+ * both halves wrong, on the screen whose entire job is to say who can open
+ * what. See `base` below.
  */
 
-export const ALL_VENUES = "*";
-
-export interface ScopeState {
-  unrestricted: boolean;
-  /** tenantId -> "*" | venueId[] */
-  ecs: Record<string, string | string[]>;
-}
-
-interface EcRow { id: string; name: string }
-interface VenueRow { id: string; name: string }
+export type { ScopeState };
+export { ALL_VENUES };
 
 export default function AdminScope(
-  { scope, onChange }: { scope: ScopeState; onChange: (next: ScopeState) => void },
+  { scope, onChange, subject, catalogue, kind = "person" }: {
+    scope: ScopeState;
+    onChange: (next: ScopeState) => void;
+    /** Whose scope this is, named in the labels. Omitted where it is not known. */
+    subject?: string;
+    catalogue: ScopeCatalogue;
+    /**
+     * Whether `scope` is a PERSON's own territory (the legacy model, still in
+     * force until a resource group exists) or the CONTENTS OF A GROUP.
+     *
+     * One component for both because they are one document: a group holds
+     * exactly the `{unrestricted, ecs}` shape scope has always held, validated
+     * by the same `scope.clean`, and `allAccess` is that `unrestricted` flag.
+     * Only the prose differs, so a second component would be this file twice,
+     * with the fail-closed rule stated once in each and nothing holding them
+     * together.
+     */
+    kind?: "person" | "group";
+  },
 ) {
-  const { activeControllerId, activeControllerSubtype } = useAuth();
-  const isMsp = (activeControllerSubtype || "").toUpperCase() === "MSP";
-
-  const [ecs, setEcs] = useState<EcRow[] | null>(null);
-  const [ecError, setEcError] = useState<string | null>(null);
+  const { ecs, ecError, rows, venues, loadVenues } = catalogue;
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [venues, setVenues] = useState<Record<string, VenueRow[] | "loading" | "error">>({});
 
-  // The single-tenant case still needs a key to file venues under, and the
-  // backend uses the configured tenant id for it. The frontend does not know
-  // that id, so it asks /scope for it rather than inventing one — getting this
-  // wrong would write a policy keyed under a tenant that never matches.
-  const [soleTenant, setSoleTenant] = useState<string | null>(null);
+  // Named in a label, so blank is handled rather than rendering "  can reach".
+  const who = (subject || "").trim();
+  const whoName = who
+    ? <b>{who}</b>
+    : (kind === "group" ? "This group" : "This person");
+  // Unique per subject AND per kind: the dialog can hold two of these at once,
+  // and a shared name would make one radio move the other.
+  const radioName = `scope-mode-${kind}-${who || "unassigned"}`;
 
-  useEffect(() => {
-    if (activeControllerId === null) return;
-    if (isMsp) {
-      fetch(`${API_BASE_URL}/r1/${activeControllerId}/msp/mspEcs`,
-            { credentials: "same-origin" })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((body) => {
-          const rows = Array.isArray(body) ? body : (body?.data || []);
-          setEcs(rows.map((r: any) => ({ id: r.id || r.tenantId, name: r.name || r.id })));
-        })
-        .catch((e: Error) => setEcError(e.message));
-    } else {
-      fetch(`${API_BASE_URL}/pisr/${activeControllerId}/scope`, { credentials: "same-origin" })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((body) => { setSoleTenant(body.tenantId); setEcs([]); })
-        .catch((e: Error) => setEcError(e.message));
-    }
-  }, [activeControllerId, isMsp]);
+  /**
+   * What every tick box, counter and warning below reads.
+   *
+   * It was briefly the RESOLVED scope, blending in a role's default so a
+   * person following one did not see an empty tree. The role axis is gone —
+   * a role says what somebody may RUN, never whose network — so this is
+   * simply the document being edited. See api/resource_groups.py.
+   */
+  const base: ScopeState = scope;
 
-  const loadVenues = useCallback((tenant: string) => {
-    if (venues[tenant]) return;
-    setVenues((v) => ({ ...v, [tenant]: "loading" }));
-    fetch(`${API_BASE_URL}/pisr/${activeControllerId}/venues?tenant_id=${encodeURIComponent(tenant)}`,
-          { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((body) => setVenues((v) => ({
-        ...v,
-        [tenant]: (body.venues || []).map((row: any) => ({ id: row.id, name: row.name })),
-      })))
-      .catch(() => setVenues((v) => ({ ...v, [tenant]: "error" })));
-  }, [activeControllerId, venues]);
+  /**
+   * Apply a change from the TREE, which always means narrowing.
+   *
+   * Every tree interaction is taken at face value: ticking a customer selects
+   * it AND switches the mode above away from "every customer", because that is
+   * unambiguously what the click meant. The alternative was the greyed-out
+   * tree described in the header — a dead end at exactly the moment somebody
+   * has found the right screen. Nothing is lost by guessing: the mode is two
+   * radios directly above, so putting it back is one click and visible.
+   */
+  const narrow = (next: ScopeState) => onChange({ ...next, unrestricted: false });
 
   const toggleOpen = (tenant: string) => {
     setOpen((current) => {
@@ -94,52 +123,50 @@ export default function AdminScope(
     });
   };
 
-  const ecAllowed = (tenant: string) => tenant in scope.ecs;
+  const ecAllowed = (tenant: string) => tenant in base.ecs;
 
   const setEcAllowed = (tenant: string, allowed: boolean) => {
-    const ecsNext = { ...scope.ecs };
+    const ecsNext = { ...base.ecs };
     // Defaults to every venue on the customer. The alternative — an empty list,
     // meaning no venues — would make ticking a customer appear to do nothing,
     // and the admin would reasonably conclude the feature was broken.
     if (allowed) ecsNext[tenant] = ALL_VENUES; else delete ecsNext[tenant];
-    onChange({ ...scope, ecs: ecsNext });
+    narrow({ ...base, ecs: ecsNext });
     if (allowed) { setOpen((o) => new Set(o).add(tenant)); loadVenues(tenant); }
   };
 
   const setAllVenues = (tenant: string, all: boolean) => {
-    const rows = venues[tenant];
-    onChange({
-      ...scope,
+    const rowsForEc = venues[tenant];
+    narrow({
+      ...base,
       ecs: {
-        ...scope.ecs,
+        ...base.ecs,
         // Switching off "all venues" seeds the explicit list with everything
         // rather than nothing, so the admin narrows from a working state
         // instead of starting from a customer nobody can open.
-        [tenant]: all ? ALL_VENUES : (Array.isArray(rows) ? rows.map((r) => r.id) : []),
+        [tenant]: all
+          ? ALL_VENUES
+          : (Array.isArray(rowsForEc) ? rowsForEc.map((r) => r.id) : []),
       },
     });
   };
 
   const toggleVenue = (tenant: string, venueId: string) => {
-    const current = scope.ecs[tenant];
-    const rows = venues[tenant];
+    const current = base.ecs[tenant];
+    const rowsForEc = venues[tenant];
     const list = current === ALL_VENUES
-      ? (Array.isArray(rows) ? rows.map((r) => r.id) : [])
+      ? (Array.isArray(rowsForEc) ? rowsForEc.map((r) => r.id) : [])
       : ([...(current as string[] | undefined) || []]);
     const next = list.includes(venueId)
       ? list.filter((id) => id !== venueId)
       : [...list, venueId];
-    onChange({ ...scope, ecs: { ...scope.ecs, [tenant]: next } });
+    narrow({ ...base, ecs: { ...base.ecs, [tenant]: next } });
   };
 
   const venueAllowed = (tenant: string, venueId: string) => {
-    const current = scope.ecs[tenant];
+    const current = base.ecs[tenant];
     return current === ALL_VENUES || (Array.isArray(current) && current.includes(venueId));
   };
-
-  const rows: EcRow[] = isMsp
-    ? (ecs || [])
-    : (soleTenant ? [{ id: soleTenant, name: "This RUCKUS ONE tenant" }] : []);
 
   /**
    * Set every venue on one customer at once.
@@ -151,25 +178,25 @@ export default function AdminScope(
    * than a shortcut for removal.
    */
   const setEveryVenue = (tenant: string, on: boolean) => {
-    const rows = venues[tenant];
-    if (!Array.isArray(rows)) return;
-    onChange({
-      ...scope,
-      ecs: { ...scope.ecs, [tenant]: on ? rows.map((v) => v.id) : [] },
+    const rowsForEc = venues[tenant];
+    if (!Array.isArray(rowsForEc)) return;
+    narrow({
+      ...base,
+      ecs: { ...base.ecs, [tenant]: on ? rowsForEc.map((v) => v.id) : [] },
     });
   };
 
   /** Tick or untick every customer in the live list at once. */
   const setEveryEc = (on: boolean) => {
-    if (!on) { onChange({ ...scope, ecs: {} }); return; }
-    const next: Record<string, string | string[]> = { ...scope.ecs };
+    if (!on) { narrow({ ...base, ecs: {} }); return; }
+    const next: Record<string, string | string[]> = { ...base.ecs };
     for (const ec of rows) if (!(ec.id in next)) next[ec.id] = ALL_VENUES;
-    onChange({ ...scope, ecs: next });
+    narrow({ ...base, ecs: next });
   };
 
   const emptySelection = useMemo(
-    () => !scope.unrestricted && Object.keys(scope.ecs).length === 0,
-    [scope]);
+    () => !base.unrestricted && Object.keys(base.ecs).length === 0,
+    [base]);
 
   /**
    * Ids in the stored policy that this tenant does not contain.
@@ -183,6 +210,11 @@ export default function AdminScope(
    * while admins see nothing wrong. It reads like an authentication bug and
    * is not one.
    *
+   * CHECKED AGAINST `rows`, NOT `ecs`. On a single-tenant deployment `ecs` is
+   * the empty list and the one real tenant lives in `rows` alone, so comparing
+   * against `ecs` called that tenant's own id stale and offered to delete the
+   * only scope entry that worked.
+   *
    * Venues are only checkable for customers whose venue list has been loaded,
    * so this reports what it knows rather than pretending to be exhaustive.
    */
@@ -193,96 +225,132 @@ export default function AdminScope(
   // know exists is most of the way back to not reporting it at all. Bounded by
   // the number of allowed customers, which is small by construction.
   useEffect(() => {
-    if (scope.unrestricted || !ecs) return;
-    for (const [tenant, allowed] of Object.entries(scope.ecs)) {
+    if (base.unrestricted || !ecs) return;
+    for (const [tenant, allowed] of Object.entries(base.ecs)) {
       if (allowed === ALL_VENUES || !Array.isArray(allowed) || !allowed.length) continue;
       loadVenues(tenant);
     }
-  }, [ecs, scope.unrestricted, scope.ecs, loadVenues]);
+  }, [ecs, base.unrestricted, base.ecs, loadVenues]);
 
   const orphanEcs = useMemo(() => {
-    if (!ecs || scope.unrestricted) return [];
-    const live = new Set(ecs.map((e) => e.id));
-    return Object.keys(scope.ecs).filter((id) => !live.has(id));
-  }, [ecs, scope]);
+    if (!ecs || base.unrestricted) return [];
+    const live = new Set(rows.map((e) => e.id));
+    return Object.keys(base.ecs).filter((id) => !live.has(id));
+  }, [ecs, rows, base]);
 
   const orphanVenues = useMemo(() => {
-    if (scope.unrestricted) return [];
+    if (base.unrestricted) return [];
     const out: { tenant: string; tenantName: string; ids: string[] }[] = [];
-    for (const [tenant, allowedIds] of Object.entries(scope.ecs)) {
+    for (const [tenant, allowedIds] of Object.entries(base.ecs)) {
       if (allowedIds === ALL_VENUES || !Array.isArray(allowedIds)) continue;
-      const rows = venues[tenant];
-      if (!rows || rows === "loading" || rows === "error") continue;
-      const live = new Set(rows.map((v) => v.id));
+      const rowsForEc = venues[tenant];
+      if (!rowsForEc || rowsForEc === "loading" || rowsForEc === "error") continue;
+      const live = new Set(rowsForEc.map((v) => v.id));
       const missing = allowedIds.filter((id) => !live.has(id));
       if (missing.length) {
         out.push({
           tenant,
-          tenantName: ecs?.find((e) => e.id === tenant)?.name || tenant,
+          tenantName: rows.find((e) => e.id === tenant)?.name || tenant,
           ids: missing,
         });
       }
     }
     return out;
-  }, [ecs, venues, scope]);
+  }, [rows, venues, base]);
 
   // True while some allowed customer's venue list has not arrived, which is the
   // only remaining reason the venue check above could be incomplete. Customers
   // set to "all venues" have no list to check, so their absence is not a gap.
   const venueCheckPending = useMemo(() => {
-    if (scope.unrestricted) return false;
-    return Object.entries(scope.ecs).some(([tenant, allowed]) => {
+    if (base.unrestricted) return false;
+    return Object.entries(base.ecs).some(([tenant, allowed]) => {
       if (allowed === ALL_VENUES || !Array.isArray(allowed) || !allowed.length) return false;
-      const rows = venues[tenant];
-      return !rows || rows === "loading" || rows === "error";
+      const rowsForEc = venues[tenant];
+      return !rowsForEc || rowsForEc === "loading" || rowsForEc === "error";
     });
-  }, [venues, scope]);
+  }, [venues, base]);
 
   const dropOrphanEcs = () => {
-    const next = { ...scope.ecs };
+    const next = { ...base.ecs };
     for (const id of orphanEcs) delete next[id];
-    onChange({ ...scope, ecs: next });
+    onChange({ ...base, ecs: next });
   };
 
   const dropOrphanVenues = () => {
-    const next = { ...scope.ecs };
+    const next = { ...base.ecs };
     for (const { tenant, ids } of orphanVenues) {
       const current = next[tenant];
       if (!Array.isArray(current)) continue;
       const gone = new Set(ids);
       next[tenant] = current.filter((id) => !gone.has(id));
     }
-    onChange({ ...scope, ecs: next });
+    onChange({ ...base, ecs: next });
   };
 
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input type="checkbox" className="mt-1 shrink-0" checked={scope.unrestricted}
-                 onChange={(e) => onChange({ ...scope, unrestricted: e.target.checked })} />
-          <span className="min-w-0 text-sm">
-            <span className="font-medium text-gray-900">
-              Users can reach every customer and venue
+        <div className="space-y-1.5">
+          {/*
+            "EVERYTHING" IS A STATEMENT NO LIST OF IDS CAN MAKE, which is why
+            it is a mode rather than a full set of ticked boxes. It means
+            every customer and venue INCLUDING ONES THAT DO NOT EXIST YET;
+            ticking all eight customers today says something different, and
+            quietly stops being true the next time one is onboarded. That
+            distinction is the entire job of the built-in `all-access` group.
+          */}
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name={radioName} className="mt-1 shrink-0"
+                   checked={scope.unrestricted}
+                   onChange={() => onChange({ ...scope, unrestricted: true })} />
+            <span className="min-w-0 text-sm font-medium text-gray-900">
+              {kind === "group"
+                ? <>{whoName} covers <b>every</b> customer and venue, including
+                    ones added later</>
+                : <>{whoName} can reach <b>every</b> customer and venue</>}
             </span>
-            <span className="block text-xs text-gray-500">
-              Untick to restrict them to what you select below. Unlike the
-              Sections tab, this decides what a user can open at all — anything
-              not selected is refused, on the screen and in the PDF.
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name={radioName} className="mt-1 shrink-0"
+                   checked={!scope.unrestricted}
+                   onChange={() => onChange({ ...scope, unrestricted: false })} />
+            <span className="min-w-0 text-sm font-medium text-gray-900">
+              {kind === "group"
+                ? <>{whoName} covers <b>only</b> what is selected below</>
+                : <>{whoName} can reach <b>only</b> what is selected below</>}
             </span>
-          </span>
-        </label>
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-gray-500">
+          {kind === "group" ? (
+            <>
+              Everybody assigned this group can open what is selected here —
+              on the screen and in the PDF. Somebody holding <b>several</b>{" "}
+              groups gets all of them together, so a group only ever adds.
+            </>
+          ) : (
+            <>
+              Unlike the Sections tab, this decides what they can open <b>at
+              all</b> — anything not selected is refused, on the screen and in
+              the PDF.
+            </>
+          )}
+        </p>
       </div>
+
 
       {emptySelection && (
         <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50
                       px-3 py-2 text-sm text-amber-900">
           <TriangleAlert size={15} className="mt-0.5 shrink-0" />
           <span>
-            Nothing is selected, so users will be able to open <b>no venue at
-            all</b>. That is a real setting, not an oversight — an empty
-            selection means none, never all — so pick at least one customer or
-            tick the box above.
+            Nothing is selected, so{" "}
+            {kind === "group" ? "anybody assigned this group"
+                              : (who || "this person")}{" "}
+            will be able to open <b>no venue at all</b>. That is a real
+            setting, not an oversight — an empty selection means none, never
+            all — so pick at least one customer, or choose the first option
+            above.
           </span>
         </p>
       )}
@@ -309,9 +377,9 @@ export default function AdminScope(
                 {orphanEcs.map((id) => (
                   <li key={id} className="break-all font-mono text-[11px] text-amber-800">
                     {id}
-                    {scope.ecs[id] === ALL_VENUES
+                    {base.ecs[id] === ALL_VENUES
                       ? " · all venues"
-                      : ` · ${(scope.ecs[id] as string[]).length} venue(s)`}
+                      : ` · ${(base.ecs[id] as string[]).length} venue(s)`}
                   </li>
                 ))}
               </ul>
@@ -355,8 +423,9 @@ export default function AdminScope(
             )}
           </div>
           <p className="mt-1 text-[11px] text-amber-800">
-            Removing them changes nothing about what users can reach — these ids
-            match nothing. It only takes them out of the saved policy. Save to apply.
+            Removing them changes nothing about what users can reach — these
+            ids match nothing. It only takes them out of the saved policy.
+            Save to apply.
           </p>
         </div>
       )}
@@ -373,10 +442,22 @@ export default function AdminScope(
         </p>
       )}
 
-      {!scope.unrestricted && rows.length > 1 && (
+      {base.unrestricted && rows.length > 0 && (
+        <p className="text-xs text-gray-500">
+          Every customer below is allowed at the moment. Tick one to narrow
+          {kind === "group"
+            ? " this group"
+            : (who ? ` ${who}` : " this person")} to just what you select —
+          that switches the choice above for you.
+        </p>
+      )}
+
+      {/* Only in the narrowed mode: "0 of 7 selected" directly contradicts
+          the line above it while every customer is allowed. */}
+      {!base.unrestricted && rows.length > 1 && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-gray-500">
-            {Object.keys(scope.ecs).length} of {rows.length} customer(s) selected
+            {Object.keys(base.ecs).length} of {rows.length} customer(s) selected
           </p>
           <span className="flex items-center gap-2 text-xs">
             <button type="button" onClick={() => setEveryEc(true)}
@@ -392,10 +473,10 @@ export default function AdminScope(
         </div>
       )}
 
-      <div className={`space-y-1 ${scope.unrestricted ? "opacity-50 pointer-events-none" : ""}`}>
-        {rows.map((ec) => {
+      <div className="space-y-1">
+        {rows.map((ec: EcRow) => {
           const allowed = ecAllowed(ec.id);
-          const all = scope.ecs[ec.id] === ALL_VENUES;
+          const all = base.ecs[ec.id] === ALL_VENUES;
           const expanded = open.has(ec.id);
           const rowsForEc = venues[ec.id];
           return (
@@ -410,9 +491,12 @@ export default function AdminScope(
                   <span className="min-w-0 truncate text-sm font-medium text-gray-900">
                     {ec.name}
                   </span>
+                  {/* "no access" would be a lie while every customer is
+                      allowed, so an unticked row says nothing in that mode and
+                      the line above explains it. */}
                   <span className="shrink-0 text-xs text-gray-400">
-                    {allowed ? (all ? "all venues" : `${(scope.ecs[ec.id] as string[]).length} venue(s)`)
-                             : "no access"}
+                    {allowed ? (all ? "all venues" : `${(base.ecs[ec.id] as string[]).length} venue(s)`)
+                             : (base.unrestricted ? "" : "no access")}
                   </span>
                 </button>
               </div>

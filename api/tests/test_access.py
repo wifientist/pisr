@@ -512,18 +512,33 @@ def test_the_scope_check_validates_the_venue_id_for_every_r1_route():
     Placed in `_require_scope` deliberately: every route that reaches R1 calls
     it (the test below holds them to that), so one check covers all of them
     and a route added later inherits it.
+
+    AGAINST A KNOWN-EMPTY POLICY, NOT WHATEVER IS ON THE VOLUME. This is about
+    ID VALIDATION, and it asserts a real id gets THROUGH — so it needs a
+    caller the scope admits. It used to lean on the ambient
+    `/data/visibility.json`, which was safe only while scope failed OPEN: any
+    deployment with a resource group in force refuses `tester`, correctly, and
+    the suite then failed with a 403 that had nothing to do with id
+    validation. A unit test must not depend on the policy a developer happens
+    to have saved, and fail-closed is what turned that from a latent coupling
+    into a broken build.
     """
+    import visibility
     from routers import pisr_router
+    original, visibility.STORE = visibility.STORE, visibility.PolicyStore(None)
     try:
+        try:
+            pisr_router._require_scope(_request("/api/pisr/1/report", role="admin"),
+                                       None, "9c6f70/aps/SERIAL/passwords")
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        else:
+            raise AssertionError("a path-shaped venue id passed the scope check")
+        # A real id still passes, for an unrestricted caller.
         pisr_router._require_scope(_request("/api/pisr/1/report", role="admin"),
-                                   None, "9c6f70/aps/SERIAL/passwords")
-    except HTTPException as exc:
-        assert exc.status_code == 400
-    else:
-        raise AssertionError("a path-shaped venue id passed the scope check")
-    # A real id still passes, for an unrestricted role.
-    pisr_router._require_scope(_request("/api/pisr/1/report", role="admin"),
-                               None, "9c6f70c0140b49089c3fb92b9d6d8ec6")
+                                   None, "9c6f70c0140b49089c3fb92b9d6d8ec6")
+    finally:
+        visibility.STORE = original
 
 
 def test_the_msp_tenant_override_is_validated_too():

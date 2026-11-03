@@ -2,7 +2,13 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronRight, Loader2, ShieldCheck, TriangleAlert, X,
 } from "lucide-react";
-import AdminScope, { type ScopeState } from "@/pages/AdminScope";
+import AdminScope from "@/pages/AdminScope";
+import AdminScopeByCustomer from "@/pages/AdminScopeByCustomer";
+import AdminResourceGroups, { groupSummary } from "@/pages/AdminResourceGroups";
+import {
+  UNRESTRICTED, resolveGroups, resolveScope, restrictionOf, scopeSummary,
+  useScopeCatalogue, type Resolved, type ResourceGroup, type ScopeState,
+} from "@/hooks/useScopeCatalogue";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -17,10 +23,34 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  *
  * FOUR TABS, FOUR QUESTIONS:
  *
- *   Roles          what does each job allow, and what does it hide
- *   People         who holds which, and whose network they work on
- *   Capabilities   what does each capability actually unlock
- *   Who can do what  the derived matrix, plus "why can this person not…"
+ *   Roles              what does each job allow, and what does it hide
+ *   Customer access    which customers and venues each person may open
+ *   Capabilities       what does each capability actually unlock
+ *   Who can do what    the derived matrix, plus "why can this person not…"
+ *
+ * THE SECOND TAB IS NAMED FOR WHAT IT SETS. It was "Who sees what", which is
+ * the same question as "Who can do what" three tabs along and says nothing
+ * about customers — so the one screen where somebody is scoped to a tenant
+ * was the one nobody could find. It is scope, and the label says so.
+ *
+ * SCOPE IS RESOLVED, NOT READ. Three things decide what somebody can open —
+ * the role they hold, that role's DEFAULT territory, and their own entry —
+ * and `visibility.scope_for` picks between them in that order. The portal
+ * used to read only the last of the three: role defaults were in the GET
+ * payload, accepted by the PUT and enforced on every request, with no control
+ * anywhere and nothing on screen naming them. So anyone holding a scoped role
+ * appeared unrestricted in the roster, in the per-customer counts and in the
+ * by-customer groups, while the server refused them. The defaults are now
+ * edited on the Roles tab, and every list on the Customer access tab reads
+ * `resolveScope` — one function, mirroring the server's order, never
+ * re-derived per screen.
+ *
+ * THAT TAB READS BOTH WAYS, and the roster is why. It was a `<select>` of
+ * identities: the roster was hidden until you opened it, you could not see who
+ * had no scope set, and "who can open this customer?" was forty visits to a
+ * dropdown. It is now a visible filterable list with each person's scope on
+ * their row, plus a direction toggle — see `AdminScopeByCustomer` for what the
+ * other direction can and cannot safely store.
  *
  * The matrix and the preview are DERIVED FROM THE LIVE ROUTE TABLE, never
  * written down here — a hand-maintained copy would be a fourth list beside
@@ -52,6 +82,8 @@ interface Feature { id: string; label: string; requires: string[] }
 interface Person {
   identity: string;
   role: string | null;
+  /** Assigned resource groups. null = never placed; [] = deliberately none. */
+  groups: string[] | null;
   scope: ScopeState | null;
 }
 
@@ -112,20 +144,70 @@ interface Payload {
   features: Feature[];
   people: string[];
   undeletable: string[];
+  /** The role a caller falls back to when nothing names one — `auth.role_id_of`. */
+  defaultRole: string;
   mayEditRoles: boolean;
   superGrant: string;
   policy: {
     roles: Role[];
-    people: Record<string, { role: string | null; scope: ScopeState | null }>;
+    /**
+     * Each role's DEFAULT scope, keyed by role id. LEGACY AND NOT EDITABLE
+     * HERE: a role says what somebody may run, never whose network, and the
+     * two axes were split for good. It is still ENFORCED while resource
+     * groups are off, so the portal surfaces it as something to clear rather
+     * than pretending it is not there.
+     */
+    scope: Record<string, ScopeState>;
+    /** The territories. See api/resource_groups.py. */
+    resourceGroups: ResourceGroup[];
+    undeletableGroups: string[];
+    /** Whether groups DECIDE scope here yet — false until the first is saved. */
+    groupsInForce: boolean;
+    people: Record<string, {
+      role: string | null;
+      /** null means never placed, [] means deliberately nothing. */
+      groups: string[] | null;
+      scope: ScopeState | null;
+    }>;
+    orphanedGroups: Record<string, string[]>;
     orphanedAssignments: Record<string, string>;
     writable: boolean;
     path: string | null;
   };
 }
 
+/**
+ * The groups EXACTLY AS THE SERVER STORES THEM: built-ins dropped, tenant
+ * keys and venue lists sorted, `ecs` cleared on an all-access group.
+ *
+ * Canonical because it is what `dirty` compares AND what the PUT sends.
+ * `resource_groups.clean` drops an unchanged built-in and `Scope.as_json`
+ * sorts the venues, so a local map differing only in key order would read as
+ * an unsaved change and the Save button would never go out — the bug this
+ * file already had once with `people`.
+ */
+function storedGroups(
+  groups: ResourceGroup[], undeletable: string[],
+): Record<string, ResourceGroup> {
+  const out: Record<string, ResourceGroup> = {};
+  for (const group of [...groups].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (undeletable.includes(group.id)) continue;
+    const ecs: Record<string, string | string[]> = {};
+    if (!group.allAccess) {
+      for (const tenant of Object.keys(group.ecs || {}).sort()) {
+        const venues = group.ecs[tenant];
+        ecs[tenant] = Array.isArray(venues) ? [...venues].sort() : venues;
+      }
+    }
+    out[group.id] = { ...group, ecs };
+  }
+  return out;
+}
+
 const TABS = [
   ["roles", "Roles"],
-  ["people", "Who sees what"],
+  ["groups", "Resource groups"],
+  ["people", "Customer access"],
   ["capabilities", "Capabilities"],
   ["matrix", "Who can do what"],
 ] as const;
@@ -139,14 +221,29 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [people, setPeople] = useState<Record<string, Person>>({});
+  const [groups, setGroups] = useState<ResourceGroup[]>([]);
   const [openRole, setOpenRole] = useState<string | null>(null);
   /** Which parts of the element tree are expanded. Independent of what is
    *  ticked — see the note in the tree itself. */
   const [openTabs, setOpenTabs] = useState<Set<string>>(new Set());
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [subject, setSubject] = useState<string>("");
+  /**
+   * Which way round the Customer access tab is read: pick a person and see
+   * their customers, or pick a customer and see its people. Both are views of
+   * the same per-person policy — see AdminScopeByCustomer.
+   */
+  const [direction, setDirection] = useState<"person" | "customer">("person");
+  const [customer, setCustomer] = useState<string>("");
+  /** Narrows whichever list is on the left. Cleared when the direction flips,
+   *  because it means a different thing on each side. */
+  const [rosterFilter, setRosterFilter] = useState<string>("");
   /** identity -> role id, as the ACCOUNTS say it. Read-only here. */
   const [accountRoles, setAccountRoles] = useState<Record<string, string>>({});
+
+  // Fetched once for the whole dialog and handed to both scope directions, so
+  // they cannot disagree about which venues a customer has.
+  const catalogue = useScopeCatalogue();
 
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [previewOf, setPreviewOf] = useState("");
@@ -164,9 +261,11 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
       .then((payload: Payload) => {
         setData(payload);
         setRoles(payload.policy.roles);
+        setGroups(payload.policy.resourceGroups || []);
         setPeople(Object.fromEntries(
           Object.entries(payload.policy.people).map(([identity, e]) => [
-            identity, { identity, role: e.role ?? null, scope: e.scope ?? null },
+            identity, { identity, role: e.role ?? null,
+                        groups: e.groups ?? null, scope: e.scope ?? null },
           ])));
       })
       .catch((e: Error) => setError(e.message));
@@ -209,10 +308,19 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
   const dirty = useMemo(() => {
     if (!data) return false;
     if (JSON.stringify(roles) !== JSON.stringify(data.policy.roles)) return true;
+    // Compared as the SERVER stores it — only roles carrying a restriction —
+    // or every role the editor has merely looked at would read as a change
+    // and the Save button would never go out.
+    if (JSON.stringify(storedGroups(groups, data.policy.undeletableGroups || []))
+        !== JSON.stringify(storedGroups(data.policy.resourceGroups || [],
+                                        data.policy.undeletableGroups || []))) return true;
     const now = Object.fromEntries(Object.entries(people)
-      .map(([i, p]) => [i, { role: p.role, scope: p.scope }]));
-    return JSON.stringify(now) !== JSON.stringify(data.policy.people);
-  }, [data, roles, people]);
+      .map(([i, p]) => [i, { role: p.role, groups: p.groups, scope: p.scope }]));
+    const was = Object.fromEntries(Object.entries(data.policy.people)
+      .map(([i, p]) => [i, { role: p.role ?? null, groups: p.groups ?? null,
+                             scope: p.scope ?? null }]));
+    return JSON.stringify(now) !== JSON.stringify(was);
+  }, [data, roles, groups, people]);
 
   const save = async () => {
     setBusy(true); setError(null);
@@ -226,10 +334,23 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
         // would delete the rest.
         body: JSON.stringify({
           roles: Object.fromEntries(roles.map((r) => [r.id, r])),
+          // EVERY group, every time, for the same reason as the roles
+          // themselves: the PUT is a whole-document replace. Sending `{}` is
+          // how the editor deletes the last one — which also switches the
+          // model OFF, so the server refuses it while anybody is still
+          // assigned a group (`_guard_last_group`).
+          resourceGroups: storedGroups(groups, data?.policy.undeletableGroups || []),
+          // AN EMPTY GROUP LIST IS WORTH SENDING, unlike an unrestricted
+          // scope block: `[]` is an admin deciding somebody reaches nothing,
+          // and dropping the entry would turn that decision back into "never
+          // placed". Both refuse everything; only one of them is a record of
+          // a choice, and the portal shows them differently.
           people: Object.fromEntries(Object.entries(people)
-            .filter(([, p]) => p.role || (p.scope && !p.scope.unrestricted))
+            .filter(([, p]) => p.role || p.groups
+                               || (p.scope && !p.scope.unrestricted))
             .map(([i, p]) => [i, {
               role: p.role,
+              groups: p.groups,
               scope: p.scope && !p.scope.unrestricted ? p.scope : null,
             }])),
         }),
@@ -238,6 +359,18 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
       if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
       setData((c) => (c ? { ...c, policy: body } : c));
       setRoles(body.roles);
+      setGroups(body.resourceGroups || []);
+      // RESEEDED FROM THE RESPONSE, exactly as `load` does it. The PUT drops
+      // entries that carry neither a role nor a restriction, so a person
+      // narrowed and then put back to "every customer" is absent from the
+      // saved document while still sitting in local state — and `dirty`
+      // compares the two, so the Save button stayed lit for a change that had
+      // already landed, forever.
+      setPeople(Object.fromEntries(
+        Object.entries(body.people as Record<string, any>).map(([identity, e]) => [
+          identity, { identity, role: e.role ?? null,
+                      groups: e.groups ?? null, scope: e.scope ?? null },
+        ])));
       setSaved(`Saved. ${body.roles.length} role(s).`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed.");
@@ -299,6 +432,178 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
     const names = new Set<string>([...(data?.people ?? []), ...Object.keys(people)]);
     return [...names].sort();
   }, [data, people]);
+
+  /** Somebody's stored scope, or null for "no entry" — which means inherit. */
+  const scopeOf = useCallback(
+    (identity: string) => people[identity]?.scope ?? null, [people]);
+
+  const roleLabelOf = useCallback((identity: string) => {
+    const id = assignedRole(identity);
+    return id ? (roleById[id]?.label ?? id) : null;
+  }, [assignedRole, roleById]);
+
+  const groupById = useMemo(
+    () => Object.fromEntries(groups.map((g) => [g.id, g])), [groups]);
+
+  /**
+   * Whether RESOURCE GROUPS decide scope here — the bootstrap rule, mirrored.
+   *
+   * The server keys it on a stored catalogue existing (`visibility.
+   * groups_in_force`), and the compiled-in `all-access` does not count or
+   * every deployment would have switched over the moment this shipped. Read
+   * from the LOCAL list as well as the stored flag, so that adding the first
+   * group shows the consequence — everybody unassigned drops to nothing —
+   * before it is saved rather than after.
+   */
+  const groupsInForce = Boolean(data?.policy.groupsInForce)
+    || groups.some((g) => !(data?.policy.undeletableGroups || []).includes(g.id));
+
+  /** Their assigned groups: null means never placed, [] means nothing. */
+  const groupsOf = useCallback(
+    (identity: string) => people[identity]?.groups ?? null, [people]);
+
+  const setGroupsFor = useCallback(
+    (identity: string, next: string[] | null) => setPeople((c) => ({
+      ...c,
+      [identity]: { identity, role: c[identity]?.role ?? null,
+                    groups: next, scope: c[identity]?.scope ?? null },
+    })), []);
+
+  /** The LEGACY role default, read-only — see the Payload note. */
+  const roleDefaultOf = useCallback((identity: string) => {
+    const id = assignedRole(identity) || data?.defaultRole;
+    return id ? restrictionOf((data?.policy.scope || {})[id]) : null;
+  }, [assignedRole, data?.policy.scope, data?.defaultRole]);
+
+  /**
+   * WHAT THEY ACTUALLY REACH, AND WHY — the one answer every list on this tab
+   * reads, resolved the way `visibility.scope_for` resolves it: their own
+   * entry, else their role's default, else unrestricted.
+   *
+   * Nothing here may read `scopeOf` on its own to decide whether somebody can
+   * open a customer. That was the whole defect: a person under a scoped role
+   * has no entry of their own, so every count, roster line and group on this
+   * tab called them unrestricted while the server was refusing them.
+   */
+  const resolvedOf = useCallback(
+    (identity: string): Resolved => (
+      groupsInForce
+        ? resolveGroups(groupsOf(identity), groupById)
+        : resolveScope(scopeOf(identity), roleDefaultOf(identity))),
+    [groupsInForce, groupsOf, groupById, scopeOf, roleDefaultOf]);
+
+  /**
+   * Turn the per-person lists that are in force TODAY into groups.
+   *
+   * THE ON-RAMP, and the reason switching models is not a morning of typing.
+   * Fail-closed means every unassigned person drops to nothing the moment a
+   * catalogue exists, so the realistic alternative to this button is an
+   * administrator hand-drawing forty territories while their colleagues
+   * cannot open anything.
+   *
+   * DEDUPED BY TERRITORY, which is the whole insight groups offer: people
+   * with byte-identical customer maps were already one territory maintained
+   * in several places, and this is the first time that is visible. Everybody
+   * who was unrestricted gets `all-access`, because that is precisely what
+   * they had.
+   *
+   * It only PROPOSES — nothing is written until Save, so the diff is on
+   * screen and reversible by closing the dialog.
+   */
+  const buildGroupsFromScopes = useCallback(() => {
+    const byTerritory = new Map<string, { ecs: ScopeState["ecs"]; who: string[] }>();
+    const unrestricted: string[] = [];
+    for (const identity of everyone) {
+      const own = restrictionOf(scopeOf(identity));
+      if (!own) { unrestricted.push(identity); continue; }
+      const key = JSON.stringify(
+        Object.fromEntries(Object.keys(own.ecs).sort().map((t) => [
+          t, Array.isArray(own.ecs[t]) ? [...(own.ecs[t] as string[])].sort()
+                                       : own.ecs[t]])));
+      const seen = byTerritory.get(key);
+      if (seen) seen.who.push(identity);
+      else byTerritory.set(key, { ecs: own.ecs, who: [identity] });
+    }
+
+    const made: ResourceGroup[] = [];
+    const assign: Record<string, string[]> = {};
+    let n = 0;
+    for (const { ecs, who } of byTerritory.values()) {
+      n += 1;
+      const id = `g_mig${n}${Math.random().toString(36).slice(2, 8)}`;
+      made.push({
+        id,
+        label: who.length === 1 ? `${who[0]}'s sites` : `Territory ${n}`,
+        description: `Carried over from the per-person lists of ${who.join(", ")}.`,
+        allAccess: false,
+        ecs,
+      });
+      for (const identity of who) assign[identity] = [id];
+    }
+    for (const identity of unrestricted) {
+      assign[identity] = [data?.policy.undeletableGroups?.[0] || "all-access"];
+    }
+
+    setGroups((current) => [...current, ...made]);
+    setPeople((current) => {
+      const next = { ...current };
+      for (const [identity, held] of Object.entries(assign)) {
+        next[identity] = {
+          identity,
+          role: current[identity]?.role ?? null,
+          groups: held,
+          scope: current[identity]?.scope ?? null,
+        };
+      }
+      return next;
+    });
+  }, [everyone, scopeOf, data?.policy.undeletableGroups]);
+
+  const holdersOf = useCallback(
+    (groupId: string) => everyone.filter(
+      (i) => (groupsOf(i) || []).includes(groupId)),
+    [everyone, groupsOf]);
+
+  const setScopeFor = useCallback(
+    (identity: string, scope: ScopeState | null) => setPeople((c) => ({
+      ...c,
+      [identity]: { identity, role: c[identity]?.role ?? null,
+                    groups: c[identity]?.groups ?? null, scope },
+    })), []);
+
+  /**
+   * How many people can open one customer — the number on its roster row.
+   *
+   * COUNTS EVERY ROUTE TO IT, because each one genuinely opens the customer:
+   * their own entry, their role's default, or being unrestricted. A count of
+   * only the people explicitly selected would read as an answer to "who can
+   * see this customer" while being wrong by however many admins exist plus
+   * everyone under a scoped role — and this is the one reading of the screen
+   * that has to be trustworthy.
+   */
+  const openerCount = useCallback((ecId: string) => everyone.filter((identity) => {
+    const { scope } = resolvedOf(identity);
+    return scope.unrestricted || ecId in scope.ecs;
+  }).length, [everyone, resolvedOf]);
+
+  const rosterRows = useMemo(() => {
+    const q = rosterFilter.trim().toLowerCase();
+    if (!q) return everyone;
+    return everyone.filter((identity) => identity.toLowerCase().includes(q)
+      || (roleLabelOf(identity) || "").toLowerCase().includes(q));
+  }, [everyone, rosterFilter, roleLabelOf]);
+
+  const customerRows = useMemo(() => {
+    const q = rosterFilter.trim().toLowerCase();
+    if (!q) return catalogue.rows;
+    return catalogue.rows.filter((r) => r.name.toLowerCase().includes(q)
+      || r.id.toLowerCase().includes(q));
+  }, [catalogue.rows, rosterFilter]);
+
+  const flip = (next: "person" | "customer") => {
+    setDirection(next);
+    setRosterFilter("");
+  };
 
   const shell = "rounded-md border border-gray-300 px-2.5 py-1.5 text-xs " +
                 "font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
@@ -402,7 +707,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
               {roles.map((role) => {
                 const open = openRole === role.id;
                 const builtin = (data.undeletable || []).includes(role.id);
-                const holders = Object.values(people).filter((p) => p.role === role.id);
+                const holders = everyone.filter((i) => assignedRole(i) === role.id);
                 return (
                   <div key={role.id} className="min-w-0 rounded-md border border-gray-200">
                     <div className="flex min-w-0 items-center gap-2 px-3 py-2">
@@ -424,6 +729,20 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                         {role.grants.length} capability(ies) · {role.visible.length} card(s)
                         {holders.length ? ` · ${holders.length} person(s)` : ""}
                       </span>
+                      {/* A LEGACY SCOPE DEFAULT, flagged rather than edited.
+                          It still applies while resource groups are off, and
+                          then stops — so leaving it invisible would mean a
+                          restriction nobody can see today and a silent
+                          widening the day groups go on. */}
+                      {restrictionOf((data.policy.scope || {})[role.id]) && (
+                        <span className="shrink-0 rounded bg-amber-50 px-1.5 text-[10px]
+                                         text-amber-800"
+                              title="An older policy gave this role a scope default. It still applies until resource groups are switched on, then it is ignored. Clear it by giving its holders a resource group.">
+                          legacy scope: {scopeSummary(
+                            (data.policy.scope || {})[role.id],
+                            catalogue.nameOf).text}
+                        </span>
+                      )}
                       {!builtin && (
                         <button
                           onClick={() => setRoles((c) => c.filter((r) => r.id !== role.id))}
@@ -471,6 +790,15 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                           ))}
                         </div>
 
+                        {/*
+                          NO SCOPE CONTROL HERE, DELIBERATELY. A role says
+                          what somebody may RUN and SEE; a resource group says
+                          whose network they may run it on. They are separate
+                          axes and the portal keeps them on separate tabs,
+                          because a role that quietly decided territory is how
+                          `tenant_leader_north` and `tenant_leader_south` get
+                          invented. See the Resource groups tab.
+                        */}
                         <div className="mt-4 border-t border-gray-100 pt-3">
                           <p className="text-xs font-medium text-gray-700">
                             What this role sees ({role.visible.length} of {allElements.length})
@@ -628,18 +956,66 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
+        {data && tab === "groups" && (
+          <div className="max-h-[62vh] overflow-y-auto p-4">
+            <AdminResourceGroups
+              groups={groups}
+              onChange={setGroups}
+              catalogue={catalogue}
+              undeletable={data.policy.undeletableGroups || []}
+              holdersOf={holdersOf}
+              inForce={groupsInForce}
+              readOnly={readOnly}
+              onBuildFromScopes={buildGroupsFromScopes}
+              carryOverCount={everyone.length} />
+          </div>
+        )}
+
         {data && tab === "people" && (
           <div className="max-h-[62vh] overflow-y-auto p-4">
             <p className="mb-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2
                           text-xs text-gray-600">
-              <b>Whose network</b> each person works on. What KIND of work they
-              do is their role, set on the account in the People portal.
+              <b>Which customers and venues</b> each person may open. What KIND
+              of work they do there is their role, set on the account in the
+              People portal.
               <br />
-              Scope is per person and a role is not — otherwise two leads doing
-              identical work in different territories would need two roles, and
-              the list would grow with your org chart rather than with the
-              kinds of work people do.
+              Territory is assigned by <b>resource group</b>, never by role: a
+              role says what somebody may run, a group says whose network they
+              may run it on. Groups <b>add up</b> — somebody holding two
+              reaches both — and somebody holding <b>none reaches nothing</b>.
             </p>
+
+            {groupsInForce && (() => {
+              const unplaced = everyone.filter((i) => groupsOf(i) === null);
+              if (!unplaced.length) return null;
+              return (
+                <p className="mb-3 flex items-start gap-1.5 rounded border
+                              border-amber-200 bg-amber-50 px-2 py-1.5 text-xs
+                              text-amber-900">
+                  <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                  <span>
+                    <b>{unplaced.length} person(s) hold no resource group</b>,
+                    so they can open no venue at all:{" "}
+                    {unplaced.slice(0, 5).join(", ")}
+                    {unplaced.length > 5 ? ", …" : ""}. That is the rule here,
+                    not a fault — but it is also what gets reported as "I can
+                    log in and see nothing".
+                  </span>
+                </p>
+              );
+            })()}
+
+            {Object.keys(data.policy.orphanedGroups || {}).length > 0 && (
+              <p className="mb-3 flex items-start gap-1.5 rounded border border-red-200
+                            bg-red-50 px-2 py-1.5 text-xs text-red-800">
+                <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                <span>
+                  Somebody is assigned a resource group that no longer exists.
+                  A deleted group confers nothing and does not fall back, so
+                  that part of their territory is simply gone.
+                </span>
+              </p>
+            )}
 
             {Object.keys(data.policy.orphanedAssignments || {}).length > 0 && (
               <p className="mb-3 flex items-start gap-1.5 rounded border border-red-200
@@ -652,85 +1028,424 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
               </p>
             )}
 
-            <label className="block text-xs font-medium text-gray-700">Person</label>
-            <select value={subject} onChange={(e) => setSubject(e.target.value)}
-                    className="mt-1 w-full min-w-0 rounded-md border border-gray-300
-                               px-2 py-1.5 text-sm">
-              <option value="">Choose somebody…</option>
-              {everyone.map((identity) => (
-                <option key={identity} value={identity}>
-                  {identity}
-                  {assignedRole(identity)
-                    ? ` — ${roleById[assignedRole(identity)!]?.label
-                            ?? assignedRole(identity)}`
-                    : ""}
-                </option>
-              ))}
-            </select>
+            {/*
+              THE DIRECTION TOGGLE. Two questions, one stored policy: "which
+              customers does this person work on" and "who works on this
+              customer". The second is the onboarding and the audit question,
+              and before this it meant opening every person in turn.
+            */}
+            <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2">
+              <div className="flex shrink-0 rounded-md border border-gray-300 p-0.5">
+                {([["person", "By person"], ["customer", "By customer"]] as const)
+                  .map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => flip(id)}
+                          className={`rounded px-2.5 py-1 text-xs font-medium ${
+                            direction === id
+                              ? "bg-gray-900 text-white"
+                              : "text-gray-600 hover:bg-gray-50"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <input value={rosterFilter}
+                     onChange={(e) => setRosterFilter(e.target.value)}
+                     placeholder={direction === "person"
+                       ? "Filter people…" : "Filter customers…"}
+                     className="min-w-0 flex-1 rounded-md border border-gray-300
+                                px-2 py-1.5 text-sm" />
+            </div>
 
-            {subject && (
-              <div className="mt-3 space-y-3">
-                {/*
-                  THE ROLE IS SHOWN, NOT SET — in this mode. It is a field on
-                  the ACCOUNT, chosen when the account is created and changed
-                  in the People portal, which is where a person is
-                  administered. A second dropdown here would be two places to
-                  change one thing with no answer to which wins.
+            <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
+              {/* THE ROSTER IS VISIBLE, which is the whole point of it. A
+                  dropdown hid both the list and every person's current scope,
+                  so "who has nothing set" — the state that fails closed —
+                  could not be seen without forty clicks. */}
+              <div className="min-w-0 max-h-[46vh] overflow-y-auto rounded-md
+                              border border-gray-200">
+                {direction === "person" && rosterRows.map((identity) => {
+                  // THE EFFECTIVE SCOPE, not the stored one. A roster showing
+                  // "every customer" beside somebody their role has scoped to
+                  // two is worse than no roster: it is the answer an admin
+                  // would act on.
+                  const { scope, source } = resolvedOf(identity);
+                  const sum = scopeSummary(scope, catalogue.nameOf);
+                  const held = groupsOf(identity);
+                  // UNPLACED IS THE LOUD ONE. Under the group model it is the
+                  // commonest way somebody ends up seeing an empty picker,
+                  // and it is invisible from their seat — so the roster has
+                  // to make it scannable rather than something you find by
+                  // opening forty people.
+                  const line = groupsInForce
+                    ? (source === "unplaced"
+                        ? "no group assigned"
+                        : held && held.length
+                          ? held.map((g) => groupById[g]?.label ?? `${g} (deleted)`)
+                              .join(", ")
+                          : "no group assigned")
+                    : sum.text;
+                  const tone = groupsInForce
+                    ? (source === "unplaced" || !held?.length ? "empty" : "narrowed")
+                    : sum.tone;
+                  const on = subject === identity;
+                  return (
+                    <button key={identity} type="button"
+                            onClick={() => setSubject(identity)}
+                            className={`block w-full min-w-0 border-b border-gray-100
+                                        px-2.5 py-1.5 text-left last:border-b-0 ${
+                                          on ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                      {/* The role sits on the SECOND line beside the scope,
+                          not beside the name. Competing for one line truncated
+                          the identity, and an address or a long username is
+                          exactly what you are scanning for. */}
+                      <span className="block min-w-0 truncate text-sm text-gray-900">
+                        {identity}
+                      </span>
+                      <span className="block min-w-0 truncate text-[11px]">
+                        <span className="text-gray-400">
+                          {roleLabelOf(identity) ?? "no role"}
+                        </span>
+                        <span className="text-gray-300"> · </span>
+                        <span className={
+                          tone === "empty" ? "text-amber-700"
+                            : tone === "narrowed" ? "text-blue-700"
+                            : "text-gray-500"}>
+                          {line}
+                        </span>
+                        {!groupsInForce && source === "role" && (
+                          <span className="text-gray-400"> (role)</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
 
-                  It is still worth SHOWING, because the question this tab
-                  answers is "whose network does this person work on", and that
-                  only means something beside what kind of work they do.
-                */}
-                {data.people.length > 0 ? (
-                  <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2
-                                text-xs text-gray-600">
-                    Holds the <b>{roleById[assignedRole(subject)]?.label
-                                  ?? assignedRole(subject) ?? "—"}</b> role.
-                    Change that in the <b>People</b> portal, where the account
-                    lives — this tab sets whose network they work on.
+                {direction === "customer" && customerRows.map((ec) => {
+                  const on = customer === ec.id;
+                  return (
+                    <button key={ec.id} type="button" onClick={() => setCustomer(ec.id)}
+                            className={`block w-full min-w-0 border-b border-gray-100
+                                        px-2.5 py-1.5 text-left last:border-b-0 ${
+                                          on ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                      <span className="block min-w-0 truncate text-sm text-gray-900">
+                        {ec.name}
+                      </span>
+                      <span className="block text-[11px] text-gray-500">
+                        {openerCount(ec.id)} can open it
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {direction === "customer" && !catalogue.ecs && !catalogue.ecError && (
+                  <p className="flex items-center gap-2 px-2.5 py-3 text-xs text-gray-500">
+                    <Loader2 size={13} className="animate-spin" /> Loading customers…
                   </p>
-                ) : (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700">Role</label>
-                    {/* No account store — proxy mode keeps identities in the
-                        IDP — so the policy's per-person map is the only place
-                        an assignment can live. */}
-                    <select
-                      value={people[subject]?.role ?? ""}
-                      onChange={(e) => setPeople((c) => ({
-                        ...c,
-                        [subject]: { identity: subject, role: e.target.value || null,
-                                     scope: c[subject]?.scope ?? null },
-                      }))}
-                      className="mt-1 w-full min-w-0 rounded-md border border-gray-300
-                                 px-2 py-1.5 text-sm">
-                      <option value="">No role set here</option>
-                      {roles.map((r) => (
-                        <option key={r.id} value={r.id}>{r.label}</option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      This instance keeps no accounts, so a role is assigned
-                      here rather than in the People portal.
-                    </p>
-                  </div>
+                )}
+                {direction === "customer" && catalogue.ecError && (
+                  <p className="px-2.5 py-3 text-xs text-red-700">
+                    Could not load customers: {catalogue.ecError}
+                  </p>
+                )}
+                {((direction === "person" && !rosterRows.length)
+                  || (direction === "customer" && catalogue.ecs
+                      && !customerRows.length)) && (
+                  <p className="px-2.5 py-3 text-xs text-gray-500">
+                    {rosterFilter.trim() ? "Nothing matches that filter."
+                      : "Nothing to show."}
+                  </p>
+                )}
+              </div>
+
+              <div className="min-w-0">
+                {direction === "person" && !subject && (
+                  <p className="rounded-md border border-dashed border-gray-300 px-3 py-6
+                                text-center text-xs text-gray-500">
+                    Pick somebody on the left to set which customers and venues
+                    they may open.
+                  </p>
                 )}
 
-                <div className="border-t border-gray-200 pt-3">
-                  <p className="text-xs font-medium text-gray-700">
-                    Which customers and venues
+                {direction === "person" && subject && (() => {
+                  const resolved = resolvedOf(subject);
+                  const roleId = assignedRole(subject);
+                  const roleLabel = roleId
+                    ? (roleById[roleId]?.label ?? roleId) : null;
+                  // The role whose DEFAULT applies, which for somebody nothing
+                  // names is the built-in one the request path floors at.
+                  const fellBack = !roleId;
+                  const effRoleId = roleId || data.defaultRole;
+                  const effRoleLabel = roleById[effRoleId]?.label ?? effRoleId;
+                  const own = restrictionOf(scopeOf(subject));
+                  const held = groupsOf(subject);
+                  const effective = scopeSummary(resolved.scope, catalogue.nameOf);
+                  return (
+                  <div className="space-y-3">
+                    {/*
+                      THE ROLE IS SHOWN, NOT SET — in this mode. It is a field on
+                      the ACCOUNT, chosen when the account is created and changed
+                      in the People portal, which is where a person is
+                      administered. A second dropdown here would be two places to
+                      change one thing with no answer to which wins.
+                    */}
+                    {/*
+                      THE WHOLE RESOLUTION, IN ORDER, ON ONE CARD. Three things
+                      decide what somebody reaches — the role they hold, that
+                      role's default, and their own entry — and before this they
+                      were on three different screens, so "why can Dana not open
+                      Acme?" meant holding all three in your head and knowing
+                      which wins. The order here is `visibility.scope_for`'s
+                      order, and the last line is the answer.
+                    */}
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                      <dl className="space-y-1 text-xs">
+                        <div className="flex min-w-0 gap-2">
+                          <dt className="w-28 shrink-0 text-gray-500">Role</dt>
+                          <dd className="min-w-0 flex-1 text-gray-900">
+                            {roleLabel ?? (
+                              <>
+                                <i className="text-gray-500">none assigned</i>
+                                <span className="ml-1 text-gray-500">
+                                  — falls back to <b>{effRoleLabel}</b>
+                                </span>
+                              </>
+                            )}
+                            {roleId && !roleById[roleId] && (
+                              <span className="ml-1 text-red-700">
+                                — that role no longer exists, so they hold nothing
+                              </span>
+                            )}
+                          </dd>
+                        </div>
+                        {groupsInForce ? (
+                          <div className="flex min-w-0 gap-2">
+                            <dt className="w-28 shrink-0 text-gray-500">
+                              Resource groups
+                            </dt>
+                            <dd className="min-w-0 flex-1 text-gray-900">
+                              {held === null && (
+                                <i className="text-amber-700">never assigned</i>
+                              )}
+                              {held !== null && held.length === 0 && (
+                                <i className="text-amber-700">none, deliberately</i>
+                              )}
+                              {held !== null && held.length > 0 && held.map((id, i) => (
+                                <Fragment key={id}>
+                                  {i > 0 && ", "}
+                                  {groupById[id]
+                                    ? groupById[id].label
+                                    : <span className="text-red-700">
+                                        {id} (deleted)
+                                      </span>}
+                                </Fragment>
+                              ))}
+                            </dd>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex min-w-0 gap-2">
+                              <dt className="w-28 shrink-0 text-gray-500">
+                                {fellBack ? `${effRoleLabel} default` : "Role default"}
+                              </dt>
+                              <dd className="min-w-0 flex-1 text-gray-900">
+                                {resolved.roleDefault
+                                  ? scopeSummary(resolved.roleDefault,
+                                                 catalogue.nameOf).text
+                                  : <i className="text-gray-500">none — every customer</i>}
+                              </dd>
+                            </div>
+                            <div className="flex min-w-0 gap-2">
+                              <dt className="w-28 shrink-0 text-gray-500">Their own</dt>
+                              <dd className="min-w-0 flex-1 text-gray-900">
+                                {own
+                                  ? scopeSummary(own, catalogue.nameOf).text
+                                  : <i className="text-gray-500">not set</i>}
+                              </dd>
+                            </div>
+                          </>
+                        )}
+                        <div className="flex min-w-0 gap-2 border-t border-gray-200 pt-1">
+                          <dt className="w-28 shrink-0 font-medium text-gray-700">
+                            Can open
+                          </dt>
+                          <dd className={`min-w-0 flex-1 font-medium ${
+                            effective.tone === "empty" ? "text-amber-700"
+                              : effective.tone === "narrowed" ? "text-blue-700"
+                              : "text-gray-900"}`}>
+                            {effective.text}
+                            <span className="ml-1 font-normal text-gray-500">
+                              {resolved.source === "groups"
+                                ? "— the union of their groups"
+                                : resolved.source === "unplaced"
+                                  ? "— they hold no resource group"
+                                  : resolved.source === "person"
+                                    ? "— from their own entry"
+                                    : resolved.source === "role"
+                                      ? `— from the ${effRoleLabel} default`
+                                      : "— nothing restricts them"}
+                            </span>
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+
+                    {data.people.length > 0 ? (
+                      <p className="text-xs text-gray-500">
+                        The <b>role</b> is a field on the account — change it in
+                        the <b>People</b> portal, where the account lives. This
+                        tab sets which customers they may open.
+                      </p>
+                    ) : (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700">Role</label>
+                        {/* No account store — proxy mode keeps identities in the
+                            IDP — so the policy's per-person map is the only place
+                            an assignment can live. */}
+                        <select
+                          value={people[subject]?.role ?? ""}
+                          onChange={(e) => setPeople((c) => ({
+                            ...c,
+                            [subject]: { identity: subject,
+                                         role: e.target.value || null,
+                                         groups: c[subject]?.groups ?? null,
+                                         scope: c[subject]?.scope ?? null },
+                          }))}
+                          className="mt-1 w-full min-w-0 rounded-md border border-gray-300
+                                     px-2 py-1.5 text-sm">
+                          <option value="">No role set here</option>
+                          {roles.map((r) => (
+                            <option key={r.id} value={r.id}>{r.label}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                          This instance keeps no accounts, so a role is assigned
+                          here rather than in the People portal.
+                        </p>
+                      </div>
+                    )}
+
+                    {groupsInForce ? (
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-gray-700">
+                          Which territories they work on
+                        </p>
+                        <p className="text-[11px] text-gray-500">
+                          Tick as many as apply — they <b>add up</b>. Define
+                          what each one covers on the <b>Resource groups</b>{" "}
+                          tab; nothing is editable per person, which is the
+                          point of groups.
+                        </p>
+                        {groups.map((group) => {
+                          const on = (held || []).includes(group.id);
+                          return (
+                            <label key={group.id}
+                                   className="flex min-w-0 items-start gap-2 rounded-md
+                                              border border-gray-200 px-3 py-2
+                                              cursor-pointer hover:bg-gray-50">
+                              <input type="checkbox" className="mt-0.5 shrink-0"
+                                     checked={on}
+                                     onChange={() => setGroupsFor(
+                                       subject,
+                                       on ? (held || []).filter((g) => g !== group.id)
+                                          : [...(held || []), group.id])} />
+                              <span className="min-w-0 flex-1">
+                                <span className="block min-w-0 text-sm text-gray-900">
+                                  {group.label}
+                                </span>
+                                <span className="block min-w-0 text-[11px] text-gray-500">
+                                  {groupSummary(group, catalogue.nameOf)}
+                                  {group.description ? ` · ${group.description}` : ""}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {/*
+                          "NEVER ASSIGNED" AND "ASSIGNED NOTHING" BOTH REFUSE
+                          EVERYTHING, and the difference is whether anybody
+                          decided. Recording the decision is what stops the
+                          next administrator re-litigating it, and it is the
+                          same reason the baseline editor keeps "not
+                          applicable" apart from "unreviewed".
+                        */}
+                        {held === null && (
+                          <button type="button" className={shell}
+                                  onClick={() => setGroupsFor(subject, [])}>
+                            Record that they get none
+                          </button>
+                        )}
+                        {held !== null && held.length === 0 && (
+                          <p className="rounded-md border border-amber-200 bg-amber-50
+                                        px-3 py-2 text-xs text-amber-900">
+                            Recorded as reaching <b>no venue at all</b>. That is
+                            a decision, not a gap — the roster shows it
+                            differently from somebody nobody has got to yet.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <AdminScope
+                        key={subject}
+                        subject={subject}
+                        catalogue={catalogue}
+                        scope={people[subject]?.scope ?? UNRESTRICTED}
+                        onChange={(next) => setScopeFor(subject, next)} />
+                    )}
+                  </div>
+                  );
+                })()}
+
+                {direction === "customer" && !customer && (
+                  <p className="rounded-md border border-dashed border-gray-300 px-3 py-6
+                                text-center text-xs text-gray-500">
+                    Pick a customer on the left to see and set who can open it.
                   </p>
-                  <AdminScope
-                    key={subject}
-                    scope={people[subject]?.scope ?? { unrestricted: true, ecs: {} }}
-                    onChange={(next) => setPeople((c) => ({
-                      ...c,
-                      [subject]: { identity: subject, role: c[subject]?.role ?? null,
-                                   scope: next },
-                    }))} />
-                </div>
+                )}
+
+                {direction === "customer" && customer
+                  && (() => {
+                    const ec = catalogue.rows.find((r) => r.id === customer);
+                    if (!ec) return (
+                      <p className="rounded-md border border-dashed border-gray-300 px-3 py-6
+                                    text-center text-xs text-gray-500">
+                        That customer is no longer in this tenant.
+                      </p>
+                    );
+                    if (!groupsInForce) return (
+                      <div className="rounded-md border border-dashed border-gray-300
+                                      px-3 py-6 text-center text-xs text-gray-500">
+                        <b>{ec.name}</b> — reading by customer needs resource
+                        groups. Right now access is a bespoke list on each
+                        person, so "who can open this customer" has no answer
+                        shorter than opening everybody.
+                        <br />
+                        <button type="button" onClick={() => setTab("groups")}
+                                className="mt-2 text-blue-700 underline-offset-2
+                                           hover:underline">
+                          Set up resource groups
+                        </button>
+                      </div>
+                    );
+                    return (
+                      <AdminScopeByCustomer
+                        key={ec.id}
+                        ec={ec}
+                        catalogue={catalogue}
+                        roster={everyone}
+                        resolvedOf={resolvedOf}
+                        groupsOf={groupsOf}
+                        groupById={groupById}
+                        allGroups={groups}
+                        roleLabelOf={roleLabelOf}
+                        onChangeGroups={setGroupsFor}
+                        onPickPerson={(identity) => {
+                          flip("person");
+                          setSubject(identity);
+                        }}
+                        onPickGroup={() => setTab("groups")} />
+                    );
+                  })()}
               </div>
-            )}
+            </div>
           </div>
         )}
 

@@ -252,6 +252,89 @@ that": **the role they were assigned**.
   with the org chart rather than with the kinds of work people do. The role
   carries a default; the person carries their territory.
 
+- **TERRITORY IS A RESOURCE GROUP, AND IT IS NOT THE ROLE.** Two axes, kept
+  apart deliberately: the ROLE says what somebody may RUN and SEE, the
+  RESOURCE GROUP says whose network they may run it against. A role carrying a
+  default territory was built and then removed — it is how
+  `tenant_leader_north` and `tenant_leader_south` get invented, and the two
+  questions are answered by different people on different days.
+  `api/resource_groups.py`, the **Resource groups** chip tab.
+
+  - **A group is a named set of customers and venues**, defined once and
+    assigned, holding the same `{unrestricted, ecs}` document scope has always
+    held and validated by the same `scope.clean`. `allAccess` IS that
+    `unrestricted` flag. Per-person bespoke maps were forty hand-kept lists
+    with nothing holding them together.
+  - **ASSIGNED PER PERSON, SEVERAL AT A TIME, AND THEY UNION.** That is not
+    the union rule `scope_for` rejects between a person and a role — that one
+    is a PRECEDENCE question. Every group on somebody was deliberately ticked,
+    so "North and the Harrogate site" has to mean both; groups that cannot
+    combine are the org chart again. `ALL_VENUES` absorbs an explicit list, so
+    adding a group never takes reach away.
+  - **NO GROUP MEANS NO VENUES.** The reversal the whole model rests on, and
+    the opposite of `scope.py`'s "unrestricted is the default". Reach is
+    granted by assignment, so somebody nobody placed reaches nothing.
+  - **THE BOOTSTRAP RULE IS WHAT STOPS THAT BEING AN OUTAGE.**
+    `visibility.groups_in_force` is keyed on a stored catalogue EXISTING; until
+    one does, scope answers the legacy way (person entry → role default →
+    unrestricted). So shipping this changed nothing for anybody, and switching
+    it on is a deliberate act with an on-ramp — the portal's "Carry the current
+    access across" builds a group per distinct existing territory, deduped,
+    and hands `all-access` to everyone who was unrestricted. Same shape as the
+    super tier's "the tier does not exist until somebody holds it". The
+    compiled-in `all-access` deliberately does NOT count, or every deployment
+    would have switched over on upgrade.
+  - **`_guard_last_group` refuses emptying the catalogue while anybody holds a
+    group**, because that does not merely delete groups — it turns the model
+    OFF and returns everyone to unrestricted. A deletion that silently widens
+    the estate. Unassign everybody in the same save and it is allowed, which is
+    exactly the dismantling-vs-orphaning line `_guard_last_super` draws.
+  - **PASSPHRASE MODE NEVER FAILS CLOSED HERE.** That mode has no identities,
+    so an assignment can never match, and applying the rule would leave PISR's
+    DEFAULT auth mode showing every user nothing with no screen that could fix
+    it. Groups need somebody to assign them to. Same reasoning as the super
+    tier, which cannot exist there either.
+  - **`PolicyStore._shadow_scope` is the rollback guard, and is why groups did
+    not need `FORMAT_VERSION` bumped.** An older PISR refuses a version it does
+    not understand OUTRIGHT, which for scope means every restriction vanishing
+    at once. So groups ride under a key it cannot see, and the territory they
+    resolve to is ALSO written to `people[x].scope`, where it already looks.
+    Never wider than live; `all-access` resolves to "no restriction", which is
+    what that older PISR would have done anyway. WRITE-ONLY from then on —
+    `scope_for` reads the groups.
+  - **`all-access` is COMPILED IN**, like `roles._BUILTINS` and
+    `baselines/ruckus.json`: an unreadable policy must still leave somebody
+    able to reach the estate and repair it. It is the only group that can say
+    "and ones added later", which no list of ids can — do not let anyone
+    "simplify" it into ticking every customer.
+  - **`test_rollup_restrict.py` is what holds the denominator honest.** It
+    builds a world of three tenants and nine venues, narrows it against ~103
+    scopes (every single tenant, every single venue, every all-but-one, 80
+    seeded random subsets, both extremes) and asserts the restricted record
+    rolls up to EXACTLY the world that only ever held those venues —
+    whole-dict, so a figure added to `tenant_rollup` next month is covered the
+    day it is added. Verified by mutation: making `restrict` a no-op, leaving
+    the tenant directory whole, and subtracting hidden checks from the counts
+    each failed it. The end-to-end half is `narrowing.spec.ts`, which needed
+    the `scoped-desk` persona — the SAME ROLE as `msp-user` with a different
+    territory, so a diff between two response bodies isolates scope with
+    nothing else moving.
+  - **THE RULES ARE NOT STORED, THE IDS ARE.** A group could match on venue
+    tag, name, city or AP count — the venue rows PISR already fetches carry all
+    four. It does not, and that is the decision: scope is checked before any R1
+    client is built, so a refusal costs no upstream call; a stored rule would
+    move the refusal behind a network call and turn an R1 blip into "you are
+    scoped to nothing", a lockout that reads like an auth bug. The portal
+    MATCHES and writes the ids it matched, so an admin sees which venues a
+    pattern would add before anybody gains access.
+  - **A deleted group confers nothing** — not even a fallback — and the
+    assignment is KEPT rather than dropped so the mistake is visible.
+    `orphanedGroups` in the policy payload, same rule as a deleted role.
+  - A role's stored `scope` default is still READ and still enforced while
+    groups are off. The portal flags it on the role row as "legacy scope"
+    rather than editing it, because it stops applying the day groups go on and
+    an invisible restriction that silently lifts is worse than a visible one.
+
 - **ADMIN-NESS IS A CAPABILITY** (`admin.portal`), which is what makes
   `install_user` first-class beside `admin` rather than second-class. It also
   removed the old "admins are never subject to the policy" short-circuit — so
@@ -349,9 +432,23 @@ Read them in this order; each explains the next.
     docker compose -f docker-compose.dev.yml run --rm --no-deps \
       -v "$PWD:/repo" -w /repo/api backend python tests/run_all.py
 
-Seven suites, no pytest — each is a plain script counting its own failures, and
+Nine suites, no pytest — each is a plain script counting its own failures, and
 `run_all.py` exits non-zero if any does. **`test_role_redaction.py` is the one
-to understand before adding a card or a capability.**
+to understand before adding a card or a capability**, and
+**`test_resource_groups.py` before touching anything about who may reach a
+venue** — it is the suite that holds the fail-closed reversal in both
+directions, because too-shut is as real a failure as too-open and is the one
+that gets misreported as an authentication bug.
+
+**A UNIT TEST MUST NOT READ `/data/visibility.json`.** These run in a
+container against the dev volume, so a policy a developer saved in the portal
+is ambient state the suite can pick up. That was harmless while scope failed
+OPEN — the worst case was "unrestricted", which is what a test wanted anyway.
+It is not harmless now: one resource group in force refuses every identity the
+suite invents, and `test_access.py` started failing with a 403 that had nothing
+to do with what it was asserting. Swap `visibility.STORE` for
+`PolicyStore(None)` or a temp file, as the tests around `_with_policy` already
+do.
 
 - **It is DIFFERENTIAL and EXHAUSTIVE at the single-element level.** For every
   element it builds a role allowing only that one, and a role allowing

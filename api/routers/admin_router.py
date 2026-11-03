@@ -51,6 +51,7 @@ from pydantic import BaseModel, Field
 import access_surface
 import grants as grant_catalogue
 import roles as role_rules
+import resource_groups as group_rules
 import scope as scope_rules
 import sections as section_catalogue
 import visibility
@@ -103,13 +104,30 @@ class VisibilityBody(BaseModel):
                     "element id is dropped too, for the ordinary reason. See "
                     "api/roles.py.")
 
+    resourceGroups: Optional[Any] = Field(
+        default=None,
+        description="Resource groups — named sets of customers and venues — "
+                    "keyed by id, or a list carrying ids. Each is {label, "
+                    "description, allAccess, ecs}. THE SECOND AXIS: a role "
+                    "says what somebody may RUN, a group says whose network "
+                    "they may run it on, and neither carries the other. "
+                    "Omit or send null to leave the catalogue alone; an "
+                    "explicit empty map turns the model OFF and reverts the "
+                    "deployment to the legacy per-person scope, which is "
+                    "refused while anybody is still assigned a group. The "
+                    "compiled-in 'all-access' is never written back. See "
+                    "api/resource_groups.py.")
+
     people: Optional[Any] = Field(
         default=None,
         description="Per-person policy, keyed by identity: "
                     '{"<identity>": {"role": "<roleId>|null", '
-                    '"scope": <block>|null}}. A role REPLACES the role '
-                    "default for both halves; scope replaces the role's scope "
-                    "rather than adding to it.")
+                    '"groups": ["<groupId>", ...]|null, '
+                    '"scope": <block>|null}}. `groups` is the territory once '
+                    "a group catalogue exists, and the ids UNION. `scope` is "
+                    "then a written-only compatibility shadow — see "
+                    "PolicyStore._shadow_scope — and is still the real "
+                    "setting before any group is saved.")
 
 
 def _role_authority(request: Request) -> bool:
@@ -329,6 +347,13 @@ async def get_roles(request: Request):
         # removal. The portal says so instead of offering a Delete that
         # silently does nothing.
         "undeletable": list(role_rules.undeletable()),
+        # THE ROLE A CALLER FALLS BACK TO when nothing names one for them —
+        # `auth.role_id_of`'s floor, which is what every gated request passes
+        # to `scope_for`. Emitted rather than hard-coded in the bundle because
+        # the portal has to resolve "what does this person reach" the same way
+        # the request path does, and a second copy of the id in TypeScript is
+        # the `test_sections.py` trap one layer up.
+        "defaultRole": role_rules.BUILTIN_USER,
         "mayEditRoles": _role_authority(request),
         "superGrant": grant_catalogue.GRANT_ADMIN_ROLES,
         "policy": visibility.STORE.policy(),
@@ -348,13 +373,65 @@ async def put_roles(body: VisibilityBody, request: Request):
             detail=f"{visibility.STORE.policy().get('path')} is not writable by "
                    "the container. Mount a writable volume at its directory.")
     _require_role_authority(request, body)
+    _guard_last_group(body)
     actor = getattr(request.state, "pisr_user", None) or "admin (passphrase)"
     try:
         return visibility.STORE.save(body.hidden, body.scope, actor,
-                                     roles=body.roles, people=body.people)
+                                     roles=body.roles, people=body.people,
+                                     resource_groups=body.resourceGroups)
     except RuntimeError as exc:
         logger.error("roles: save failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _guard_last_group(body: "VisibilityBody") -> None:
+    """
+    Nobody may delete the last resource group while somebody still holds one.
+
+    THE SAME SHAPE AS THE LAST-SUPER GUARD, and for the same reason: emptying
+    the catalogue does not merely remove some groups, it turns the whole model
+    OFF. `visibility.groups_in_force` is keyed on a catalogue existing, so a
+    document defining none reverts the deployment to the legacy rule — under
+    which anybody with no entry of their own is UNRESTRICTED.
+
+    So the failure this prevents is a widening, silently, caused by a
+    deletion. Somebody tidying up the last two groups would hand every person
+    on the estate every customer, and nothing on screen would say so.
+
+    Turning the model off deliberately is still allowed and is what the error
+    describes: unassign everybody first, which makes the consequence a thing
+    the administrator did rather than a thing that happened to them. Exactly
+    the distinction `_guard_last_super` draws between dismantling and
+    orphaning.
+    """
+    if body.resourceGroups is None:
+        return
+    if group_rules.clean(body.resourceGroups):
+        return
+
+    stored = visibility.STORE.policy()
+    if not stored.get("groupsInForce"):
+        return
+
+    # Judged against what the SUBMITTED document says people hold, not the
+    # stored one — a save that clears the catalogue and the assignments
+    # together is coherent and must not be refused.
+    people = body.people if isinstance(body.people, dict) else (
+        stored.get(visibility.PEOPLE_BLOCK) or {})
+    holders = sorted(
+        identity for identity, entry in people.items()
+        if isinstance(entry, dict) and (entry.get("groups") or []))
+    if not holders:
+        return
+
+    raise HTTPException(
+        status_code=409,
+        detail=f"Deleting the last resource group would switch the model off "
+               f"and return everyone to unrestricted access, but "
+               f"{len(holders)} person(s) are still assigned one "
+               f"({', '.join(holders[:5])}"
+               f"{', …' if len(holders) > 5 else ''}). Unassign them first "
+               "if that is what you mean.")
 
 
 def _combinations(policy: dict) -> List[Dict[str, Any]]:
@@ -625,9 +702,20 @@ async def get_preview(identity: str = Query(..., max_length=320,
     # WHERE each answer came from. The point of the whole endpoint: knowing
     # somebody is scoped is half an answer, knowing which box to change is the
     # half that ends the support call.
-    scope_source = ("person" if entry.get("scope") is not None
-                    else "role" if policy.get("scope", {}).get(role_id or "")
-                    else "unrestricted")
+    # WHICH OF TWO MODELS ANSWERED, before which box inside it. Once a group
+    # catalogue exists the role and the person's own scope block decide
+    # nothing, so naming them would send an administrator to edit a field
+    # that is no longer read — the exact failure this endpoint exists to
+    # prevent, one layer up.
+    groups_on = bool(policy.get("groupsInForce"))
+    assigned = list(entry.get("groups") or []) if entry.get("groups") is not None else None
+    if groups_on:
+        scope_source = "groups" if assigned else "unplaced"
+    else:
+        scope_source = ("person" if entry.get("scope") is not None
+                        else "role" if policy.get("scope", {}).get(role_id or "")
+                        else "unrestricted")
+    by_id = {g["id"]: g for g in policy.get("resourceGroups", [])}
     hidden_source = "role"
 
     warnings: List[str] = []
@@ -647,10 +735,23 @@ async def get_preview(identity: str = Query(..., max_length=320,
             "They cannot open a venue report. Deliberate for a role that only "
             "reads estate roll-ups; for anybody else it is probably a role "
             "that forgot to tick it.")
-    if not allowed.unrestricted and not allowed.ecs:
+    if groups_on and scope_source == "unplaced":
+        warnings.append(
+            "They hold no resource group, so every venue is refused. That is "
+            "the rule rather than a fault — reach is granted by assignment "
+            "here — but it is also what somebody reports as 'I can log in "
+            "and see nothing'. Assign them a group.")
+    elif not allowed.unrestricted and not allowed.ecs:
         warnings.append(
             "Scoped to no customers at all, so every venue is refused. An "
             "empty selection means nothing, not everything.")
+    missing_groups = [g for g in (assigned or []) if g not in by_id]
+    if missing_groups:
+        warnings.append(
+            f"They are assigned {', '.join(repr(g) for g in missing_groups)}, "
+            "which no longer exists. A deleted group confers nothing — it does "
+            "not fall back to anything — so that part of their territory is "
+            "simply gone.")
 
     return {
         "identity": who,
@@ -676,6 +777,11 @@ async def get_preview(identity: str = Query(..., max_length=320,
         "scope": {
             "unrestricted": allowed.unrestricted,
             "source": scope_source,
+            "groupsInForce": groups_on,
+            "groups": ([{"id": g,
+                         "label": (by_id.get(g) or {}).get("label", g),
+                         "missing": g not in by_id}
+                        for g in assigned] if assigned is not None else None),
             "ecs": ({} if allowed.unrestricted else
                     {tenant: ("*" if venues == scope_rules.ALL_VENUES
                               else sorted(venues))
