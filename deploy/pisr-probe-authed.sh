@@ -260,9 +260,9 @@ head_ "Admin routes (a user must be refused)"
 
 GHOST_ID="u_doesnotexist$$"
 
-gated "GET    /api/admin/visibility"              "$(code "$JAR" GET    /api/admin/visibility)"
+gated "GET    /api/admin/roles"                   "$(code "$JAR" GET    /api/admin/roles)"
 gated "GET    /api/admin/accounts"                "$(code "$JAR" GET    /api/admin/accounts)"
-gated "PUT    /api/admin/visibility"              "$(code "$JAR" PUT    /api/admin/visibility '{"hidden":null}')"
+gated "PUT    /api/admin/roles"                   "$(code "$JAR" PUT    /api/admin/roles '{"hidden":null}')"
 gated "POST   /api/admin/accounts"                "$(code "$JAR" POST   /api/admin/accounts '{"username":"NOT A VALID NAME","role":"admin"}')"
 gated "PATCH  /api/admin/accounts/{ghost}"        "$(code "$JAR" PATCH  "/api/admin/accounts/$GHOST_ID" '{"role":"admin"}')"
 gated "DELETE /api/admin/accounts/{ghost}"        "$(code "$JAR" DELETE "/api/admin/accounts/$GHOST_ID")"
@@ -306,7 +306,7 @@ if [ -n "$ADMIN_USER" ]; then
     *)   bad "admin login returned $ac — the checks needing admin are skipped." ;;
   esac
   if [ -n "$ADMIN_OK" ]; then
-    POL="$(bodyof "$AJAR" /api/admin/visibility)"
+    POL="$(bodyof "$AJAR" /api/admin/roles)"
     case "$POL" in
       *'"unrestricted": true'*|*'"unrestricted":true'*) SCOPED="no" ;;
       *'"ecs"'*)                                        SCOPED="yes" ;;

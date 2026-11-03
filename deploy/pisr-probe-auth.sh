@@ -121,7 +121,7 @@ printf '  gate mode: %s\n' "${MODE:-unknown}"
 # /api answering 200 unauthenticated is a hole.
 head_ "Unauthenticated surface"
 
-for p in /api/status /api/config /api/admin/visibility /api/admin/accounts \
+for p in /api/status /api/config /api/admin/roles /api/admin/accounts \
          /api/pisr/1/venues /api/r1/1/msp/mspEcs /api/checks; do
   c="$(code "$BASE$p")"
   case "$c" in

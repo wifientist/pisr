@@ -97,7 +97,7 @@ const SEVERITY: Record<string, {
  * Every section id this file renders, and the ONLY place the frontend holds
  * them as a list.
  *
- * Not fetched from /api/admin/visibility: that endpoint is admin-only, and an
+ * Not fetched from /api/admin/roles: that endpoint is admin-only, and an
  * ordinary user's page needs to know how many sections a tab has in order to
  * decide whether the tab still has anything on it. Not imported from the
  * Python catalogue either — the web build stage of the Dockerfile does not

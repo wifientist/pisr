@@ -284,7 +284,7 @@ def test_gated_paths_refuse_an_uncookied_caller():
         return
     for path in ("/api/status", "/api/config", "/api/pisr/1/report",
                  "/api/pisr/1/report.pdf", "/api/pisr/1/venues",
-                 "/api/admin/visibility", "/api/batch/runs",
+                 "/api/admin/roles", "/api/batch/runs",
                  # Both halves of batch: the gate keys on the /api/ prefix, so
                  # a grant-gated route is refused a session the same way an
                  # admin one is. A 403 for the wrong privilege comes later and

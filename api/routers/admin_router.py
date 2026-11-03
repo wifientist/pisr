@@ -19,9 +19,9 @@ policy that could hide the portal from the person editing it has a state you
 cannot get out of without an SSH session, and this tool is deployed somewhere
 that makes an SSH session inconvenient on purpose.
 
-  GET /api/admin/visibility   the catalogue, the current policy, and whether
+  GET /api/admin/roles        the catalogue, the current policy, and whether
                               this deployment can save at all
-  PUT /api/admin/visibility   replace the policy
+  PUT /api/admin/roles        replace the policy
 
 The policy has two halves and they are NOT the same kind of thing. `hidden`
 decides which report sections a user is shown and fails open; `scope` decides
