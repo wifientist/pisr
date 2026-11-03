@@ -82,7 +82,7 @@ ENV PRISM_BUILD_SHA=${PRISM_BUILD_SHA} \
     PRISM_BUILD_TIME=${PRISM_BUILD_TIME}
 LABEL org.opencontainers.image.revision="${PRISM_BUILD_SHA}" \
       org.opencontainers.image.created="${PRISM_BUILD_TIME}" \
-      org.opencontainers.image.source="https://github.com/wifientist/prism"
+      org.opencontainers.image.source="https://github.com/wifientist/pisr"
 
 # /data holds one file: the section visibility policy (see api/visibility.py).
 #

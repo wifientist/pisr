@@ -1,6 +1,6 @@
 [Unit]
 Description=Pull and redeploy PRISM if main has moved
-Documentation=https://github.com/wifientist/prism/blob/main/deploy/README.md
+Documentation=https://github.com/wifientist/pisr/blob/main/deploy/README.md
 # Rootless podman talks to the user's own socket, so this needs the user
 # session up. It is a --user unit; see deploy/README.md for enable-linger,
 # without which the session ends at logout and the timer stops with it.

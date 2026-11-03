@@ -1,5 +1,7 @@
 # PRISM — Property Rollout & Installation Status Monitor
 
+*Formerly known as PISR (Property Installation Status Report).*
+
 A read-only poll of one RUCKUS ONE venue: what was installed, what is online, how
 it is addressed, what VLANs and PoE it uses, which SSIDs are activated, and which
 of those are demonstrably carrying traffic. Then it checks about thirty things
@@ -11,7 +13,8 @@ single-purpose tool: no database, no Redis, no scheduler. Credentials come from
 passphrase by default, an SSO proxy, or [local accounts](#local-accounts) when
 neither of those is available.
 
-Formerly **PISR**. Settings are spelt `PRISM_<X>`; an env file still written
+PRISM was called **PISR** until November 2026. The repository and its URL
+(`github.com/wifientist/pisr`) keep the old name on purpose. Settings are spelt `PRISM_<X>`; an env file still written
 with the old `PISR_<X>` names keeps working, and the container log names any
 such line at start-up. Upgrading a deployed box: [`deploy/README.md`,
 "Renaming a box from PISR"](deploy/README.md#renaming-a-box-from-pisr).

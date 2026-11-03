@@ -1,6 +1,6 @@
 [Unit]
 Description=Check for PRISM updates every 5 minutes
-Documentation=https://github.com/wifientist/prism/blob/main/deploy/README.md
+Documentation=https://github.com/wifientist/pisr/blob/main/deploy/README.md
 
 [Timer]
 # Two minutes after boot, then every five. The boot run matters more than the
