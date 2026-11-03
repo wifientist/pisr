@@ -46,68 +46,6 @@ and gives all of that up in exchange for nothing.
   PRISM really is down and the deploy is the fix, `PRISM_ALLOW_UNHEALTHY_START=1`
   overrides it.
 
-## Renaming a box from PISR
-
-The tool was called PISR until 2026-11. A box set up before then has the old
-name in four places no commit can reach: the installed units
-(`pisr-update.{service,timer}`), `~/.config/pisr-update.env`, the production
-env file's `PISR_*` lines, and a running container called `pisr`. All four keep
-WORKING — `config.py` and `deploy/legacy-names.sh` read every `PISR_<X>` as
-`PRISM_<X>`, `deploy/pisr-update.sh` is a shim onto `prism-update.sh`, and the
-deploy script removes the `pisr` container when it brings up `prism`. The data
-volume is not renamed at all (see the note in `docker-compose.yml`), so
-accounts, roles, baselines and the batch record carry straight across.
-
-**Stop the old timer BEFORE the rename commit reaches `main`.** The first tick
-after it would otherwise be run by the OLD script, which knows nothing of the
-above: it hands compose only `PISR_` names, the build fails or the new
-container cannot bind the port, and it rolls back — and then retries the same
-commit every five minutes. Cut over by hand instead:
-
-```bash
-# 1. Before pushing the rename:
-systemctl --user stop pisr-update.timer
-
-# 2. After it is on main. Swap the units for the renamed ones; the old
-#    settings file is still read (the new unit loads both).
-systemctl --user disable pisr-update.timer
-rm ~/.config/systemd/user/pisr-update.{service,timer}
-cp ~/app/deploy/prism-update.{service,timer} ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable prism-update.timer
-
-# 3. Run the cutover deploy now, rather than waiting for the timer. It builds,
-#    removes `pisr`, starts `prism`, and checks /healthz as usual. Run by
-#    hand, the script loads ~/.config/{pisr,prism}-update.env itself — it did
-#    NOT before 26619b9's follow-up, and the first cutover started a container
-#    with no env file (`R1_TENANT_ID is not set` in `podman logs prism`). If
-#    you see that, the cure is the env file reaching compose, not a rollback:
-#      set -a; . ~/.config/pisr-update.env; set +a
-#      export PRISM_ENV_FILE="$PISR_ENV_FILE"   # plus PRISM_BIND / PRISM_PORT
-#      podman rm -f prism && podman-compose up -d
-~/app/deploy/prism-update.sh
-systemctl --user start prism-update.timer
-
-# 4. The status-script symlinks.
-rm -f ~/pisr-deploy-status ~/pisr-app-status
-ln -sf ~/app/deploy/prism-deploy-status.sh ~/prism-deploy-status
-ln -sf ~/app/deploy/prism-app-status.sh    ~/prism-app-status
-```
-
-Everybody is signed out once — the session cookie is now `prism_session` —
-and that is all a user sees. The container log names every setting still
-arriving under its old spelling (`Settings: N still use the pre-rename PISR_
-name`); rename them when convenient, then recreate the container:
-
-```bash
-sed -i 's/^\([[:space:]]*\)PISR_/\1PRISM_/' ~/.config/pisr-update.env /home/appuser/pisr-config/pisr.env
-mv ~/.config/pisr-update.env ~/.config/prism-update.env
-```
-
-The env file's own path (`~/pisr-config/pisr.env`) can stay as it is;
-`PRISM_ENV_FILE` names it. The shims and `legacy-names.sh` can be deleted
-once no box still uses an old name.
-
 ## One-time host setup
 
 Run as the user that owns the containers (`appuser` below).
@@ -128,13 +66,18 @@ PRISM_APP_DIR=/home/appuser/app
 PRISM_ENV_FILE=/home/appuser/prism-config/prism.env
 EOF
 
-# 3. Install the units.
+# 3. The data volume. Compose will NOT create it (it is `external:` in
+#    docker-compose.yml), so a missing one is a refusal to start rather than
+#    PRISM coming up on a blank volume with every account gone.
+podman volume create prism-config
+
+# 4. Install the units.
 mkdir -p ~/.config/systemd/user
 cp ~/app/deploy/prism-update.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now prism-update.timer
 
-# 4. Start PRISM again after a reboot. Rootless podman has no daemon to honour a
+# 5. Start PRISM again after a reboot. Rootless podman has no daemon to honour a
 #    restart policy; this unit does it at boot, and ONLY for containers with
 #    `restart: always` (it runs `start --all --filter restart-policy=always`).
 #    Miss this and a reboot leaves PRISM down with the tunnel reporting healthy,

@@ -53,7 +53,7 @@ three. RUCKUS has no `notApplicable` — it is vendor guidance, read-only, and a
 field it says nothing about is simply absent.
 
 THE ORG BASELINE IS NOW A FILE PRISM WRITES, joining the visibility policy and
-the accounts file on the pisr-config volume. That is not a contradiction of
+the accounts file on the prism-config volume. That is not a contradiction of
 "PRISM stores nothing" for the same reason those two are not: it holds
 recommended values keyed by R1 path — operator configuration, no venue data, no
 device, no credential. See visibility.py for the fuller version of the

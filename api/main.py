@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 # raises if anything required is missing or malformed, so a misconfigured
 # container fails to start rather than failing every request.
 from config import AUTH, CONTROLLER, FETCH_WORKERS, SESSION_SECRET_IS_EPHEMERAL  # noqa: E402
-import config as _config  # noqa: E402
 from auth import (  # noqa: E402
     SecurityHeadersMiddleware, SessionGateMiddleware, proxy_preview,
     router as auth_router)
@@ -90,14 +89,6 @@ async def _widen_report_executor() -> None:
 
 # Outermost of all, so it also covers the SPA, the 401s and the error pages.
 app.add_middleware(SecurityHeadersMiddleware)
-
-# Every start, so an env file still written for the old name is visible rather
-# than merely tolerated. Values only ever come from these — see config._env.
-if _config.LEGACY_USED:
-    logger.warning(
-        "Settings: %d still use the pre-rename PISR_ name and are being honoured "
-        "— rename them to PRISM_ when convenient: %s",
-        len(_config.LEGACY_USED), ", ".join(sorted(_config.LEGACY_USED)))
 
 if not AUTH.enabled:
     logger.warning(

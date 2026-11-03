@@ -7,21 +7,8 @@
 
 set -uo pipefail
 
-# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
-_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=legacy-names.sh
-[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
-
 APP_DIR="${PRISM_APP_DIR:-$HOME/app}"
 UNIT=prism-update
-# A box set up before the rename still has the units installed as pisr-update
-# until someone reinstalls them; report on whichever is actually enabled.
-if ! systemctl --user is-enabled "$UNIT.timer" >/dev/null 2>&1 \
-   && systemctl --user is-enabled pisr-update.timer >/dev/null 2>&1; then
-  UNIT=pisr-update
-  echo "  note: the timer is still installed under its pre-rename name, pisr-update."
-  echo "        See deploy/README.md, \"Renaming a box from PISR\"."
-fi
 
 bar() { printf '\n\033[1m── %s ──\033[0m\n' "$1"; }
 
@@ -43,7 +30,6 @@ bar "Versions — these three should match"
 cd "$APP_DIR" 2>/dev/null || { echo "  no such dir: $APP_DIR"; exit 1; }
 git fetch -q origin main 2>/dev/null
 _ctr=prism
-podman container exists prism 2>/dev/null || ! podman container exists pisr 2>/dev/null || _ctr=pisr
 running="$(podman inspect --format \
   '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$_ctr" 2>/dev/null)"
 printf '  %-14s %s\n' "origin/main:" "$(git rev-parse --short origin/main 2>/dev/null || echo '?')"

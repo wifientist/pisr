@@ -35,11 +35,6 @@
 
 set -uo pipefail
 
-# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
-_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=legacy-names.sh
-[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
-
 BASE="${1:-}"
 
 # Same derivation as prism-app-status.sh: the published address, not localhost.
@@ -61,8 +56,7 @@ if [ -z "$BASE" ]; then
     printf 'is the path that is actually exposed.\n' >&2
     exit 2
   fi
-  _get1() { [ -r "$_env_file" ] && sed -n "s/^$1=//p" "$_env_file" | tail -1 | tr -d '"'"'"'\r'; }
-  _get() { local v; v="$(_get1 "$1")"; [ -n "$v" ] || v="$(_get1 "$(legacy_name "$1")")"; printf '%s' "$v"; }
+  _get() { [ -r "$_env_file" ] && sed -n "s/^$1=//p" "$_env_file" | tail -1 | tr -d '"'"'"'\r'; }
   _bind="$(_get PRISM_BIND)"
   _port="$(_get PRISM_PORT)"
   case "$_bind" in ""|"0.0.0.0"|"::"|"*") _bind="127.0.0.1" ;; esac

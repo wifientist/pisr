@@ -7,7 +7,7 @@
 #
 # One volume, and it holds one small JSON file. PRISM still stores no TENANT
 # data — no database, no cache, no snapshot directory, no report that outlives
-# the response that carried it. What `pisr-config` holds is the section
+# the response that carried it. What `prism-config` holds is the section
 # visibility policy: which report cards an ordinary user is shown, written by
 # an admin through the portal. See api/visibility.py for why that is an
 # exception to the rule rather than a hole in it, and guard the distinction —
@@ -76,7 +76,7 @@ services:
       # deploy performs — a policy written into the image's own filesystem
       # would silently revert at the next deploy, which reads as the save
       # having quietly undone itself hours later.
-      - pisr-config:/data
+      - prism-config:/data
     # secrets:
     #   - r1_shared_secret
     #   - prism_passphrase
@@ -87,13 +87,21 @@ services:
         max-file: "3"
 
 volumes:
-  # STILL `pisr-config`, from before the rename to PRISM, and deliberately so.
-  # Compose names the real volume after this key (`<project>_pisr-config`), so
-  # renaming the key does not rename the volume — it creates a NEW, EMPTY one
-  # and mounts that instead. Every account, role, baseline and batch record
-  # would appear to vanish on the next deploy, with the old volume sitting
-  # intact and unmounted beside it. The name is never shown to anyone; leave it.
-  pisr-config:
+  # EXTERNAL, and named exactly, so compose never makes it. Create it once per
+  # host before the first `up`:
+  #
+  #   podman volume create prism-config      (or: docker volume create …)
+  #
+  # The alternative — compose creating `<project>_<key>` on demand — means that
+  # anything which changes the project name or the key (renaming the checkout
+  # directory, renaming this entry) mounts a NEW EMPTY volume and starts
+  # happily on it. Every account, role, baseline and batch record appears to
+  # vanish while the real volume sits intact and unmounted. A missing external
+  # volume is a refusal to start instead, which the deploy script's health
+  # check turns into a rollback rather than an outage.
+  prism-config:
+    external: true
+    name: prism-config
 
 # secrets:
 #   r1_shared_secret:

@@ -3,26 +3,11 @@
 Poll one RUCKUS ONE venue, shape it, check it, render it. One purpose, done
 properly.
 
-**Renamed from PISR in 2026-11.** Everything in the repo says PRISM except
-what is deliberately left on the OLD name, and each of those is a data address
-or an outside reference, not an oversight — do not "finish the rename" on them:
-
-- **The `pisr-config` / `pisr-config-dev` volume keys** in both compose files.
-  Compose derives the real volume name from the key, so renaming it mounts a
-  new EMPTY volume and every account, role, baseline and batch record appears
-  to vanish.
-- **`PISR_<X>` is still read as `PRISM_<X>`** — `config._env` in Python,
-  `deploy/legacy-names.sh` in shell — because production's env file lives
-  outside the repo and still says PISR_. `config.LEGACY_USED` names the ones
-  that supplied a value and `main.py` logs them at every start.
-- **`deploy/pisr-{update,app-status,deploy-status}.sh` are shims** onto the
-  prism- scripts: an installed unit and operators' symlinks name those paths.
-- **The deploy script treats a container named `pisr` as its own to remove**
-  (`prism-update.sh`, `container_name`): compose does not remove a container
-  whose service was renamed, and the old one holds the port and answers the
-  health check.
-
-The cutover runbook is `deploy/README.md`, "Renaming a box from PISR".
+**Renamed from PISR in 2026-11.** The GitHub repository and the local checkout
+directory keep the old name (`wifientist/pisr`, `~/code/pisr`) by the owner's
+decision; nothing else should. The compatibility layer that carried the
+production box across (a `PISR_` env fallback, shim scripts, old-container
+removal) has been removed — a `PISR_<X>` setting is now simply unread.
 
 It began as an extraction from rtools2 and has since diverged into its own
 thing — see "Lineage" below before assuming any file is meant to match an
@@ -100,7 +85,7 @@ upstream copy. It is not.
   something needs to happen repeatedly, a person clicks the button.
 - **PRISM stores no report.** No snapshot files, no cache, no database, no
   report that outlives the response carrying it. It writes exactly FOUR files,
-  all on the `pisr-config` volume. Three are configuration and hold nothing
+  all on the `prism-config` volume. Three are configuration and hold nothing
   read off the customer's network; the fourth — the batch record — is the one
   deliberate exception, and holds counts only:
 
@@ -783,6 +768,15 @@ covered on the next run with nothing edited.
   is picked, which React sees as the hook count changing mid-session — "rendered
   more hooks than during the previous render", and a blank page. The tab
   fallback effect is up with the other hooks for exactly this reason.
+
+- **The data volume is `external: true` with an exact `name:`** —
+  `prism-config` in production, `prism-config-dev` in dev — so compose never
+  creates it and it does not depend on the project name. A compose-managed
+  volume is named `<project>_<key>`, so renaming the checkout directory or the
+  key silently mounts a NEW EMPTY volume and PRISM starts happily on it, every
+  account gone. External means a missing volume refuses to start, which the
+  deploy script's health check turns into a rollback. Do not "simplify" it back
+  to a plain named volume. A fresh host needs `podman volume create prism-config`.
 
 - **`/data` is created and chowned in the Dockerfile before `USER prism`.**
   Docker and podman seed a fresh named volume from what the image has at the

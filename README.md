@@ -13,11 +13,8 @@ single-purpose tool: no database, no Redis, no scheduler. Credentials come from
 passphrase by default, an SSO proxy, or [local accounts](#local-accounts) when
 neither of those is available.
 
-PRISM was called **PISR** until November 2026. The repository and its URL
-(`github.com/wifientist/pisr`) keep the old name on purpose. Settings are spelt `PRISM_<X>`; an env file still written
-with the old `PISR_<X>` names keeps working, and the container log names any
-such line at start-up. Upgrading a deployed box: [`deploy/README.md`,
-"Renaming a box from PISR"](deploy/README.md#renaming-a-box-from-pisr).
+PRISM was called **PISR** until November 2026. The repository keeps the old
+name on purpose (`github.com/wifientist/pisr`); everything inside it says PRISM.
 
 ## Quick start
 
@@ -26,6 +23,7 @@ cp .env.example .env
 chmod 600 .env
 $EDITOR .env                 # R1_TENANT_ID, R1_CLIENT_ID, R1_SHARED_SECRET
                              # and PRISM_AUTH_PASSPHRASE
+docker volume create prism-config   # once; compose will not create it — see docker-compose.yml
 docker compose up --build
 ```
 

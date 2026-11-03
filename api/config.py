@@ -180,29 +180,6 @@ class AuthConfig:
     client_ip_header: str
 
 
-def _env_exact(name: str) -> str:
-    """`name`, preferring the contents of the file at `<name>_FILE`."""
-    path = (os.getenv(f"{name}_FILE") or "").strip()
-    if path:
-        try:
-            return Path(path).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise RuntimeError(f"{name}_FILE is set to {path!r} but could not be read: {exc}")
-    return (os.getenv(name) or "").strip()
-
-
-# The tool was called PISR until 2026-11, and every setting was PISR_<X>. A
-# deployed env file still says that — production's lives OUTSIDE the repo, so
-# no commit can rename what is in it — and a rename that made every one of
-# those lines silently inert would turn the next deploy into an outage that
-# looks like a config fault: the auth mode reverting to `passphrase`, the
-# trusted-proxy list vanishing. So PRISM_<X> is read first and PISR_<X> after
-# it, `_FILE` form included, and each legacy name that actually supplied a
-# value is recorded so main.py can say which lines are worth renaming.
-LEGACY_PREFIX = "PISR_"
-LEGACY_USED: set = set()
-
-
 def _env(name: str) -> str:
     """
     Read `name`, preferring the contents of the file at `<name>_FILE`.
@@ -210,17 +187,14 @@ def _env(name: str) -> str:
     The file form wins when both are present: if someone has gone to the
     trouble of mounting a secret, an env var left over from an earlier
     deployment should not silently take precedence over it.
-
-    A `PRISM_` name falls back to its pre-rename `PISR_` spelling; see above.
     """
-    value = _env_exact(name)
-    if value or not name.startswith("PRISM_"):
-        return value
-    legacy = LEGACY_PREFIX + name[len("PRISM_"):]
-    value = _env_exact(legacy)
-    if value:
-        LEGACY_USED.add(legacy)
-    return value
+    path = (os.getenv(f"{name}_FILE") or "").strip()
+    if path:
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError(f"{name}_FILE is set to {path!r} but could not be read: {exc}")
+    return (os.getenv(name) or "").strip()
 
 
 def _required(name: str) -> str:

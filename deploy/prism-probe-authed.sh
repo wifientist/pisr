@@ -48,11 +48,6 @@
 
 set -uo pipefail
 
-# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
-_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=legacy-names.sh
-[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
-
 BASE="${1:-}"
 [ -n "$BASE" ] || { echo "usage: PRISM_PROBE_USER=... PRISM_PROBE_PASS=... $0 <base-url>" >&2; exit 2; }
 BASE="${BASE%/}"
@@ -88,10 +83,10 @@ if [ -n "${PRISM_PROBE_CREDS:-}" ]; then
     # An inline `#` is NOT treated as a comment, because a password may contain
     # one. Comments must be on their own line.
     case "$_k" in
-      PRISM_PROBE_USER|PISR_PROBE_USER)       PRISM_PROBE_USER="$_v" ;;
-      PRISM_PROBE_PASS|PISR_PROBE_PASS)       PRISM_PROBE_PASS="$_v" ;;
-      PRISM_PROBE_ADMIN_USER|PISR_PROBE_ADMIN_USER) PRISM_PROBE_ADMIN_USER="$_v" ;;
-      PRISM_PROBE_ADMIN_PASS|PISR_PROBE_ADMIN_PASS) PRISM_PROBE_ADMIN_PASS="$_v" ;;
+      PRISM_PROBE_USER)       PRISM_PROBE_USER="$_v" ;;
+      PRISM_PROBE_PASS)       PRISM_PROBE_PASS="$_v" ;;
+      PRISM_PROBE_ADMIN_USER) PRISM_PROBE_ADMIN_USER="$_v" ;;
+      PRISM_PROBE_ADMIN_PASS) PRISM_PROBE_ADMIN_PASS="$_v" ;;
       *) printf '  \033[33mnote\033[0m  ignoring unknown key %s in %s\n' "$_k" "$PRISM_PROBE_CREDS" ;;
     esac
   done < "$PRISM_PROBE_CREDS"

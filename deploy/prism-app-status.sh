@@ -13,20 +13,14 @@
 
 set -uo pipefail
 
-# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
-_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=legacy-names.sh
-[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
-
-ENV_FILE="${PRISM_ENV_FILE:-$(legacy_env_file "$HOME/prism-config/prism.env")}"
+ENV_FILE="${PRISM_ENV_FILE:-$HOME/prism-config/prism.env}"
 bar() { printf '\n\033[1m── %s ──\033[0m\n' "$1"; }
 
 # Derived exactly as deploy/prism-update.sh derives it — bind and port both come
 # from the env file compose reads, because compose publishes on BIND:PORT and
 # either half can be non-default.
-_envget1() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^[:space:]#]*\).*/\1/p" \
+_envget() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^[:space:]#]*\).*/\1/p" \
               "$ENV_FILE" 2>/dev/null | tail -1; }
-_envget() { local v; v="$(_envget1 "$1")"; [ -n "$v" ] || v="$(_envget1 "$(legacy_name "$1")")"; printf '%s' "$v"; }
 port="$(_envget PRISM_PORT)"; bind="$(_envget PRISM_BIND)"
 case "$bind" in
   ""|0.0.0.0|"*") host="127.0.0.1" ;;
@@ -36,9 +30,7 @@ case "$bind" in
 esac
 URL="${PRISM_HEALTH_URL:-http://${host}:${port:-8080}/healthz}"
 
-# The container is `prism`, or `pisr` on a box not yet cut over from the old name.
 CTR=prism
-podman container exists prism 2>/dev/null || ! podman container exists pisr 2>/dev/null || CTR=pisr
 
 bar "Container"
 podman ps --filter name="^$CTR\$" --format '  {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null \

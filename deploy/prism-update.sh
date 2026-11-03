@@ -24,26 +24,16 @@
 
 set -euo pipefail
 
-# Pre-rename (PISR_) settings still count; see deploy/legacy-names.sh.
-_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# shellcheck source=legacy-names.sh
-[ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
-
 # Run by hand, load the settings the unit would have loaded. The unit reads
-# them with EnvironmentFile=; a shell does not, so a hand run used to see no
-# PRISM_ENV_FILE, hand compose `.env` instead of the production env file, and
-# start a container with no R1 credentials — which crash-looped, failed the
-# health check, and "rolled back" to the same commit. Exactly that happened
-# during the 2026-11-03 cutover. Only when PRISM_ENV_FILE is unset, so a value
-# the unit or the caller already gave is never overridden; same order as the
-# unit, the PRISM file winning.
-if [ -z "${PRISM_ENV_FILE:-}" ]; then
-  for _f in "$HOME/.config/pisr-update.env" "$HOME/.config/prism-update.env"; do
-    # shellcheck disable=SC1090
-    [ -r "$_f" ] && { set -a; . "$_f"; set +a; }
-  done
-  unset _f
-  [ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
+# them with EnvironmentFile=; a shell does not, and without them a hand run
+# sees no PRISM_ENV_FILE, hands compose `./.env` instead of the production env
+# file, and starts a container with no R1 credentials. It crash-loops, fails
+# the health check, and is "rolled back" — to the same commit, if the tree was
+# pulled by hand. That was a real outage (2026-11-03). Only when
+# PRISM_ENV_FILE is unset, so a value the unit or the caller gave wins.
+if [ -z "${PRISM_ENV_FILE:-}" ] && [ -r "$HOME/.config/prism-update.env" ]; then
+  # shellcheck disable=SC1091
+  set -a; . "$HOME/.config/prism-update.env"; set +a
 fi
 
 APP_DIR="${PRISM_APP_DIR:-$HOME/app}"
@@ -56,23 +46,18 @@ COMPOSE="${PRISM_COMPOSE:-podman-compose}"
 # commit rather than this line. So read PRISM_PORT from the same env file
 # compose reads, and fall back to the same default compose falls back to.
 # Setting PRISM_HEALTH_URL explicitly still wins over all of it.
-_envget1() {  # last uncommented assignment of $1 in the env file, or ""
+_envget() {  # last uncommented assignment of $1 in the env file, or ""
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\\([^[:space:]#]*\\).*/\\1/p" \
     "$_env_file" 2>/dev/null | tail -1
-}
-_envget() {  # ...trying the pre-rename PISR_ spelling when the PRISM_ one is absent
-  local v; v="$(_envget1 "$1")"
-  [ -n "$v" ] || v="$(_envget1 "$(legacy_name "$1")")"
-  printf '%s' "$v"
 }
 
 _env_file="${PRISM_ENV_FILE:-${PRISM_APP_DIR:-$HOME/app}/.env}"
 
-# compose interpolates ${PRISM_BIND} and ${PRISM_PORT} into the published port,
-# and falls back to 0.0.0.0:8080 when they are unset. A box whose env file still
-# says PISR_BIND would therefore come back up on EVERY interface after the
-# rename, quietly, and pass its health check doing it. Hand compose the value
-# the env file actually holds, under the name compose now asks for.
+# compose interpolates ${PRISM_BIND} and ${PRISM_PORT} into the published port
+# from ITS environment, not from the container's env file, and falls back to
+# 0.0.0.0:8080 when they are unset. The health URL below is derived from the env
+# file. If the two disagreed, PRISM would come up on every interface and still
+# pass its health check. So compose is handed what the env file holds.
 for _v in PRISM_BIND PRISM_PORT; do
   if [ -z "${!_v:-}" ]; then
     _val="$(_envget "$_v")"
@@ -188,7 +173,7 @@ _holder_is_live_deploy() {
   pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   [ -d "/proc/$pid" ] || return 1
-  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE '(prism|pisr)-update' || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'prism-update' || return 1
   return 0
 }
 
@@ -242,33 +227,7 @@ running_sha() {
   command -v "$engine" >/dev/null 2>&1 || { echo ""; return 0; }
   $engine inspect --format \
     '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "$(container_name)" 2>/dev/null || echo ""
-}
-
-# The container the CHECKED-OUT compose file names, and the one it replaced.
-#
-# The tool was renamed from PISR to PRISM, and the compose service and its
-# container_name with it. Compose does not remove a container whose service has
-# vanished from the file, so the first deploy after the rename would create
-# `prism` beside a still-running `pisr` — and `pisr` holds the published port.
-# `prism` fails to bind, the health check is answered by the OLD container,
-# and the deploy reports success while serving the previous release. Every
-# later tick then inspects `prism`, finds the new label, and sees nothing
-# wrong. So the other name is treated as ours to remove, in either direction:
-# a rollback to a pre-rename commit needs `prism` out of the way just as much.
-container_name() {
-  local n
-  n="$(sed -n 's/^[[:space:]]*container_name:[[:space:]]*\([A-Za-z0-9_.-]*\).*/\1/p' \
-        "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1)"
-  printf '%s' "${PRISM_CONTAINER:-${n:-prism}}"
-}
-other_container_name() {
-  case "$(container_name)" in pisr) printf 'prism' ;; *) printf 'pisr' ;; esac
-}
-other_container_running() {
-  local engine="${PRISM_ENGINE:-podman}"
-  command -v "$engine" >/dev/null 2>&1 || return 1
-  [ "$($engine inspect --format '{{.State.Running}}' "$(other_container_name)" 2>/dev/null)" = "true" ]
+    "${PRISM_CONTAINER:-prism}" 2>/dev/null || echo ""
 }
 
 
@@ -287,13 +246,6 @@ running="$(running_sha)"
 drifted=""
 if [ -n "$running" ] && [ "$running" != "$target" ] && [ "$current" = "$target" ]; then
   drifted="yes"
-fi
-
-# The rename's half-finished state: our container exists but the other name is
-# the one actually running and holding the port. See container_name().
-if [ "$current" = "$target" ] && other_container_running; then
-  drifted="yes"
-  running="$(other_container_name)"
 fi
 
 if [ "$current" = "$target" ] && [ -z "$drifted" ]; then
@@ -329,17 +281,6 @@ deploy() {
   # 9>&- closes the lock fd for this command and everything it spawns. See the
   # note by the flock above — without it the container's supervisor processes
   # inherit the lock and no later run can ever take it.
-  # The other name, if it exists, goes first — it holds the published port.
-  # Build before removing it, so the outage is a container swap rather than a
-  # whole image build. Only ever true across the PISR -> PRISM rename.
-  local engine="${PRISM_ENGINE:-podman}" other
-  other="$(other_container_name)"
-  if command -v "$engine" >/dev/null 2>&1 && $engine container exists "$other" 2>/dev/null; then
-    log "  removing container '$other' — this commit names its container '$(container_name)'"
-    $COMPOSE build 9>&- || return 1
-    $engine rm -f "$other" >/dev/null 9>&- || return 1
-  fi
-
   $COMPOSE up -d --build 9>&-
 }
 
