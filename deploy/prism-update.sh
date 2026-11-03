@@ -29,6 +29,23 @@ _here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 # shellcheck source=legacy-names.sh
 [ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
 
+# Run by hand, load the settings the unit would have loaded. The unit reads
+# them with EnvironmentFile=; a shell does not, so a hand run used to see no
+# PRISM_ENV_FILE, hand compose `.env` instead of the production env file, and
+# start a container with no R1 credentials — which crash-looped, failed the
+# health check, and "rolled back" to the same commit. Exactly that happened
+# during the 2026-11-03 cutover. Only when PRISM_ENV_FILE is unset, so a value
+# the unit or the caller already gave is never overridden; same order as the
+# unit, the PRISM file winning.
+if [ -z "${PRISM_ENV_FILE:-}" ]; then
+  for _f in "$HOME/.config/pisr-update.env" "$HOME/.config/prism-update.env"; do
+    # shellcheck disable=SC1090
+    [ -r "$_f" ] && { set -a; . "$_f"; set +a; }
+  done
+  unset _f
+  [ -r "$_here/legacy-names.sh" ] && . "$_here/legacy-names.sh"
+fi
+
 APP_DIR="${PRISM_APP_DIR:-$HOME/app}"
 BRANCH="${PRISM_BRANCH:-main}"
 REMOTE="${PRISM_REMOTE:-origin}"

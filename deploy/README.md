@@ -77,7 +77,14 @@ systemctl --user daemon-reload
 systemctl --user enable prism-update.timer
 
 # 3. Run the cutover deploy now, rather than waiting for the timer. It builds,
-#    removes `pisr`, starts `prism`, and checks /healthz as usual.
+#    removes `pisr`, starts `prism`, and checks /healthz as usual. Run by
+#    hand, the script loads ~/.config/{pisr,prism}-update.env itself — it did
+#    NOT before 26619b9's follow-up, and the first cutover started a container
+#    with no env file (`R1_TENANT_ID is not set` in `podman logs prism`). If
+#    you see that, the cure is the env file reaching compose, not a rollback:
+#      set -a; . ~/.config/pisr-update.env; set +a
+#      export PRISM_ENV_FILE="$PISR_ENV_FILE"   # plus PRISM_BIND / PRISM_PORT
+#      podman rm -f prism && podman-compose up -d
 ~/app/deploy/prism-update.sh
 systemctl --user start prism-update.timer
 
