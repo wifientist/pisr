@@ -840,6 +840,18 @@ class PolicyStore:
         # skipped would be correct on disk and wrong in memory until the
         # container restarted. `_people` was exactly that bug once already.
         cleaned_roles = self._migrate_hidden(role_rules.clean(roles), cleaned)
+        # AN UNCHANGED BUILT-IN IS NOT WRITTEN BACK. The portal sends every
+        # role on every save, built-ins included, and a stored `admin` replaces
+        # the compiled one — whose `visible` list is COMPUTED from the
+        # catalogue. Persisting an echo froze it at today's catalogue, so the
+        # next card a release added was invisible to administrators until
+        # somebody ticked it, on the one role that is supposed to see
+        # everything. Only an EDITED built-in is stored, which is the override
+        # `roles.resolve` exists for. Same rule as `all-access` below.
+        cleaned_roles = {
+            rid: r for rid, r in cleaned_roles.items()
+            if r != role_rules.builtins().get(rid)
+        }
         # Built-ins are NOT written back: `resolve` compiles `all-access` in,
         # so a portal echoing the catalogue would otherwise persist a copy of
         # it and the compiled-in one would stop being the thing that answers.

@@ -806,6 +806,41 @@ def test_the_built_in_admin_role_can_always_repair_a_broken_policy():
         sections.ALL_ELEMENT_IDS)
 
 
+def test_an_echoed_built_in_role_is_not_frozen():
+    """
+    The portal saves EVERY role, built-ins included. A stored `admin` replaces
+    the compiled one, whose element list is computed from the catalogue — so
+    persisting an unchanged echo froze it, and the next card a release added
+    was hidden from administrators. Only an EDITED built-in may be stored.
+    """
+    import json
+    import tempfile
+    import roles as role_rules
+    import visibility
+
+    tmp = tempfile.mkdtemp()
+    path = f"{tmp}/visibility.json"
+    store = visibility.PolicyStore(path)
+
+    # Exactly what a portal sends back: the resolved catalogue, unedited.
+    echo = {r.id: r.public() for r in store.roles()}
+    store.save(hidden=None, actor="test", roles=echo)
+    with open(path, encoding="utf-8") as fh:
+        written = json.load(fh)
+    assert not written.get("roles"), (
+        f"unchanged built-ins were persisted: {sorted(written.get('roles', {}))}")
+
+    # An edit IS stored — that is the override the built-ins allow.
+    edited = dict(echo)
+    edited["user"] = {**echo["user"], "label": "Installer"}
+    store.save(hidden=None, actor="test", roles=edited)
+    with open(path, encoding="utf-8") as fh:
+        written = json.load(fh)
+    assert set(written["roles"]) == {"user"}, sorted(written["roles"])
+    assert store.role_for(None, "user").label == "Installer"
+    assert store.role_for(None, "admin") == role_rules.builtins()["admin"]
+
+
 def test_a_persons_groups_decide_their_reach():
     """
     Two regional leaders, identical duties, different territories — the case

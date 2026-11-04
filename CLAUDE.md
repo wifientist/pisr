@@ -349,6 +349,11 @@ that": **the role they were assigned**.
   ships in the repo, overridable on the volume. An account already said
   `"role": "admin"`, so collapsing the old binary into a role id migrated
   nobody.
+  **An UNCHANGED built-in is never written back** (`PolicyStore.save`): the
+  portal sends every role on every save, and a stored `admin` replaces the
+  computed one, so persisting an echo froze its element list and hid the next
+  release's cards from administrators. Only an edited built-in is stored.
+  `test_an_echoed_built_in_role_is_not_frozen` holds it.
 - **A DELETED ROLE CONFERS NOTHING — not even the defaults.** No role assigned
   means the built-in `user`; a role that was DELETED means its holder was
   deliberately given a job, and losing the definition must not promote them
