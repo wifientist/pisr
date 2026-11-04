@@ -545,9 +545,17 @@ def ap_views(aps: List[Dict[str, Any]],
                 "channel": radio.get("channel"),
                 "width": radio.get("channelBandwidth"),
                 "power": radio.get("transmitterPower"),
+                # The setting above is a label ("Auto", "-3"); these two are
+                # what the radio is actually doing, in dBm.
+                "actualTxPower": radio.get("actualTxPower"),
+                "calibrationTxPower": radio.get("calibrationTxPower"),
+                "rssi": radio.get("rssi"),
                 "chainmask": radio.get("chainmask"),
                 "ssids": names,
             })
+
+        afc = ap.get("afcStatus") if isinstance(ap.get("afcStatus"), dict) else {}
+        mesh_status = ap.get("meshStatus") if isinstance(ap.get("meshStatus"), dict) else {}
 
         uplink_status = ap.get("poePortStatus") or next(
             (p.get("physicalLink") for p in lan_ports
@@ -574,6 +582,12 @@ def ap_views(aps: List[Dict[str, Any]],
             # Precomputed so `checks.py` stays a pure reader and the mesh
             # vocabulary lives in exactly one place.
             "meshing": _is_meshing(ap.get("meshRole")),
+            "meshHops": mesh_status.get("hopCount"),
+            # R1's own derived verdict: UNKNOWN / POOR / AVERAGE / EXCELLENT.
+            "health": ap.get("healthStatus"),
+            "afcState": afc.get("afcState"),
+            "afcPowerState": afc.get("powerState"),
+            "afcMaxPower": afc.get("maxPower"),
             "lastSeen": ap.get("lastSeenTime"),
             # SECONDS. R1 does not label the unit and this is inferred from the
             # magnitudes a live tenant returns — values clustered at 1.9M-6.5M,
@@ -606,6 +620,115 @@ def ap_views(aps: List[Dict[str, Any]],
             "ssidsBroadcast": sorted(set(ssids)),
         })
     return views
+
+
+def _band_key(value) -> Optional[str]:
+    """'2.4', '5' or '6' out of whatever R1 calls a band ('5G', '2.4 GHz', '6')."""
+    text = str(value or "").strip().lower()
+    if text.startswith("6"):
+        return "6"
+    if text.startswith("5"):
+        return "5"
+    if text.startswith("2"):
+        return "2.4"
+    return None
+
+
+def _median(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+# A clients' median below the "Good" bucket of client_card's RSSI tally. Needs a
+# few clients before it means anything — one phone in a stairwell is not an AP
+# problem.
+AP_WEAK_MEDIAN_RSSI = -70
+AP_WEAK_MIN_CLIENTS = 3
+
+
+def ap_detail_card(aps: List[Dict[str, Any]],
+                   clients: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    One row per AP, for the Wireless tab — the RF half of an AP, where the
+    Devices tab's table is the identity-and-addressing half.
+
+    Clients are joined on by AP serial, so each row says not just how many are
+    associated but on which band and how well they are heard. `flags` is the
+    short list of things worth a second look, decided here so the table and any
+    later renderer agree; it is a pointer, not a finding — the checks own those.
+    """
+    by_ap: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for client in clients:
+        if client.get("apSerial"):
+            by_ap[client["apSerial"]].append(client)
+
+    rows = []
+    for ap in aps:
+        mine = by_ap.get(ap.get("serial") or "", [])
+        rssis = [_num(c.get("rssi")) for c in mine if _num(c.get("rssi"), 0)]
+        snrs = [_num(c.get("snr")) for c in mine if _num(c.get("snr"), 0)]
+        band_clients = Counter(_band_key(c.get("band")) or "other" for c in mine)
+
+        radios = {}
+        for radio in ap.get("radios") or []:
+            key = _band_key(radio.get("band"))
+            if not key or key in radios:
+                continue
+            radios[key] = {
+                "channel": radio.get("channel"),
+                "width": radio.get("width"),
+                "power": radio.get("power"),
+                "actualTxPower": radio.get("actualTxPower"),
+                "rssi": radio.get("rssi"),
+                "ssids": len(radio.get("ssids") or []),
+                "clients": band_clients.get(key, 0),
+            }
+
+        median_rssi = _median(rssis)
+        flags = []
+        if ap.get("state") == "online" and not radios:
+            flags.append("no radios reporting")
+        if ap.get("meshing"):
+            flags.append("mesh" + (f" ({ap['meshHops']} hop)" if ap.get("meshHops") else ""))
+        if ap.get("uplinkSpeedMbps") and ap["uplinkSpeedMbps"] < 1000:
+            flags.append(f"uplink {ap['uplinkSpeedMbps']} Mbps")
+        if median_rssi is not None and len(rssis) >= AP_WEAK_MIN_CLIENTS \
+                and median_rssi < AP_WEAK_MEDIAN_RSSI:
+            flags.append("clients heard weakly")
+        if _norm(ap.get("health")) == "poor":
+            flags.append("R1 health poor")
+
+        rows.append({
+            "name": ap.get("name"),
+            "serial": ap.get("serial"),
+            "model": ap.get("model"),
+            "apGroup": ap.get("apGroup"),
+            "status": ap.get("status"),
+            "state": ap.get("state"),
+            "health": ap.get("health"),
+            "clients": ap.get("clients"),
+            "clientsSeen": len(mine),
+            "medianRssi": None if median_rssi is None else round(median_rssi),
+            "worstRssi": None if not rssis else round(min(rssis)),
+            "medianSnr": None if not snrs else round(_median(snrs)),
+            "radios": radios,
+            "ssidsBroadcast": ap.get("ssidsBroadcast") or [],
+            "uplinkSpeedMbps": ap.get("uplinkSpeedMbps"),
+            "meshing": bool(ap.get("meshing")),
+            "afcState": ap.get("afcState"),
+            "afcPowerState": ap.get("afcPowerState"),
+            "flags": flags,
+        })
+
+    rows.sort(key=lambda r: (not r["flags"], _norm(r["name"])))
+    return {
+        "rows": rows,
+        "flagged": sum(1 for r in rows if r["flags"]),
+        "bands": [b for b in ("2.4", "5", "6") if any(b in r["radios"] for r in rows)],
+    }
 
 
 def client_views(clients: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2352,6 +2475,116 @@ def wired_client_card(mac_rows: List[Dict[str, Any]], ports: List[Dict[str, Any]
 
 
 # ── wireless ─────────────────────────────────────────────────
+
+def _proposals(entries) -> List[str]:
+    """IKE/ESP proposals as 'AES256 / SHA256 / DH14' lines."""
+    out = []
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            parts = [entry.get(k) for k in ("encAlg", "authAlg", "prfAlg", "dhGroup") if entry.get(k)]
+            if parts:
+                out.append(" / ".join(str(p) for p in parts))
+    return out
+
+
+def _ipsec_view(profile: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "profile": profile.get("name"),
+        "server": profile.get("serverAddress"),
+        "auth": profile.get("authenticationType"),
+        "usage": profile.get("tunnelUsageType"),
+        "ike": profile.get("ikeProposalType"),
+        "ikeProposals": _proposals(profile.get("ikeProposals")),
+        "esp": profile.get("espProposalType"),
+        "espProposals": _proposals(profile.get("espProposals")),
+    }
+
+
+def _mtu_text(mtu_type, mtu_size) -> Optional[str]:
+    if _norm(mtu_type) == "manual" and mtu_size:
+        return f"{mtu_size} (manual)"
+    return "Auto" if _norm(mtu_type) == "auto" else (str(mtu_size) if mtu_size else None)
+
+
+def attach_tunnels(rows: List[Dict[str, Any]], networks: List[Dict[str, Any]],
+                   venue_id: str, softgre: List[Dict[str, Any]],
+                   ipsec: List[Dict[str, Any]], edge: List[Dict[str, Any]]) -> None:
+    """
+    Stamp `tunnel` on every SSID row: whether it is tunnelled HERE and, if so,
+    through what — `via` lists each profile with its destination, MTU,
+    keep-alive and any IPsec layered on top.
+
+    Matched on THIS venue, never tenant-wide: a SoftGRE profile activates a
+    network per venue, and an Edge tunnel profile pairs network with venue, so
+    the same SSID can be tunnelled at one property and local-breakout at the
+    next. `flag` is R1's own `tunnelWlanEnable`, carried alongside and not
+    trusted alone (null on every network probed, tunnelled ones included).
+    """
+    by_id = {n.get("id"): n for n in networks}
+    ipsec_by_id = {p.get("id"): p for p in ipsec if p.get("id")}
+
+    def ipsec_over_softgre(sg_id: str, network_id: str) -> Optional[Dict[str, Any]]:
+        for profile in ipsec:
+            for act in profile.get("activations") or []:
+                if act.get("venueId") == venue_id and act.get("softGreProfileId") == sg_id \
+                        and network_id in (act.get("wifiNetworkIds") or []):
+                    return _ipsec_view(profile)
+        return None
+
+    for row in rows:
+        nid = row.get("networkId")
+        via: List[Dict[str, Any]] = []
+
+        for profile in softgre:
+            if not any(act.get("venueId") == venue_id and nid in (act.get("wifiNetworkIds") or [])
+                       for act in profile.get("activations") or []):
+                continue
+            interval, retries = profile.get("keepAliveInterval"), profile.get("keepAliveRetryTimes")
+            via.append({
+                "kind": "SoftGRE",
+                "profile": profile.get("name"),
+                "tunnelType": "GRE",
+                "destination": profile.get("primaryGatewayAddress"),
+                "secondary": profile.get("secondaryGatewayAddress"),
+                "mtu": _mtu_text(profile.get("mtuType"), profile.get("mtuSize")),
+                "keepAlive": f"{interval}s × {retries}" if interval and retries else None,
+                "failback": profile.get("gatewayFailbackEnabled"),
+                "disassociateClients": profile.get("disassociateClientEnabled"),
+                "ipsec": ipsec_over_softgre(profile.get("id"), nid),
+            })
+
+        for profile in edge:
+            pairs = profile.get("networkVenues") or []
+            if pairs:
+                if not any(p.get("networkId") == nid and p.get("venueId") == venue_id for p in pairs):
+                    continue
+                venue_stated = True
+            elif nid in (profile.get("networkIds") or []):
+                venue_stated = False      # attached, but R1 did not say where
+            else:
+                continue
+            interval, retries = profile.get("keepAliveInterval"), profile.get("keepAliveRetry")
+            age = profile.get("ageTimeMinutes")
+            via.append({
+                "kind": "RUCKUS Edge",
+                "profile": profile.get("name"),
+                "tunnelType": profile.get("tunnelType"),
+                "segmentType": profile.get("type"),
+                "destination": profile.get("destinationEdgeClusterName")
+                               or profile.get("destinationIpAddress"),
+                "mtu": _mtu_text(profile.get("mtuType"), profile.get("mtuSize")),
+                "keepAlive": f"{interval}s × {retries}" if interval and retries else None,
+                "natTraversal": profile.get("natTraversalEnabled"),
+                "forceFragmentation": profile.get("forceFragmentation"),
+                "ageTime": f"{age} {str(profile.get('ageTimeUnit') or 'min').lower()}" if age else None,
+                "venueStated": venue_stated,
+                "ipsec": _ipsec_view(ipsec_by_id[profile["ipsecProfileId"]])
+                         if profile.get("ipsecProfileId") in ipsec_by_id else None,
+            })
+
+        flag = (by_id.get(nid) or {}).get("tunnelWlanEnable")
+        row["tunnel"] = {"tunnelled": bool(via), "flag": flag, "via": via}
+
 
 def wireless_card(networks: List[Dict[str, Any]], activations: List[Dict[str, Any]],
                   groups: List[Dict[str, Any]], aps: List[Dict[str, Any]],

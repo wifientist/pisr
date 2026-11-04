@@ -133,6 +133,9 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         "policySets": (fetch.policy_sets, (r1, tenant_id)),
         "policies": (fetch.adaptive_policies, (r1, tenant_id)),
         "radiusGroups": (fetch.radius_attribute_groups, (r1, tenant_id)),
+        "softGre": (fetch.softgre_profiles, (r1, tenant_id)),
+        "ipsec": (fetch.ipsec_profiles, (r1, tenant_id)),
+        "edgeTunnels": (fetch.edge_tunnel_profiles, (r1, tenant_id)),
     }
 
     # The venue-level config blocks join the SAME fan-out rather than getting
@@ -186,7 +189,8 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
              "incidents": [], "radiusProfiles": [],
              "networks": [], "activations": [],
              "dpskPools": [], "identityGroups": {"rows": [], "total": 0, "complete": True},
-             "policySets": [], "policies": [], "radiusGroups": []}
+             "policySets": [], "policies": [], "radiusGroups": [],
+             "softGre": [], "ipsec": [], "edgeTunnels": []}
     # A config block that failed to read is None, which config_card renders as
     # "RUCKUS ONE did not return this" — distinct from an empty answer.
     empty.update({f"venueConfig:{key}": None for key in fetch.VENUE_CONFIG_SOURCES})
@@ -288,6 +292,7 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         "poe": shape.poe_card(raw["switches"], raw["ports"], aps),
         "ports": shape.port_card(raw["ports"], aps, raw["switches"]),
         "radios": shape.radio_card(aps),
+        "apDetail": shape.ap_detail_card(aps, clients),
         "clients": shape.client_card(clients),
         "dpsk": dpsk,
         "policy": policy,
@@ -311,6 +316,10 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
         raw["wiredClients"], raw["ports"], aps, raw["switches"])
     report["wireless"] = shape.wireless_card(raw["networks"], raw["activations"],
                                              raw["apGroups"], aps, clients)
+    # Which SSIDs are tunnelled, and to what. Attached to the rows rather than
+    # passed into wireless_card, so the column can be hidden on its own.
+    shape.attach_tunnels(report["wireless"]["rows"], raw["networks"], venue_id,
+                         raw["softGre"], raw["ipsec"], raw["edgeTunnels"])
     # VLANs read from every other section, so it is shaped last.
     report["vlans"] = shape.vlan_card(raw["ports"], report["wireless"]["rows"],
                                       raw["mgmtVlan"], raw["dhcpPools"], aps, clients)
@@ -380,6 +389,9 @@ async def build_report(r1, tenant_id: Optional[str], venue_id: str) -> Dict[str,
             "POST /venues/aps/clients/query",
             "POST /wifiNetworks/query",
             "POST /venues/wifiNetworks/query",
+            "POST /softGreProfiles/query",
+            "POST /ipsecProfiles/query",
+            "POST /tunnelServiceProfiles/query",
         ],
     }
     logger.info("prism: venue %s report built in %.1fs (%d APs, %d switches, %d ports, "

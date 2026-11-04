@@ -89,9 +89,15 @@ def _fixture() -> dict:
     }
     # A table with a blankable column in every row — the SSID VLAN is the
     # worked example, and `_blank_column` is the primitive nothing else covers.
+    # ONE table per path carrying every column's field: planting per column let
+    # the second hideable column on a table overwrite the first's rows, so the
+    # first was never there to be checked.
+    fields_by_path: dict = {}
     for column in {c for s in sections.SECTIONS for c in s.columns}:
-        rows = [{column.field: "kept", "other": "kept"} for _ in range(3)]
-        _plant(report, column.path, rows)
+        fields_by_path.setdefault(column.path, set()).add(column.field)
+    for path, fields in fields_by_path.items():
+        rows = [{**{f: "kept" for f in sorted(fields)}, "other": "kept"} for _ in range(3)]
+        _plant(report, path, rows)
     return report
 
 

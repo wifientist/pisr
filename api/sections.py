@@ -409,7 +409,11 @@ SECTIONS: Tuple[Section, ...] = (
         # the VLAN layout. Hiding it blanks `vlans` in every row; the VLAN
         # table on its own tab is a separate section to hide.
         columns=(Column("wireless.ssids.col.vlan", "VLAN",
-                        "wireless.rows", "vlans"),),
+                        "wireless.rows", "vlans"),
+                 # Tunnel destinations are gateway and Edge addresses — the
+                 # kind of thing an admin may want off a crew's copy.
+                 Column("wireless.ssids.col.tunnel", "Tunnel",
+                        "wireless.rows", "tunnel")),
     ),
     Section(
         id="wireless.clients-by-band",
@@ -464,6 +468,16 @@ SECTIONS: Tuple[Section, ...] = (
         # finding id is what redact.py filters on. api/tests/test_sections.py is
         # what caught that; do not "fix" it by guessing from the function name.
         checks=("ap-group-ssid-limit",),
+    ),
+    Section(
+        id="wireless.ap-detail",
+        label="Every AP, radio by radio",
+        tab="wireless",
+        hint="Per AP: channel, width and power on each band, clients per band "
+             "and how well they are heard, SSIDs on air, uplink and mesh.",
+        # No checks: the flags on a row point at things worth a look, and the
+        # findings that judge them are owned by the cards that already did.
+        paths=("apDetail",),
     ),
 
     # ── Wired ────────────────────────────────────────────────────────

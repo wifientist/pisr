@@ -34,6 +34,9 @@ AP_FIELDS = [
     "meshRole", "switchSerialNumber", "poePort", "poePortStatus",
     "lastSeenTime", "uptime", "networkStatus", "radioStatuses", "lanPortStatuses",
     "tags", "floorplanId",
+    # For the Wireless tab's per-AP table. All three are on ApQueryData in the
+    # spec; `meshStatus` carries neighbour lists but only `hopCount` is kept.
+    "healthStatus", "afcStatus", "meshStatus",
 ]
 
 # The subset proven in production elsewhere in this codebase. Used only if the
@@ -60,6 +63,9 @@ VENUE_FIELDS = [
 NETWORK_FIELDS = [
     "id", "name", "ssid", "description", "nwType", "nwSubType",
     "securityProtocol", "vlan", "captiveType", "apCount", "clientCount",
+    # R1's own "tunnelled" flag. Shown, never trusted alone — see the tunnel
+    # profile fetches below.
+    "tunnelWlanEnable",
 ]
 
 # /wifiNetworks/query is 1-INDEXED: page 0 and page 1 both return the first
@@ -459,6 +465,68 @@ def radius_server_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]
         logger.debug("prism: removed %d shared secret(s) from RADIUS profiles at "
                      "the fetch, as expected", len(removed))
     return cleaned
+
+
+# ── Tunnels ────────────────────────────────────────────────────────────
+#
+# Three tenant-wide profile listings, each linking networks to a tunnel by its
+# own shape: SoftGRE `activations[{venueId, wifiNetworkIds}]`, IPsec (riding on
+# SoftGRE) `activations[{venueId, softGreProfileId, wifiNetworkIds}]`, and the
+# RUCKUS Edge tunnel profile `networkVenues[{networkId, venueId}]`. All three
+# answered 200 with `totalCount: 0` on every EC probed (8, 2026-11-03) where
+# nothing was configured, so an empty tenant is an empty list, not an error.
+#
+# `tunnelWlanEnable` on the network is NOT the source of truth: it came back
+# null on all 19 networks of two ECs, including two an Edge profile carries.
+# The linkage below is what decides "tunnelled".
+
+TUNNEL_PAGE_SIZE = 500
+
+_SOFTGRE_KEEP = ("id", "name", "description", "primaryGatewayAddress",
+                 "secondaryGatewayAddress", "mtuType", "mtuSize",
+                 "keepAliveInterval", "keepAliveRetryTimes",
+                 "disassociateClientEnabled", "gatewayFailbackEnabled",
+                 "gatewaySecondaryToPrimaryTimer", "activations")
+
+# NOT preSharedKey. It is on the DTO, in plaintext, and nothing here has any use
+# for it — so it is neither requested nor kept, rather than left to the scrubber.
+_IPSEC_KEEP = ("id", "name", "serverAddress", "authenticationType",
+               "tunnelUsageType", "ikeProposalType", "ikeProposals",
+               "espProposalType", "espProposals", "activations",
+               "tunnelActivations")
+
+_EDGE_TUNNEL_KEEP = ("id", "name", "tunnelType", "type", "mtuType", "mtuSize",
+                     "keepAliveInterval", "keepAliveRetry", "natTraversalEnabled",
+                     "forceFragmentation", "ageTimeMinutes", "ageTimeUnit",
+                     "destinationEdgeClusterName", "destinationIpAddress",
+                     "ipsecProfileId", "networkIds", "networkVenues")
+
+
+def _tunnel_profiles(r1, tenant_id: Optional[str], path: str,
+                     keep: tuple, fields: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    body: Dict[str, Any] = {"page": 1, "pageSize": TUNNEL_PAGE_SIZE}
+    if fields:
+        body["fields"] = fields
+    payload = _json(_post(r1, path, body, tenant_id), path, {}) or {}
+    rows = _rows(payload)
+    total = payload.get("totalCount") if isinstance(payload, dict) else None
+    if isinstance(total, int) and total > len(rows):
+        logger.warning("prism: %s returned %d of %d profiles", path, len(rows), total)
+    return [{k: row.get(k) for k in keep if k in row} for row in rows if isinstance(row, dict)]
+
+
+def softgre_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
+    return _tunnel_profiles(r1, tenant_id, "/softGreProfiles/query", _SOFTGRE_KEEP)
+
+
+def ipsec_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
+    return _tunnel_profiles(r1, tenant_id, "/ipsecProfiles/query", _IPSEC_KEEP,
+                            fields=list(_IPSEC_KEEP))
+
+
+def edge_tunnel_profiles(r1, tenant_id: Optional[str]) -> List[Dict[str, Any]]:
+    return _tunnel_profiles(r1, tenant_id, "/tunnelServiceProfiles/query",
+                            _EDGE_TUNNEL_KEEP)
 
 
 def ap_group_config_one(r1, tenant_id: Optional[str], venue_id: str,

@@ -836,6 +836,105 @@ def test_the_port_list_is_every_port_in_numeric_order():
     assert not card["list"][0]["up"], "a down port is listed, not dropped"
 
 
+def _ap_view(serial, **extra):
+    view = {"name": serial, "serial": serial, "state": "online", "status": "Online",
+            "clients": 0, "radios": [{"band": "5G", "channel": 36, "width": "80MHz",
+                                      "ssids": ["a", "b"]}],
+            "ssidsBroadcast": ["a", "b"], "uplinkSpeedMbps": 1000, "meshing": False}
+    view.update(extra)
+    return view
+
+
+def test_ap_detail_joins_clients_by_serial_and_band():
+    clients = [{"apSerial": "S1", "band": "5 GHz", "rssi": -55, "snr": 40},
+               {"apSerial": "S1", "band": "2.4 GHz", "rssi": -65, "snr": 30},
+               {"apSerial": "S2", "band": "5 GHz", "rssi": -50, "snr": 45}]
+    card = shape_mod.ap_detail_card([_ap_view("S1"), _ap_view("S2")], clients)
+    s1 = next(r for r in card["rows"] if r["serial"] == "S1")
+    assert s1["clientsSeen"] == 2 and s1["radios"]["5"]["clients"] == 1
+    assert s1["medianRssi"] == -60 and s1["worstRssi"] == -65
+    assert card["bands"] == ["5"], "a band no AP reported must not get a column"
+
+
+def test_ap_detail_flags_and_sorts_flagged_first():
+    weak = [{"apSerial": "A", "band": "5G", "rssi": -78} for _ in range(3)]
+    one_weak = [{"apSerial": "C", "band": "5G", "rssi": -85}]
+    card = shape_mod.ap_detail_card(
+        [_ap_view("C"), _ap_view("A"), _ap_view("B", uplinkSpeedMbps=100),
+         _ap_view("D", meshing=True, meshHops=2), _ap_view("E", radios=[])],
+        weak + one_weak)
+    flags = {r["serial"]: r["flags"] for r in card["rows"]}
+    assert flags["A"] == ["clients heard weakly"]
+    assert flags["C"] == [], "one weak client is a stairwell, not an AP problem"
+    assert flags["B"] == ["uplink 100 Mbps"]
+    assert flags["D"] == ["mesh (2 hop)"]
+    assert flags["E"] == ["no radios reporting"]
+    assert card["rows"][-1]["serial"] == "C" and card["flagged"] == 4
+
+
+_VENUE, _OTHER = "v-here", "v-elsewhere"
+
+
+def _tunnel_rows(*nids):
+    return [{"networkId": nid} for nid in nids]
+
+
+def test_tunnels_match_this_venue_only():
+    softgre = [{"id": "sg1", "name": "GRE to DC", "primaryGatewayAddress": "10.0.0.1",
+                "mtuType": "AUTO", "keepAliveInterval": 10, "keepAliveRetryTimes": 5,
+                "activations": [{"venueId": _OTHER, "wifiNetworkIds": ["n1"]},
+                                {"venueId": _VENUE, "wifiNetworkIds": ["n2"]}]}]
+    edge = [{"id": "e1", "name": "SD-LAN", "tunnelType": "VXLAN_GPE",
+             "destinationEdgeClusterName": "edge-a",
+             "networkVenues": [{"networkId": "n3", "venueId": _VENUE},
+                               {"networkId": "n1", "venueId": _OTHER}]}]
+    rows = _tunnel_rows("n1", "n2", "n3")
+    shape_mod.attach_tunnels(rows, [{"id": "n1", "tunnelWlanEnable": None}],
+                             _VENUE, softgre, [], edge)
+    by = {r["networkId"]: r["tunnel"] for r in rows}
+    assert not by["n1"]["tunnelled"], (
+        "n1 is tunnelled at ANOTHER venue — tenant-wide matching would claim it here")
+    assert by["n2"]["via"][0]["kind"] == "SoftGRE"
+    assert by["n2"]["via"][0]["destination"] == "10.0.0.1"
+    assert by["n2"]["via"][0]["keepAlive"] == "10s × 5" and by["n2"]["via"][0]["mtu"] == "Auto"
+    assert by["n3"]["via"][0]["kind"] == "RUCKUS Edge"
+    assert by["n3"]["via"][0]["destination"] == "edge-a"
+
+
+def test_ipsec_rides_on_the_softgre_it_names():
+    softgre = [{"id": "sg1", "name": "GRE",
+                "activations": [{"venueId": _VENUE, "wifiNetworkIds": ["n1", "n2"]}]}]
+    ipsec = [{"id": "ip1", "name": "VPN", "serverAddress": "vpn.example",
+              "ikeProposals": [{"encAlg": "AES256", "authAlg": "SHA256", "dhGroup": "DH14"}],
+              "activations": [{"venueId": _VENUE, "softGreProfileId": "sg1",
+                               "wifiNetworkIds": ["n1"]}]}]
+    rows = _tunnel_rows("n1", "n2")
+    shape_mod.attach_tunnels(rows, [], _VENUE, softgre, ipsec, [])
+    assert rows[0]["tunnel"]["via"][0]["ipsec"]["server"] == "vpn.example"
+    assert rows[0]["tunnel"]["via"][0]["ipsec"]["ikeProposals"] == ["AES256 / SHA256 / DH14"]
+    assert rows[1]["tunnel"]["via"][0]["ipsec"] is None, "IPsec activated for n1 only"
+
+
+def test_the_ipsec_preshared_key_never_leaves_the_fetch():
+    from services.prism import fetch as fetch_mod
+    assert "preSharedKey" not in fetch_mod._IPSEC_KEEP
+
+    class _Resp:
+        ok = True
+        def json(self):
+            # R1 ignoring `fields` and sending the key anyway.
+            return {"totalCount": 1, "data": [{"id": "ip1", "name": "VPN",
+                                               "preSharedKey": "hunter2"}]}
+
+    class _R1:
+        ec_type = "EC"
+        def post(self, path, payload=None, **_):
+            return _Resp()
+
+    rows = fetch_mod.ipsec_profiles(_R1(), None)
+    assert rows == [{"id": "ip1", "name": "VPN"}], f"PSK survived the fetch: {rows}"
+
+
 def _verification(*findings):
     return {"findings": list(findings)}
 

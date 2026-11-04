@@ -181,6 +181,7 @@ export const SECTION_IDS = [
   "wired.port-list",
   "wired.ports",
   "wired.vlans",
+  "wireless.ap-detail",
   "wireless.ap-groups",
   "wireless.busiest-aps",
   "wireless.channel-plan",
@@ -1431,11 +1432,15 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
   // redact, this drops the column so it reads as "not shown" rather than a
   // column of "untagged". Hook above the early return, like every other.
   const showVlan = useVisible("wireless.ssids.col.vlan");
+  const showTunnel = useVisible("wireless.ssids.col.tunnel");
+  const [tunnelOnly, setTunnelOnly] = useState(false);
+  const [openTunnels, setOpenTunnels] = useState<Record<string, boolean>>({});
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return rows.filter((row) => {
       if (darkOnly && row.apsBroadcasting) return false;
+      if (tunnelOnly && !row.tunnel?.tunnelled) return false;
       if (!needle) return true;
       const hay = [row.ssid, row.name, row.security, row.type, row.networkId,
                    ...(row.vlans || []), ...(row.radios || []),
@@ -1443,9 +1448,11 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
         .filter(Boolean).join(" ").toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, query, darkOnly]);
+  }, [rows, query, darkOnly, tunnelOnly]);
 
   const dark = rows.filter((r) => !r.apsBroadcasting).length;
+  const tunnelled = showTunnel ? rows.filter((r) => r.tunnel?.tunnelled).length : 0;
+  const columnCount = 7 + (showVlan ? 1 : 0) + (showTunnel ? 1 : 0);
 
   if (!rows.length) {
     return (
@@ -1461,6 +1468,14 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
           hint="Config on the left, live evidence on the right. An SSID with clients on it is working; a quiet one is only untested."
           right={
             <div className="flex items-center gap-2">
+              {tunnelled > 0 && (
+                <button onClick={() => setTunnelOnly((v) => !v)}
+                        className={`text-xs px-2.5 py-1.5 rounded border ${
+                          tunnelOnly ? "border-purple-400 bg-purple-50 text-purple-800"
+                                     : "border-gray-300 hover:bg-gray-50 text-gray-600"}`}>
+                  {tunnelOnly ? `Showing ${tunnelled} tunnelled` : `${tunnelled} tunnelled`}
+                </button>
+              )}
               {dark > 0 && (
                 <button onClick={() => setDarkOnly((v) => !v)}
                         className={`text-xs px-2.5 py-1.5 rounded border ${
@@ -1492,6 +1507,7 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
               {[
                 { h: "SSID" }, { h: "Type" }, { h: "Security" },
                 ...(showVlan ? [{ h: "VLAN" }] : []),
+                ...(showTunnel ? [{ h: "Tunnel" }] : []),
                 { h: "Radios" }, { h: "AP groups" },
                 { h: "On air", right: true }, { h: "Clients", right: true },
                 { h: "Flags" },
@@ -1506,7 +1522,8 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
           </thead>
           <tbody>
             {shown.map((row) => (
-              <tr key={row.networkId}
+              <Fragment key={row.networkId}>
+              <tr
                   className={`border-t border-gray-100 hover:bg-gray-50 ${
                     row.clientsNow ? "bg-green-50/30"
                     : row.apsBroadcasting ? "" : "bg-amber-50/30"}`}>
@@ -1546,6 +1563,30 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
                                      : <span className="text-gray-400">untagged</span>}
                 </td>
                 )}
+                {showTunnel && (
+                <td className="px-3 py-1.5 whitespace-nowrap">
+                  {row.tunnel?.tunnelled ? (
+                    <button onClick={() => setOpenTunnels((o) => ({ ...o, [row.networkId]: !o[row.networkId] }))}
+                            className="inline-flex items-center gap-1"
+                            title="Show tunnel details">
+                      {openTunnels[row.networkId]
+                        ? <ChevronDown size={13} className="text-gray-400" />
+                        : <ChevronRight size={13} className="text-gray-400" />}
+                      {row.tunnel.via.map((t: any, i: number) => (
+                        <Pill key={i} tone="purple">
+                          {t.kind === "RUCKUS Edge" ? `Edge ${t.tunnelType ? String(t.tunnelType).replace(/_/g, "-") : ""}`.trim() : t.kind}
+                          {t.ipsec ? " + IPsec" : ""}
+                        </Pill>
+                      ))}
+                    </button>
+                  ) : row.tunnel ? (
+                    <span className="text-gray-400"
+                          title={row.tunnel.flag ? "R1 flags this network as tunnelled, but no tunnel profile links it at this venue" : undefined}>
+                      local{row.tunnel.flag ? " ?" : ""}
+                    </span>
+                  ) : <span className="text-gray-300">—</span>}
+                </td>
+                )}
                 <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
                   {row.radios?.length ? row.radios.join(", ")
                                       : <span className="text-gray-300">—</span>}
@@ -1577,6 +1618,14 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
                   </span>
                 </td>
               </tr>
+              {showTunnel && row.tunnel?.tunnelled && openTunnels[row.networkId] && (
+                <tr className="bg-purple-50/40">
+                  <td colSpan={columnCount} className="px-3 py-2">
+                    <TunnelDetail tunnel={row.tunnel} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -1587,6 +1636,73 @@ function SsidTable({ report, rows }: { report: any; rows: any[] }) {
         </p>
       )}
     </Card>
+  );
+}
+
+/**
+ * What an SSID's tunnel is, one block per profile carrying it at this venue.
+ * Shaped by shape.attach_tunnels; the IPsec pre-shared key is never fetched.
+ */
+function TunnelDetail({ tunnel }: { tunnel: any }) {
+  const yesNo = (v: any) => (v === true ? "yes" : v === false ? "no" : null);
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {(tunnel.via || []).map((t: any, i: number) => {
+        const facts: [string, any][] = [
+          ["Profile", t.profile],
+          ["Tunnel type", t.tunnelType],
+          ["Segmentation", t.segmentType],
+          [t.kind === "SoftGRE" ? "Primary gateway" : "Destination", t.destination],
+          ["Secondary gateway", t.secondary],
+          ["MTU", t.mtu],
+          ["Keep-alive", t.keepAlive],
+          ["Gateway failback", yesNo(t.failback)],
+          ["Disassociate clients on failure", yesNo(t.disassociateClients)],
+          ["NAT traversal", yesNo(t.natTraversal)],
+          ["Force fragmentation", yesNo(t.forceFragmentation)],
+          ["Session age", t.ageTime],
+        ];
+        return (
+          <div key={i} className="min-w-0 rounded border border-purple-200 bg-white p-3">
+            <div className="mb-2 text-xs font-semibold text-purple-800">{t.kind}</div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+              {facts.filter(([, v]) => v !== null && v !== undefined && v !== "").map(([k, v]) => (
+                <Fragment key={k}>
+                  <dt className="text-gray-500">{k}</dt>
+                  <dd className="min-w-0 break-words text-gray-800">{String(v)}</dd>
+                </Fragment>
+              ))}
+            </dl>
+            {t.venueStated === false && (
+              <p className="mt-2 text-[11px] text-amber-700">
+                The profile names this network but no venue, so it may apply elsewhere too.
+              </p>
+            )}
+            {t.ipsec && (
+              <div className="mt-2 border-t border-purple-100 pt-2">
+                <div className="mb-1 text-xs font-semibold text-purple-800">IPsec</div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                  {([
+                    ["Profile", t.ipsec.profile], ["Server", t.ipsec.server],
+                    ["Authentication", t.ipsec.auth], ["Usage", t.ipsec.usage],
+                    ["IKE", [t.ipsec.ike, ...(t.ipsec.ikeProposals || [])].filter(Boolean).join(" · ")],
+                    ["ESP", [t.ipsec.esp, ...(t.ipsec.espProposals || [])].filter(Boolean).join(" · ")],
+                  ] as [string, any][]).filter(([, v]) => v).map(([k, v]) => (
+                    <Fragment key={k}>
+                      <dt className="text-gray-500">{k}</dt>
+                      <dd className="min-w-0 break-words text-gray-800">{String(v)}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {tunnel.flag === false && (
+        <p className="text-[11px] text-gray-500">R1's own tunnel flag on this network reads false.</p>
+      )}
+    </div>
   );
 }
 
@@ -1712,7 +1828,143 @@ function Wireless({ report }: { report: any }) {
           }))}
         />
       </Card>
+
+      <ApDetail report={report} />
     </div>
+  );
+}
+
+/**
+ * Every AP, radio by radio — the RF half of an AP. The Devices tab's table is
+ * the identity-and-addressing half, so this one does not repeat IPs or serials
+ * beyond what is needed to find the AP. `flags` comes from
+ * shape.ap_detail_card, so this only renders what the server decided.
+ */
+function ApDetail({ report }: { report: any }) {
+  const detail = report.apDetail || {};
+  const rows: any[] = detail.rows || [];
+  const bands: string[] = detail.bands || [];
+  const [which, setWhich] = useState<"all" | "flagged" | "down">("all");
+  const [query, setQuery] = useState("");
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (which === "flagged" && !(row.flags || []).length) return false;
+      if (which === "down" && row.state === "online") return false;
+      if (!q) return true;
+      return [row.name, row.serial, row.model, row.apGroup, ...(row.ssidsBroadcast || [])]
+        .some((v) => v && String(v).toLowerCase().includes(q));
+    });
+  }, [rows, which, query]);
+
+  const down = rows.filter((row) => row.state !== "online").length;
+  const widthText = (w: any) => {
+    const digits = String(w ?? "").replace(/\D/g, "");
+    return digits ? `${digits} MHz` : null;
+  };
+  const rssiTone = (v: number | null | undefined) =>
+    v === null || v === undefined ? "" : v >= -60 ? "text-green-700" : v >= -70 ? "text-gray-700"
+      : v >= -80 ? "text-amber-700" : "text-red-700";
+  const radioCell = (radio: any) => {
+    if (!radio) return null;
+    const power = radio.actualTxPower !== null && radio.actualTxPower !== undefined
+      ? `${radio.actualTxPower} dBm` : radio.power ? `${radio.power}` : null;
+    return (
+      <span className="whitespace-nowrap">
+        {radio.channel !== null && radio.channel !== undefined ? <>ch <strong>{radio.channel}</strong></> : "—"}
+        {widthText(radio.width) && <span className="text-gray-500"> · {widthText(radio.width)}</span>}
+        {power && <span className="text-gray-500"> · {power}</span>}
+        <span className="text-gray-400"> · {fmtNum(radio.clients)} cl</span>
+      </span>
+    );
+  };
+
+  const BAND_LABEL: Record<string, string> = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
+  const showAfc = bands.includes("6");
+
+  const tableRows = shown.map((row) => ({
+    name: (
+      <span className="whitespace-nowrap">
+        {row.name || <span className="font-mono">{row.serial}</span>}
+        {row.model && <span className="ml-1 text-xs text-gray-400">{row.model}</span>}
+      </span>
+    ),
+    apGroup: row.apGroup,
+    status: <StatePill state={row.state} status={row.status} />,
+    health: row.health && row.health !== "UNKNOWN"
+      ? <Pill tone={row.health === "POOR" ? "red" : row.health === "AVERAGE" ? "amber" : "green"}>
+          {String(row.health).toLowerCase()}</Pill>
+      : null,
+    clients: fmtNum(row.clients),
+    medianRssi: row.medianRssi !== null && row.medianRssi !== undefined
+      ? <span className={rssiTone(row.medianRssi)}>{row.medianRssi} dBm</span> : null,
+    worstRssi: row.worstRssi !== null && row.worstRssi !== undefined
+      ? <span className={rssiTone(row.worstRssi)}>{row.worstRssi} dBm</span> : null,
+    medianSnr: row.medianSnr !== null && row.medianSnr !== undefined ? `${row.medianSnr} dB` : null,
+    ...Object.fromEntries(bands.map((band) => [`band${band}`, radioCell((row.radios || {})[band])])),
+    ssids: (row.ssidsBroadcast || []).length
+      ? <span title={(row.ssidsBroadcast || []).join(", ")}>{row.ssidsBroadcast.length}</span> : null,
+    uplink: row.meshing ? <Pill tone="amber">mesh</Pill>
+      : row.uplinkSpeedMbps
+        ? <span className={row.uplinkSpeedMbps < 1000 ? "text-amber-700" : ""}>
+            {row.uplinkSpeedMbps >= 1000 ? `${row.uplinkSpeedMbps / 1000} Gbps` : `${row.uplinkSpeedMbps} Mbps`}
+          </span>
+        : null,
+    afc: [row.afcState, row.afcPowerState].filter(Boolean).join(" · ") || null,
+    flags: (row.flags || []).length
+      ? <span className="flex flex-wrap gap-1">
+          {row.flags.map((flag: string) => <Pill key={flag} tone="amber">{flag}</Pill>)}
+        </span>
+      : null,
+  }));
+
+  return (
+    <Card id="wireless.ap-detail" title={`Every AP, radio by radio (${fmtNum(rows.length)})`}
+          icon={<Radio size={17} className="text-gray-400" />}
+          hint="Channel · width · actual Tx power · clients, per band. RSSI and SNR are the clients' as this AP hears them. Flagged APs sort first.">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded border border-gray-200 overflow-hidden text-xs">
+          {([["all", `All (${fmtNum(rows.length)})`],
+             ["flagged", `Flagged (${fmtNum(detail.flagged || 0)})`],
+             ["down", `Not online (${fmtNum(down)})`]] as const).map(([key, label]) => (
+            <button key={key} onClick={() => setWhich(key)}
+                    className={`px-3 py-1.5 ${which === key ? "bg-gray-800 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)}
+                 placeholder="Name, serial, model, group, SSID…"
+                 className="w-full rounded border border-gray-200 pl-7 pr-2 py-1.5 text-sm" />
+        </div>
+        {shown.length !== rows.length && (
+          <span className="text-xs text-gray-500">showing {fmtNum(shown.length)}</span>
+        )}
+      </div>
+      <MiniTable
+        maxHeight="36rem"
+        columns={[
+          { key: "name", header: "AP" },
+          { key: "apGroup", header: "AP group", className: "whitespace-nowrap" },
+          { key: "status", header: "Status", className: "whitespace-nowrap" },
+          { key: "health", header: "R1 health" },
+          { key: "clients", header: "Clients" },
+          { key: "medianRssi", header: "Median RSSI", className: "whitespace-nowrap" },
+          { key: "worstRssi", header: "Worst RSSI", className: "whitespace-nowrap" },
+          { key: "medianSnr", header: "Median SNR", className: "whitespace-nowrap" },
+          ...bands.map((band) => ({ key: `band${band}`, header: BAND_LABEL[band] || band })),
+          { key: "ssids", header: "SSIDs" },
+          { key: "uplink", header: "Uplink", className: "whitespace-nowrap" },
+          ...(showAfc ? [{ key: "afc", header: "AFC", className: "whitespace-nowrap" }] : []),
+          { key: "flags", header: "Worth a look" },
+        ]}
+        rows={tableRows}
+        empty={rows.length ? "No AP matches this filter." : "No APs were read for this venue."}
+      />
+    </Card>
   );
 }
 
