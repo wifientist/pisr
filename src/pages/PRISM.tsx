@@ -178,6 +178,7 @@ export const SECTION_IDS = [
   "wired.clients",
   "wired.link-speeds",
   "wired.port-errors",
+  "wired.port-list",
   "wired.ports",
   "wired.vlans",
   "wireless.ap-groups",
@@ -2685,7 +2686,128 @@ function Wired({ report }: { report: any }) {
       </div>
 
       <Vlans report={report} />
+
+      <PortList report={report} />
     </div>
+  );
+}
+
+/**
+ * Every switch port, uncapped — the inventory a crew walks to validate an
+ * install, where the cards above are only the exceptions. `named` is decided
+ * server-side (shape._port_is_named) so this filter cannot disagree with
+ * anything else that counts named ports.
+ */
+function PortList({ report }: { report: any }) {
+  const rows: any[] = (report.ports || {}).list || [];
+  const [which, setWhich] = useState<"all" | "named" | "unnamed">("all");
+  const [query, setQuery] = useState("");
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (which === "named" && !row.named) return false;
+      if (which === "unnamed" && row.named) return false;
+      if (!q) return true;
+      return [row.switch, row.port, row.name, row.neighbor, row.profile,
+              row.untagged, row.tagged, row.lag]
+        .some((v) => v !== null && v !== undefined && String(v).toLowerCase().includes(q));
+    });
+  }, [rows, which, query]);
+
+  const named = rows.filter((row) => row.named).length;
+  const errs = (row: any) => (row.crc || 0) + (row.inErr || 0) + (row.outErr || 0);
+  const vlanText = (v: any) => (Array.isArray(v) ? v.join(", ") : v);
+
+  const tableRows = shown.map((row) => ({
+    switch: row.unit ? `${row.switch ?? "—"} · unit ${row.unit}` : row.switch,
+    port: <span className="font-mono">{row.port}</span>,
+    name: row.named ? row.name
+      : row.name ? <span className="text-gray-400">{row.name}</span> : null,
+    status: (
+      <span className="whitespace-nowrap">
+        <Pill tone={row.up ? "green" : "gray"}>{row.status || "unknown"}</Pill>
+        {row.admin && String(row.admin).toLowerCase() !== "up" && (
+          <span className="ml-1 text-xs text-gray-500">admin {row.admin}</span>
+        )}
+        {row.errDisable && !["none", "false", "normal"].includes(String(row.errDisable).toLowerCase()) && (
+          <span className="ml-1"><Pill tone="red">err-disabled</Pill></span>
+        )}
+      </span>
+    ),
+    speed: row.speed
+      ? <span className="whitespace-nowrap">{row.speed}{row.capacity ? <span className="text-gray-400"> / {row.capacity}</span> : null}</span>
+      : null,
+    untagged: row.untagged,
+    tagged: row.tagged
+      ? <span className="block max-w-[14rem] truncate" title={String(vlanText(row.tagged))}>{vlanText(row.tagged)}</span>
+      : null,
+    poe: row.poeEnabled === false ? <span className="text-gray-400">off</span>
+      : row.poeUsedW !== null && row.poeUsedW !== undefined
+        ? <span className="whitespace-nowrap">{fmtNum(row.poeUsedW, 1)} W{row.poeType ? <span className="text-gray-400"> · {row.poeType}</span> : null}</span>
+        : null,
+    neighbor: row.neighbor || row.neighborMac
+      ? <span className="whitespace-nowrap">
+          {row.neighbor || <span className="font-mono">{row.neighborMac}</span>}
+          {row.neighborKind && row.neighborKind !== "endpoint" && (
+            <span className="ml-1"><Pill tone="blue">{row.neighborKind === "ap" ? "AP" : "switch"}</Pill></span>
+          )}
+        </span>
+      : null,
+    profile: row.profile,
+    lag: row.lag,
+    media: [row.media, row.optics].filter(Boolean).join(" · ") || null,
+    errors: errs(row) ? <span className="text-amber-700">{fmtNum(errs(row))}</span> : null,
+    flags: [row.uplink && "uplink", row.stacking && "stacking"].filter(Boolean).join(", ") || null,
+  }));
+
+  return (
+    <Card id="wired.port-list" title={`Every switch port (${fmtNum(rows.length)})`}
+          icon={<Cable size={17} className="text-gray-400" />}
+          hint={`${fmtNum(named)} named by someone; the rest are blank or just repeat the port number.`}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded border border-gray-200 overflow-hidden text-xs">
+          {(["all", "named", "unnamed"] as const).map((key) => (
+            <button key={key} onClick={() => setWhich(key)}
+                    className={`px-3 py-1.5 ${which === key ? "bg-gray-800 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}>
+              {key === "all" ? `All (${fmtNum(rows.length)})`
+                : key === "named" ? `Named (${fmtNum(named)})`
+                : `Unnamed (${fmtNum(rows.length - named)})`}
+            </button>
+          ))}
+        </div>
+        <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)}
+                 placeholder="Switch, port, name, neighbour, VLAN…"
+                 className="w-full rounded border border-gray-200 pl-7 pr-2 py-1.5 text-sm" />
+        </div>
+        {shown.length !== rows.length && (
+          <span className="text-xs text-gray-500">showing {fmtNum(shown.length)}</span>
+        )}
+      </div>
+      <MiniTable
+        maxHeight="36rem"
+        columns={[
+          { key: "switch", header: "Switch", className: "whitespace-nowrap" },
+          { key: "port", header: "Port" },
+          { key: "name", header: "Name" },
+          { key: "status", header: "Status" },
+          { key: "speed", header: "Speed" },
+          { key: "untagged", header: "Untagged" },
+          { key: "tagged", header: "Tagged VLANs" },
+          { key: "poe", header: "PoE" },
+          { key: "neighbor", header: "LLDP neighbour" },
+          { key: "profile", header: "Port profile" },
+          { key: "lag", header: "LAG" },
+          { key: "media", header: "Media" },
+          { key: "errors", header: "Errors" },
+          { key: "flags", header: "Flags" },
+        ]}
+        rows={tableRows}
+        empty={rows.length ? "No port matches this filter." : "No switch ports were read for this venue."}
+      />
+    </Card>
   );
 }
 

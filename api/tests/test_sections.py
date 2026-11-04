@@ -815,6 +815,27 @@ def test_all_gigabit_is_a_pass_and_no_ports_is_skipped():
     assert check_registry.check_port_link_speed({"ports": none})["severity"] == "skipped"
 
 
+def test_a_port_name_that_repeats_its_identifier_is_not_named():
+    named = shape_mod._port_is_named
+    assert named({"name": "Unit 4B", "portIdentifier": "1/1/12"})
+    assert not named({"name": "", "portIdentifier": "1/1/12"})
+    assert not named({"name": None, "portIdentifier": "1/1/12"})
+    assert not named({"name": "  ", "portIdentifier": "1/1/12"})
+    assert not named({"name": "1/1/12", "portIdentifier": "1/1/12"}), (
+        "a name the switch filled in from the port number is not a name")
+
+
+def test_the_port_list_is_every_port_in_numeric_order():
+    ports = [_up("1/1/10", "1G"), _up("1/1/2", "1G"),
+             {"portIdentifier": "1/1/1", "status": "Down", "switchName": "core",
+              "name": "Lobby AP"}]
+    card = shape_mod.port_card(ports, [], [])
+    assert [r["port"] for r in card["list"]] == ["1/1/1", "1/1/2", "1/1/10"], (
+        "1/1/10 sorted before 1/1/2 — the port order is lexical, not numeric")
+    assert card["named"] == 1 and card["list"][0]["named"]
+    assert not card["list"][0]["up"], "a down port is listed, not dropped"
+
+
 def _verification(*findings):
     return {"findings": list(findings)}
 

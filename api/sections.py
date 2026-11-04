@@ -512,6 +512,16 @@ SECTIONS: Tuple[Section, ...] = (
         paths=("vlans",),
         checks=("undeclared-vlans",),
     ),
+    Section(
+        id="wired.port-list",
+        label="Every switch port",
+        tab="wired",
+        hint="The full port inventory — name, state, VLANs, PoE, LLDP neighbour "
+             "— filterable to the ports somebody named.",
+        # The whole table, one section. It repeats fields the cards above
+        # summarise, so hiding it removes the detail, not the headline.
+        paths=("ports.list", "ports.named"),
+    ),
 
     # ── PoE ──────────────────────────────────────────────────────────
     Section(

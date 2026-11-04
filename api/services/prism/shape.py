@@ -1213,6 +1213,78 @@ def poe_card(switches: List[Dict[str, Any]], ports: List[Dict[str, Any]],
 
 # ── ports / cabling ──────────────────────────────────────────
 
+def _port_is_named(port: Dict[str, Any]) -> bool:
+    """
+    Somebody typed a name on this port. Blank is unnamed, and so is a name that
+    merely repeats the port's own identifier ("1/1/12") — that is a label the
+    switch filled in, not a decision anyone made. The rule is server-side so the
+    filter on screen and any later renderer cannot disagree about it.
+    """
+    name = str(port.get("name") or "").strip()
+    if not name:
+        return False
+    ident = {_norm(port.get("portIdentifier")), _norm(port.get("portIdentifierFormatted"))}
+    return _norm(name) not in ident
+
+
+def _milliwatts_to_watts(value) -> Optional[float]:
+    """PoE draw and allocation arrive in mW (per the spec); None stays None."""
+    if value is None or value == "":
+        return None
+    return round(_num(value) / 1000.0, 1)
+
+
+def _port_row(port: Dict[str, Any], link_kind) -> Dict[str, Any]:
+    """
+    One switch port, as the full-inventory table shows it. An allowlist like
+    every shaper: R1 adds fields without notice and the payload should not grow
+    with them unread.
+    """
+    poe_enabled = port.get("poeEnabled")
+    has_neighbor = bool(port.get("neighborName") or port.get("neighborMacAddress"))
+    return {
+        "switch": port.get("switchName"),
+        "switchSerial": port.get("switchSerial"),
+        "unit": port.get("switchUnitId"),
+        "port": port.get("portIdentifier") or port.get("portIdentifierFormatted"),
+        "name": port.get("name"),
+        "named": _port_is_named(port),
+        "status": port.get("status"),
+        "up": _port_up(port),
+        "admin": port.get("adminStatus"),
+        "speed": port.get("portSpeed"),
+        "capacity": port.get("portSpeedCapacity"),
+        "media": port.get("mediaType") or port.get("portConnectorType"),
+        "optics": port.get("opticsType"),
+        "untagged": port.get("unTaggedVlan"),
+        "tagged": port.get("vlanIds"),
+        "profile": port.get("switchPortProfileName"),
+        "lag": port.get("lagName") or port.get("lagId"),
+        "stp": port.get("spanningTreeStatus"),
+        "errDisable": port.get("errorDisableStatus"),
+        "poeEnabled": None if poe_enabled is None else _truthy(poe_enabled),
+        "poeType": port.get("poeType"),
+        "poeUsedW": _milliwatts_to_watts(port.get("poeUsed")),
+        "poeTotalW": _milliwatts_to_watts(port.get("poeTotal")),
+        "neighbor": port.get("neighborName"),
+        "neighborMac": port.get("neighborMacAddress"),
+        "neighborKind": link_kind(port) if has_neighbor else None,
+        "crc": int(_num(port.get("crcErr"))),
+        "inErr": int(_num(port.get("inErr"))),
+        "outErr": int(_num(port.get("outErr"))),
+        "uplink": _truthy(port.get("cloudPort")),
+        "stacking": _truthy(port.get("usedInFormingStack")),
+        "tags": port.get("tags"),
+    }
+
+
+def _port_row_order(row: Dict[str, Any]):
+    """Switch, then port in numeric order — 1/1/2 before 1/1/10."""
+    parts = re.findall(r"\d+|\D+", str(row.get("port") or ""))
+    key = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in parts)
+    return (_norm(row.get("switch")), key)
+
+
 def port_card(ports: List[Dict[str, Any]],
               aps: Optional[List[Dict[str, Any]]] = None,
               switches: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1276,10 +1348,17 @@ def port_card(ports: List[Dict[str, Any]],
         })
     errored.sort(key=lambda row: row["crc"] + row["inErr"] + row["outErr"], reverse=True)
 
+    rows = [_port_row(port, link_kind) for port in ports]
+    rows.sort(key=_port_row_order)
+
     return {
         "total": len(ports),
         "up": len(up),
         "down": len(ports) - len(up),
+        # Every port, uncapped — the slow/errored lists above are the
+        # exceptions; this is the inventory a crew walks to validate an install.
+        "list": rows,
+        "named": sum(1 for row in rows if row["named"]),
         "bySpeed": [{"label": str(label), "count": n} for label, n in speeds.most_common()],
         "slowLinks": slow_links[:25],
         "slowCount": len(slow_links),
