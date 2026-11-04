@@ -23,12 +23,13 @@ that makes an SSH session inconvenient on purpose.
                               this deployment can save at all
   PUT /api/admin/roles        replace the policy
 
-The policy has two halves and they are NOT the same kind of thing. `hidden`
-decides which report sections a user is shown and fails open; `scope` decides
-which MSP-ECs and venues a user may reach at all and fails closed once set. The
-portal edits both from one dialog because one person sets both, but see
-api/scope.py before touching the second — on an MSP tenant, ECs are different
-companies, and it is the only half where a mistake shows one customer another.
+The policy has two kinds of control and they are NOT the same kind of thing.
+A ROLE decides what somebody may run and which report elements they are shown;
+RESOURCE GROUPS decide which MSP-ECs and venues they may reach at all, and fail
+closed once a catalogue exists. The portal edits both from one dialog because
+one person sets both, but see api/resource_groups.py and api/scope.py before
+touching the second — on an MSP tenant, ECs are different companies, and it is
+the only half where a mistake shows one customer another.
 
 The portal builds its EC and venue lists from the ORDINARY endpoints —
 /api/r1/{cid}/msp/mspEcs and /api/prism/{cid}/venues — which return everything
@@ -78,21 +79,9 @@ class VisibilityBody(BaseModel):
 
     hidden: Dict[str, List[str]] = Field(
         default_factory=dict,
-        description="Section ids to hide, keyed by role. Only the roles in "
-                    "visibility.MANAGED_ROLES are read; anything else, "
-                    "including 'admin', is ignored rather than refused.")
-
-    scope: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="EC/venue restriction, per role AND per person. Omit or "
-                    "send null for no restriction anywhere. Role keys are the "
-                    "roles in visibility.MANAGED_ROLES; the reserved key "
-                    "'people' (visibility.PEOPLE_KEY) holds a map of identity "
-                    "-> the same block, and a person's entry REPLACES their "
-                    "role's rather than adding to it. Shape either way: "
-                    '{"unrestricted": false, "ecs": {"<tenantId>": "*" | '
-                    '["<venueId>", ...]}}. Validated by scope.clean, which '
-                    "drops what it cannot read rather than admitting it.")
+        description="PRE-ROLES ONLY: section ids to hide, keyed by role id. "
+                    "Read forward onto the role of that id and never written "
+                    "back; visibility lives on the role now, as an allow list.")
 
     roles: Optional[Any] = Field(
         default=None,
@@ -112,9 +101,9 @@ class VisibilityBody(BaseModel):
                     "says what somebody may RUN, a group says whose network "
                     "they may run it on, and neither carries the other. "
                     "Omit or send null to leave the catalogue alone; an "
-                    "explicit empty map turns the model OFF and reverts the "
-                    "deployment to the legacy per-person scope, which is "
-                    "refused while anybody is still assigned a group. The "
+                    "explicit empty map turns the model OFF — everybody "
+                    "unrestricted again — which is refused while anybody is "
+                    "still assigned a group. The "
                     "compiled-in 'all-access' is never written back. See "
                     "api/resource_groups.py.")
 
@@ -122,12 +111,10 @@ class VisibilityBody(BaseModel):
         default=None,
         description="Per-person policy, keyed by identity: "
                     '{"<identity>": {"role": "<roleId>|null", '
-                    '"groups": ["<groupId>", ...]|null, '
-                    '"scope": <block>|null}}. `groups` is the territory once '
-                    "a group catalogue exists, and the ids UNION. `scope` is "
-                    "then a written-only compatibility shadow — see "
-                    "PolicyStore._shadow_scope — and is still the real "
-                    "setting before any group is saved.")
+                    '"groups": ["<groupId>", ...]|null}}. `groups` is the '
+                    "territory once a group catalogue exists, and the ids "
+                    "UNION; null is never placed (no venues), [] is a "
+                    "recorded decision to reach none.")
 
 
 def _role_authority(request: Request) -> bool:
@@ -376,7 +363,7 @@ async def put_roles(body: VisibilityBody, request: Request):
     _guard_last_group(body)
     actor = getattr(request.state, "prism_user", None) or "admin (passphrase)"
     try:
-        return visibility.STORE.save(body.hidden, body.scope, actor,
+        return visibility.STORE.save(body.hidden, actor,
                                      roles=body.roles, people=body.people,
                                      resource_groups=body.resourceGroups)
     except RuntimeError as exc:
@@ -448,15 +435,12 @@ def _combinations(policy: dict) -> List[Dict[str, Any]]:
     """
     people = policy.get(visibility.PEOPLE_BLOCK) or {}
     holders: Dict[str, List[str]] = {}
-    scoped: Dict[str, int] = {}
 
     if AUTH.mode == "accounts":
         try:
             import accounts
             for account in accounts.STORE.list():
                 holders.setdefault(account.role, []).append(account.username)
-                if (people.get(account.username.casefold()) or {}).get("scope"):
-                    scoped[account.role] = scoped.get(account.role, 0) + 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("capabilities: could not list accounts: %s", exc)
     else:
@@ -475,7 +459,6 @@ def _combinations(policy: dict) -> List[Dict[str, Any]]:
             "roleLabel": role.label,
             "builtin": role.id in role_rules.undeletable(),
             "holders": sorted(holders.get(role.id, [])),
-            "scopedHolders": scoped.get(role.id, 0),
             "grants": sorted(role.grants),
             "visibleCount": len(role.visible),
         })
@@ -490,7 +473,7 @@ def _combinations(policy: dict) -> List[Dict[str, Any]]:
         rows.append({
             "key": role_id, "roleId": role_id, "roleLabel": role_id,
             "builtin": False, "missing": True,
-            "holders": sorted(names), "scopedHolders": 0,
+            "holders": sorted(names),
             "grants": [], "visibleCount": 0,
         })
     return rows
@@ -642,8 +625,9 @@ async def get_preview(identity: str = Query(..., max_length=320,
     The matrix answers a design question — what does a combination unlock. This
     answers the support question, which is the one that generates calls: "why
     can't Dana see Block B?" Knowing she is scoped is half an answer; knowing
-    the restriction comes from HER OWN ENTRY rather than from the user role is
-    the half that tells somebody which box to change.
+    it comes from HER RESOURCE GROUPS (or that she has none), while what she is
+    shown comes from HER ROLE, is the half that tells somebody which box to
+    change.
 
     IT EXPLAINS, IT DOES NOT IMPERSONATE. No session is minted, nothing is
     fetched from RUCKUS ONE, and no report is built. An admin is unrestricted
@@ -702,19 +686,14 @@ async def get_preview(identity: str = Query(..., max_length=320,
     # WHERE each answer came from. The point of the whole endpoint: knowing
     # somebody is scoped is half an answer, knowing which box to change is the
     # half that ends the support call.
-    # WHICH OF TWO MODELS ANSWERED, before which box inside it. Once a group
-    # catalogue exists the role and the person's own scope block decide
-    # nothing, so naming them would send an administrator to edit a field
-    # that is no longer read — the exact failure this endpoint exists to
-    # prevent, one layer up.
+    # Groups decide reach once a catalogue exists; before that everybody is
+    # unrestricted, and saying so beats naming a box that changes nothing.
     groups_on = bool(policy.get("groupsInForce"))
     assigned = list(entry.get("groups") or []) if entry.get("groups") is not None else None
     if groups_on:
         scope_source = "groups" if assigned else "unplaced"
     else:
-        scope_source = ("person" if entry.get("scope") is not None
-                        else "role" if policy.get("scope", {}).get(role_id or "")
-                        else "unrestricted")
+        scope_source = "unrestricted"
     by_id = {g["id"]: g for g in policy.get("resourceGroups", [])}
     hidden_source = "role"
 

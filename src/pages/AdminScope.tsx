@@ -5,14 +5,13 @@ import {
 } from "@/hooks/useScopeCatalogue";
 
 /**
- * ONE PERSON's customers and venues — the by-person direction, and the only
- * place the venue level can be edited in full.
+ * ONE RESOURCE GROUP's customers and venues — the territory editor.
  *
- * A DIFFERENT KIND OF SETTING FROM THE SECTIONS TAB, and the dialog says so
- * rather than letting them look alike. Hiding a section tidies a report. This
- * decides whether someone can open a customer's data at all — and on an MSP
- * tenant those customers are separate companies, so a mistake here is the one
- * that shows one of them another.
+ * A DIFFERENT KIND OF SETTING FROM A ROLE'S VISIBLE ELEMENTS, and the screen
+ * says so rather than letting them look alike. Hiding a card tidies a report.
+ * This decides whether somebody can open a customer's data at all — and on an
+ * MSP tenant those customers are separate companies, so a mistake here is the
+ * one that shows one of them another.
  *
  * Consequently it FAILS CLOSED: the moment "only what I select" is chosen,
  * anything not selected is refused. The empty selection is a real, reachable
@@ -22,62 +21,29 @@ import {
  *
  * THE MODE IS TWO RADIOS AND THE TREE IS ALWAYS LIVE, which is a deliberate
  * reversal. It was one "can reach everything" tick box, and while that was on
- * — its default — the customer list below rendered greyed out and
- * `pointer-events-none`. So an admin looking for where to scope somebody
- * arrived at a list of their own customers that could not be clicked, which
- * reads as a feature that was never finished rather than as a mode. Now
- * narrowing is a choice you can see, and a click in the tree makes it: see
- * `narrow` below.
+ * the customer list below rendered greyed out and unclickable — which reads as
+ * a feature that was never finished rather than as a mode. Now narrowing is a
+ * choice you can see, and a click in the tree makes it: see `narrow` below.
  *
- * IT NAMES THE PERSON. The old label said "Users can reach every customer and
- * venue" — plural and generic, left over from when this control belonged to
- * the `user` role rather than to one person. Scope is per person now
- * (visibility.scope_for), so the labels say whose it is; a control that talks
- * about "users" while sitting under one person's name is the kind of thing
- * that gets read as a global switch and left alone.
+ * A GROUP HOLDS THE `{unrestricted, ecs}` SHAPE scope has always held,
+ * validated by the same `scope.clean`, and `allAccess` is that `unrestricted`
+ * flag. Per-person territories were removed with the model they belonged to
+ * (2026-11); people now reach what their groups cover.
  *
- * THE CUSTOMER LIST ARRIVES AS A PROP (`useScopeCatalogue`), because the
- * by-customer direction needs the same one. See that hook for why there is
- * only one copy.
- *
- * IT ALSO EDITS A ROLE'S DEFAULT (`kind="role"`), which is the same control
- * over the same stored shape — `visibility` keys scope blocks by role id
- * beside the per-person ones, and `scope.clean` validates both identically.
- * Only the prose differs, so a second component would have been this file
- * twice, with the fail-closed rule stated once in each and no test holding
- * them together.
- *
- * AND IT RESOLVES INHERITANCE, which is the part worth reading before
- * changing anything. `visibility.scope_for` answers person → role default →
- * unrestricted, so somebody with no entry of their own under a scoped role
- * already reaches a definite list of customers. Reading only their own entry
- * would draw an empty tree beside a radio claiming they reach everything —
- * both halves wrong, on the screen whose entire job is to say who can open
- * what. See `base` below.
+ * THE CUSTOMER LIST ARRIVES AS A PROP (`useScopeCatalogue`). See that hook for
+ * why there is only one copy.
  */
 
 export type { ScopeState };
 export { ALL_VENUES };
 
 export default function AdminScope(
-  { scope, onChange, subject, catalogue, kind = "person" }: {
+  { scope, onChange, subject, catalogue }: {
     scope: ScopeState;
     onChange: (next: ScopeState) => void;
     /** Whose scope this is, named in the labels. Omitted where it is not known. */
     subject?: string;
     catalogue: ScopeCatalogue;
-    /**
-     * Whether `scope` is a PERSON's own territory (the legacy model, still in
-     * force until a resource group exists) or the CONTENTS OF A GROUP.
-     *
-     * One component for both because they are one document: a group holds
-     * exactly the `{unrestricted, ecs}` shape scope has always held, validated
-     * by the same `scope.clean`, and `allAccess` is that `unrestricted` flag.
-     * Only the prose differs, so a second component would be this file twice,
-     * with the fail-closed rule stated once in each and nothing holding them
-     * together.
-     */
-    kind?: "person" | "group";
   },
 ) {
   const { ecs, ecError, rows, venues, loadVenues } = catalogue;
@@ -87,10 +53,10 @@ export default function AdminScope(
   const who = (subject || "").trim();
   const whoName = who
     ? <b>{who}</b>
-    : (kind === "group" ? "This group" : "This person");
-  // Unique per subject AND per kind: the dialog can hold two of these at once,
-  // and a shared name would make one radio move the other.
-  const radioName = `scope-mode-${kind}-${who || "unassigned"}`;
+    : "This group";
+  // Unique per group: the dialog can hold several of these at once, and a
+  // shared name would make one radio move another.
+  const radioName = `scope-mode-group-${who || "unnamed"}`;
 
   /**
    * What every tick box, counter and warning below reads.
@@ -304,10 +270,8 @@ export default function AdminScope(
                    checked={scope.unrestricted}
                    onChange={() => onChange({ ...scope, unrestricted: true })} />
             <span className="min-w-0 text-sm font-medium text-gray-900">
-              {kind === "group"
-                ? <>{whoName} covers <b>every</b> customer and venue, including
-                    ones added later</>
-                : <>{whoName} can reach <b>every</b> customer and venue</>}
+              <>{whoName} covers <b>every</b> customer and venue, including
+                ones added later</>
             </span>
           </label>
           <label className="flex items-start gap-2 cursor-pointer">
@@ -315,26 +279,14 @@ export default function AdminScope(
                    checked={!scope.unrestricted}
                    onChange={() => onChange({ ...scope, unrestricted: false })} />
             <span className="min-w-0 text-sm font-medium text-gray-900">
-              {kind === "group"
-                ? <>{whoName} covers <b>only</b> what is selected below</>
-                : <>{whoName} can reach <b>only</b> what is selected below</>}
+              <>{whoName} covers <b>only</b> what is selected below</>
             </span>
           </label>
         </div>
         <p className="mt-2 text-xs text-gray-500">
-          {kind === "group" ? (
-            <>
-              Everybody assigned this group can open what is selected here —
-              on the screen and in the PDF. Somebody holding <b>several</b>{" "}
-              groups gets all of them together, so a group only ever adds.
-            </>
-          ) : (
-            <>
-              Unlike the Sections tab, this decides what they can open <b>at
-              all</b> — anything not selected is refused, on the screen and in
-              the PDF.
-            </>
-          )}
+          Everybody assigned this group can open what is selected here —
+          on the screen and in the PDF. Somebody holding <b>several</b>{" "}
+          groups gets all of them together, so a group only ever adds.
         </p>
       </div>
 
@@ -345,8 +297,7 @@ export default function AdminScope(
           <TriangleAlert size={15} className="mt-0.5 shrink-0" />
           <span>
             Nothing is selected, so{" "}
-            {kind === "group" ? "anybody assigned this group"
-                              : (who || "this person")}{" "}
+            anybody assigned this group{" "}
             will be able to open <b>no venue at all</b>. That is a real
             setting, not an oversight — an empty selection means none, never
             all — so pick at least one customer, or choose the first option
@@ -445,9 +396,7 @@ export default function AdminScope(
       {base.unrestricted && rows.length > 0 && (
         <p className="text-xs text-gray-500">
           Every customer below is allowed at the moment. Tick one to narrow
-          {kind === "group"
-            ? " this group"
-            : (who ? ` ${who}` : " this person")} to just what you select —
+          {" "}this group to just what you select —
           that switches the choice above for you.
         </p>
       )}

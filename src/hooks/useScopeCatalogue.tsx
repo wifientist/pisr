@@ -152,19 +152,11 @@ export function scopeSummary(
 }
 
 /**
- * Where a person's reach came from, and the one place the portal works it out.
- *
- * MIRRORS `visibility.scope_for` DELIBERATELY AND EXACTLY: a person's own
- * entry, else their ROLE's default, else unrestricted. The portal cannot ask
- * the server this per person — it would be one request per row of a forty-row
- * roster — so it resolves locally, which means there are now two
- * implementations of one rule. Keeping it to this one function is what makes
- * that survivable: every screen reads it, nothing re-derives it, and
- * `/admin/preview` is the server's own answer for checking one person against.
- *
- * A ROLE DEFAULT IS NOT A FLOOR OR A CEILING, it is a FALLBACK. The person's
- * entry REPLACES it rather than narrowing or widening it — see scope.spec.ts,
- * "a person's scope REPLACES their role's".
+ * A resource group as the portal holds it. Where a person's reach comes from
+ * is worked out ONCE, by `resolveGroups` below, mirroring the group branch of
+ * `visibility.scope_for` — the portal cannot ask the server per person (one
+ * request per roster row), so every screen reads that one function and
+ * `/admin/preview` is the server's own answer to check one person against.
  */
 export interface ResourceGroup {
   id: string;
@@ -213,43 +205,16 @@ export function unionGroups(
   return { unrestricted: false, ecs };
 }
 
-export type ScopeSource = "person" | "role" | "unrestricted" | "groups" | "unplaced";
+/** Why somebody reaches what they do: their groups, none, or groups are off. */
+export type ScopeSource = "groups" | "unplaced" | "unrestricted";
 
 export interface Resolved {
   /** What they can actually reach. `unrestricted: true` means everything. */
   scope: ScopeState;
   source: ScopeSource;
-  /** The role default, when there is one — for showing what they fall back to. */
-  roleDefault: ScopeState | null;
 }
 
 export const UNRESTRICTED: ScopeState = { unrestricted: true, ecs: {} };
-
-/**
- * A scope state as a RESTRICTION, or null if it is not one.
- *
- * `{unrestricted: true}` and "no entry at all" are the SAME STORED STATE —
- * `scope.clean` returns None for an unrestricted block, so the file has one
- * way to say "no restriction here". Which means a person cannot be stored as
- * explicitly unrestricted in order to escape their role's default: an empty
- * entry falls back to the role, by construction. The portal must not offer
- * what the file cannot hold, so `AdminScope` renders the first radio as
- * "uses the <role> default" rather than "every customer" whenever one exists.
- */
-export function restrictionOf(scope: ScopeState | null | undefined): ScopeState | null {
-  return scope && !scope.unrestricted ? scope : null;
-}
-
-export function resolveScope(
-  own: ScopeState | null | undefined,
-  roleDefault: ScopeState | null | undefined,
-): Resolved {
-  const mine = restrictionOf(own);
-  const theirs = restrictionOf(roleDefault);
-  if (mine) return { scope: mine, source: "person", roleDefault: theirs };
-  if (theirs) return { scope: theirs, source: "role", roleDefault: theirs };
-  return { scope: UNRESTRICTED, source: "unrestricted", roleDefault: null };
-}
 
 /**
  * What somebody reaches and WHY, once resource groups decide it.
@@ -265,11 +230,9 @@ export function resolveGroups(
   byId: Record<string, ResourceGroup>,
 ): Resolved {
   if (assigned === null || assigned === undefined) {
-    return { scope: { unrestricted: false, ecs: {} },
-             source: "unplaced", roleDefault: null };
+    return { scope: { unrestricted: false, ecs: {} }, source: "unplaced" };
   }
-  return { scope: unionGroups(assigned.map((id) => byId[id])),
-           source: "groups", roleDefault: null };
+  return { scope: unionGroups(assigned.map((id) => byId[id])), source: "groups" };
 }
 
 /** Does this scope let somebody open one customer at all? */

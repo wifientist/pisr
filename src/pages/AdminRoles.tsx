@@ -2,12 +2,11 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronRight, Loader2, ShieldCheck, TriangleAlert, X,
 } from "lucide-react";
-import AdminScope from "@/pages/AdminScope";
 import AdminScopeByCustomer from "@/pages/AdminScopeByCustomer";
 import AdminResourceGroups, { groupSummary } from "@/pages/AdminResourceGroups";
 import {
-  UNRESTRICTED, resolveGroups, resolveScope, restrictionOf, scopeSummary,
-  useScopeCatalogue, type Resolved, type ResourceGroup, type ScopeState,
+  UNRESTRICTED, resolveGroups, scopeSummary,
+  useScopeCatalogue, type Resolved, type ResourceGroup,
 } from "@/hooks/useScopeCatalogue";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -33,17 +32,13 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
  * about customers — so the one screen where somebody is scoped to a tenant
  * was the one nobody could find. It is scope, and the label says so.
  *
- * SCOPE IS RESOLVED, NOT READ. Three things decide what somebody can open —
- * the role they hold, that role's DEFAULT territory, and their own entry —
- * and `visibility.scope_for` picks between them in that order. The portal
- * used to read only the last of the three: role defaults were in the GET
- * payload, accepted by the PUT and enforced on every request, with no control
- * anywhere and nothing on screen naming them. So anyone holding a scoped role
- * appeared unrestricted in the roster, in the per-customer counts and in the
- * by-customer groups, while the server refused them. The defaults are now
- * edited on the Roles tab, and every list on the Customer access tab reads
- * `resolveScope` — one function, mirroring the server's order, never
- * re-derived per screen.
+ * REACH IS RESOURCE GROUPS AND NOTHING ELSE. Once a group catalogue exists, a
+ * person opens exactly what their groups cover — no group, no venues — and
+ * before one exists everybody opens everything. Every list on the Customer
+ * access tab reads `resolvedOf`, which mirrors `visibility.scope_for`, so no
+ * screen re-derives it. Per-person territories and role scope defaults were
+ * how this worked before groups; they were removed (2026-11) rather than kept
+ * as a second answer to "what can Dana open".
  *
  * THAT TAB READS BOTH WAYS, and the roster is why. It was a `<select>` of
  * identities: the roster was hidden until you opened it, you could not see who
@@ -84,7 +79,6 @@ interface Person {
   role: string | null;
   /** Assigned resource groups. null = never placed; [] = deliberately none. */
   groups: string[] | null;
-  scope: ScopeState | null;
 }
 
 interface Column {
@@ -94,7 +88,6 @@ interface Column {
   builtin?: boolean;
   missing?: boolean;
   holders: string[];
-  scopedHolders: number;
   grants: string[];
   visibleCount: number;
 }
@@ -150,14 +143,6 @@ interface Payload {
   superGrant: string;
   policy: {
     roles: Role[];
-    /**
-     * Each role's DEFAULT scope, keyed by role id. LEGACY AND NOT EDITABLE
-     * HERE: a role says what somebody may run, never whose network, and the
-     * two axes were split for good. It is still ENFORCED while resource
-     * groups are off, so the portal surfaces it as something to clear rather
-     * than pretending it is not there.
-     */
-    scope: Record<string, ScopeState>;
     /** The territories. See api/resource_groups.py. */
     resourceGroups: ResourceGroup[];
     undeletableGroups: string[];
@@ -167,7 +152,6 @@ interface Payload {
       role: string | null;
       /** null means never placed, [] means deliberately nothing. */
       groups: string[] | null;
-      scope: ScopeState | null;
     }>;
     orphanedGroups: Record<string, string[]>;
     orphanedAssignments: Record<string, string>;
@@ -265,7 +249,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
         setPeople(Object.fromEntries(
           Object.entries(payload.policy.people).map(([identity, e]) => [
             identity, { identity, role: e.role ?? null,
-                        groups: e.groups ?? null, scope: e.scope ?? null },
+                        groups: e.groups ?? null },
           ])));
       })
       .catch((e: Error) => setError(e.message));
@@ -315,10 +299,9 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
         !== JSON.stringify(storedGroups(data.policy.resourceGroups || [],
                                         data.policy.undeletableGroups || []))) return true;
     const now = Object.fromEntries(Object.entries(people)
-      .map(([i, p]) => [i, { role: p.role, groups: p.groups, scope: p.scope }]));
+      .map(([i, p]) => [i, { role: p.role, groups: p.groups }]));
     const was = Object.fromEntries(Object.entries(data.policy.people)
-      .map(([i, p]) => [i, { role: p.role ?? null, groups: p.groups ?? null,
-                             scope: p.scope ?? null }]));
+      .map(([i, p]) => [i, { role: p.role ?? null, groups: p.groups ?? null }]));
     return JSON.stringify(now) !== JSON.stringify(was);
   }, [data, roles, groups, people]);
 
@@ -340,19 +323,14 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
           // model OFF, so the server refuses it while anybody is still
           // assigned a group (`_guard_last_group`).
           resourceGroups: storedGroups(groups, data?.policy.undeletableGroups || []),
-          // AN EMPTY GROUP LIST IS WORTH SENDING, unlike an unrestricted
-          // scope block: `[]` is an admin deciding somebody reaches nothing,
+          // AN EMPTY GROUP LIST IS WORTH SENDING: `[]` is an admin deciding
+          // somebody reaches nothing,
           // and dropping the entry would turn that decision back into "never
           // placed". Both refuse everything; only one of them is a record of
           // a choice, and the portal shows them differently.
           people: Object.fromEntries(Object.entries(people)
-            .filter(([, p]) => p.role || p.groups
-                               || (p.scope && !p.scope.unrestricted))
-            .map(([i, p]) => [i, {
-              role: p.role,
-              groups: p.groups,
-              scope: p.scope && !p.scope.unrestricted ? p.scope : null,
-            }])),
+            .filter(([, p]) => p.role || p.groups)
+            .map(([i, p]) => [i, { role: p.role, groups: p.groups }])),
         }),
       });
       const body = await res.json().catch(() => null);
@@ -361,15 +339,15 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
       setRoles(body.roles);
       setGroups(body.resourceGroups || []);
       // RESEEDED FROM THE RESPONSE, exactly as `load` does it. The PUT drops
-      // entries that carry neither a role nor a restriction, so a person
-      // narrowed and then put back to "every customer" is absent from the
-      // saved document while still sitting in local state — and `dirty`
+      // entries that carry neither a role nor a group list, so a person whose
+      // last assignment was cleared is absent from the saved document while
+      // still sitting in local state — and `dirty`
       // compares the two, so the Save button stayed lit for a change that had
       // already landed, forever.
       setPeople(Object.fromEntries(
         Object.entries(body.people as Record<string, any>).map(([identity, e]) => [
           identity, { identity, role: e.role ?? null,
-                      groups: e.groups ?? null, scope: e.scope ?? null },
+                      groups: e.groups ?? null },
         ])));
       setSaved(`Saved. ${body.roles.length} role(s).`);
     } catch (e) {
@@ -433,10 +411,6 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
     return [...names].sort();
   }, [data, people]);
 
-  /** Somebody's stored scope, or null for "no entry" — which means inherit. */
-  const scopeOf = useCallback(
-    (identity: string) => people[identity]?.scope ?? null, [people]);
-
   const roleLabelOf = useCallback((identity: string) => {
     const id = assignedRole(identity);
     return id ? (roleById[id]?.label ?? id) : null;
@@ -465,121 +439,59 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
   const setGroupsFor = useCallback(
     (identity: string, next: string[] | null) => setPeople((c) => ({
       ...c,
-      [identity]: { identity, role: c[identity]?.role ?? null,
-                    groups: next, scope: c[identity]?.scope ?? null },
+      [identity]: { identity, role: c[identity]?.role ?? null, groups: next },
     })), []);
-
-  /** The LEGACY role default, read-only — see the Payload note. */
-  const roleDefaultOf = useCallback((identity: string) => {
-    const id = assignedRole(identity) || data?.defaultRole;
-    return id ? restrictionOf((data?.policy.scope || {})[id]) : null;
-  }, [assignedRole, data?.policy.scope, data?.defaultRole]);
 
   /**
    * WHAT THEY ACTUALLY REACH, AND WHY — the one answer every list on this tab
-   * reads, resolved the way `visibility.scope_for` resolves it: their own
-   * entry, else their role's default, else unrestricted.
-   *
-   * Nothing here may read `scopeOf` on its own to decide whether somebody can
-   * open a customer. That was the whole defect: a person under a scoped role
-   * has no entry of their own, so every count, roster line and group on this
-   * tab called them unrestricted while the server was refusing them.
+   * reads, resolved the way `visibility.scope_for` resolves it: their groups
+   * once a catalogue exists, everything before one does.
    */
   const resolvedOf = useCallback(
     (identity: string): Resolved => (
       groupsInForce
         ? resolveGroups(groupsOf(identity), groupById)
-        : resolveScope(scopeOf(identity), roleDefaultOf(identity))),
-    [groupsInForce, groupsOf, groupById, scopeOf, roleDefaultOf]);
+        : { scope: UNRESTRICTED, source: "unrestricted" }),
+    [groupsInForce, groupsOf, groupById]);
+
+  /** People with no group yet — who switching groups on would shut out. */
+  const unplaced = useMemo(
+    () => everyone.filter((i) => groupsOf(i) === null), [everyone, groupsOf]);
 
   /**
-   * Turn the per-person lists that are in force TODAY into groups.
+   * THE ON-RAMP: give everybody not yet placed `all-access`.
    *
-   * THE ON-RAMP, and the reason switching models is not a morning of typing.
-   * Fail-closed means every unassigned person drops to nothing the moment a
-   * catalogue exists, so the realistic alternative to this button is an
-   * administrator hand-drawing forty territories while their colleagues
-   * cannot open anything.
+   * Groups fail closed, so the save that creates the first one would
+   * otherwise shut out every unassigned person at once. Everybody reaches
+   * everything before groups exist, so `all-access` is exactly what they have
+   * today — switching the model on then takes nothing from anyone, and
+   * narrowing becomes a deliberate edit per person afterwards.
    *
-   * DEDUPED BY TERRITORY, which is the whole insight groups offer: people
-   * with byte-identical customer maps were already one territory maintained
-   * in several places, and this is the first time that is visible. Everybody
-   * who was unrestricted gets `all-access`, because that is precisely what
-   * they had.
-   *
-   * It only PROPOSES — nothing is written until Save, so the diff is on
-   * screen and reversible by closing the dialog.
+   * It only PROPOSES — nothing is written until Save.
    */
-  const buildGroupsFromScopes = useCallback(() => {
-    const byTerritory = new Map<string, { ecs: ScopeState["ecs"]; who: string[] }>();
-    const unrestricted: string[] = [];
-    for (const identity of everyone) {
-      const own = restrictionOf(scopeOf(identity));
-      if (!own) { unrestricted.push(identity); continue; }
-      const key = JSON.stringify(
-        Object.fromEntries(Object.keys(own.ecs).sort().map((t) => [
-          t, Array.isArray(own.ecs[t]) ? [...(own.ecs[t] as string[])].sort()
-                                       : own.ecs[t]])));
-      const seen = byTerritory.get(key);
-      if (seen) seen.who.push(identity);
-      else byTerritory.set(key, { ecs: own.ecs, who: [identity] });
-    }
-
-    const made: ResourceGroup[] = [];
-    const assign: Record<string, string[]> = {};
-    let n = 0;
-    for (const { ecs, who } of byTerritory.values()) {
-      n += 1;
-      const id = `g_mig${n}${Math.random().toString(36).slice(2, 8)}`;
-      made.push({
-        id,
-        label: who.length === 1 ? `${who[0]}'s sites` : `Territory ${n}`,
-        description: `Carried over from the per-person lists of ${who.join(", ")}.`,
-        allAccess: false,
-        ecs,
-      });
-      for (const identity of who) assign[identity] = [id];
-    }
-    for (const identity of unrestricted) {
-      assign[identity] = [data?.policy.undeletableGroups?.[0] || "all-access"];
-    }
-
-    setGroups((current) => [...current, ...made]);
+  const placeEveryone = useCallback(() => {
+    const all = data?.policy.undeletableGroups?.[0] || "all-access";
     setPeople((current) => {
       const next = { ...current };
-      for (const [identity, held] of Object.entries(assign)) {
-        next[identity] = {
-          identity,
-          role: current[identity]?.role ?? null,
-          groups: held,
-          scope: current[identity]?.scope ?? null,
-        };
+      for (const identity of unplaced) {
+        next[identity] = { identity, role: current[identity]?.role ?? null,
+                           groups: [all] };
       }
       return next;
     });
-  }, [everyone, scopeOf, data?.policy.undeletableGroups]);
+  }, [unplaced, data?.policy.undeletableGroups]);
 
   const holdersOf = useCallback(
     (groupId: string) => everyone.filter(
       (i) => (groupsOf(i) || []).includes(groupId)),
     [everyone, groupsOf]);
 
-  const setScopeFor = useCallback(
-    (identity: string, scope: ScopeState | null) => setPeople((c) => ({
-      ...c,
-      [identity]: { identity, role: c[identity]?.role ?? null,
-                    groups: c[identity]?.groups ?? null, scope },
-    })), []);
-
   /**
    * How many people can open one customer — the number on its roster row.
    *
-   * COUNTS EVERY ROUTE TO IT, because each one genuinely opens the customer:
-   * their own entry, their role's default, or being unrestricted. A count of
-   * only the people explicitly selected would read as an answer to "who can
-   * see this customer" while being wrong by however many admins exist plus
-   * everyone under a scoped role — and this is the one reading of the screen
-   * that has to be trustworthy.
+   * COUNTS WHAT THEY RESOLVE TO, not what is ticked: somebody holding
+   * `all-access` opens every customer, and leaving them out would make this
+   * the one number on the screen an audit cannot trust.
    */
   const openerCount = useCallback((ecId: string) => everyone.filter((identity) => {
     const { scope } = resolvedOf(identity);
@@ -729,20 +641,6 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                         {role.grants.length} capability(ies) · {role.visible.length} card(s)
                         {holders.length ? ` · ${holders.length} person(s)` : ""}
                       </span>
-                      {/* A LEGACY SCOPE DEFAULT, flagged rather than edited.
-                          It still applies while resource groups are off, and
-                          then stops — so leaving it invisible would mean a
-                          restriction nobody can see today and a silent
-                          widening the day groups go on. */}
-                      {restrictionOf((data.policy.scope || {})[role.id]) && (
-                        <span className="shrink-0 rounded bg-amber-50 px-1.5 text-[10px]
-                                         text-amber-800"
-                              title="An older policy gave this role a scope default. It still applies until resource groups are switched on, then it is ignored. Clear it by giving its holders a resource group.">
-                          legacy scope: {scopeSummary(
-                            (data.policy.scope || {})[role.id],
-                            catalogue.nameOf).text}
-                        </span>
-                      )}
                       {!builtin && (
                         <button
                           onClick={() => setRoles((c) => c.filter((r) => r.id !== role.id))}
@@ -966,8 +864,8 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
               holdersOf={holdersOf}
               inForce={groupsInForce}
               readOnly={readOnly}
-              onBuildFromScopes={buildGroupsFromScopes}
-              carryOverCount={everyone.length} />
+              onPlaceEveryone={placeEveryone}
+              unplacedCount={unplaced.length} />
           </div>
         )}
 
@@ -1063,10 +961,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
               <div className="min-w-0 max-h-[46vh] overflow-y-auto rounded-md
                               border border-gray-200">
                 {direction === "person" && rosterRows.map((identity) => {
-                  // THE EFFECTIVE SCOPE, not the stored one. A roster showing
-                  // "every customer" beside somebody their role has scoped to
-                  // two is worse than no roster: it is the answer an admin
-                  // would act on.
+                  // THE EFFECTIVE REACH, resolved the server's way.
                   const { scope, source } = resolvedOf(identity);
                   const sum = scopeSummary(scope, catalogue.nameOf);
                   const held = groupsOf(identity);
@@ -1111,9 +1006,6 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                             : "text-gray-500"}>
                           {line}
                         </span>
-                        {!groupsInForce && source === "role" && (
-                          <span className="text-gray-400"> (role)</span>
-                        )}
                       </span>
                     </button>
                   );
@@ -1170,12 +1062,10 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                   const roleId = assignedRole(subject);
                   const roleLabel = roleId
                     ? (roleById[roleId]?.label ?? roleId) : null;
-                  // The role whose DEFAULT applies, which for somebody nothing
-                  // names is the built-in one the request path floors at.
-                  const fellBack = !roleId;
+                  // The role that applies, which for somebody nothing names is
+                  // the built-in one the request path floors at.
                   const effRoleId = roleId || data.defaultRole;
                   const effRoleLabel = roleById[effRoleId]?.label ?? effRoleId;
-                  const own = restrictionOf(scopeOf(subject));
                   const held = groupsOf(subject);
                   const effective = scopeSummary(resolved.scope, catalogue.nameOf);
                   return (
@@ -1188,13 +1078,10 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                       change one thing with no answer to which wins.
                     */}
                     {/*
-                      THE WHOLE RESOLUTION, IN ORDER, ON ONE CARD. Three things
-                      decide what somebody reaches — the role they hold, that
-                      role's default, and their own entry — and before this they
-                      were on three different screens, so "why can Dana not open
-                      Acme?" meant holding all three in your head and knowing
-                      which wins. The order here is `visibility.scope_for`'s
-                      order, and the last line is the answer.
+                      THE WHOLE ANSWER ON ONE CARD: the role (what they may run)
+                      and their groups (whose venues), and on the last line what
+                      that resolves to — so "why can Dana not open Acme?" is
+                      read here rather than worked out.
                     */}
                     <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
                       <dl className="space-y-1 text-xs">
@@ -1241,27 +1128,14 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                             </dd>
                           </div>
                         ) : (
-                          <>
-                            <div className="flex min-w-0 gap-2">
-                              <dt className="w-28 shrink-0 text-gray-500">
-                                {fellBack ? `${effRoleLabel} default` : "Role default"}
-                              </dt>
-                              <dd className="min-w-0 flex-1 text-gray-900">
-                                {resolved.roleDefault
-                                  ? scopeSummary(resolved.roleDefault,
-                                                 catalogue.nameOf).text
-                                  : <i className="text-gray-500">none — every customer</i>}
-                              </dd>
-                            </div>
-                            <div className="flex min-w-0 gap-2">
-                              <dt className="w-28 shrink-0 text-gray-500">Their own</dt>
-                              <dd className="min-w-0 flex-1 text-gray-900">
-                                {own
-                                  ? scopeSummary(own, catalogue.nameOf).text
-                                  : <i className="text-gray-500">not set</i>}
-                              </dd>
-                            </div>
-                          </>
+                          <div className="flex min-w-0 gap-2">
+                            <dt className="w-28 shrink-0 text-gray-500">
+                              Resource groups
+                            </dt>
+                            <dd className="min-w-0 flex-1 text-gray-500">
+                              <i>not switched on</i>
+                            </dd>
+                          </div>
                         )}
                         <div className="flex min-w-0 gap-2 border-t border-gray-200 pt-1">
                           <dt className="w-28 shrink-0 font-medium text-gray-700">
@@ -1277,11 +1151,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                                 ? "— the union of their groups"
                                 : resolved.source === "unplaced"
                                   ? "— they hold no resource group"
-                                  : resolved.source === "person"
-                                    ? "— from their own entry"
-                                    : resolved.source === "role"
-                                      ? `— from the ${effRoleLabel} default`
-                                      : "— nothing restricts them"}
+                                  : "— resource groups are not switched on yet"}
                             </span>
                           </dd>
                         </div>
@@ -1306,8 +1176,7 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                             ...c,
                             [subject]: { identity: subject,
                                          role: e.target.value || null,
-                                         groups: c[subject]?.groups ?? null,
-                                         scope: c[subject]?.scope ?? null },
+                                         groups: c[subject]?.groups ?? null },
                           }))}
                           className="mt-1 w-full min-w-0 rounded-md border border-gray-300
                                      px-2 py-1.5 text-sm">
@@ -1383,12 +1252,18 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                         )}
                       </div>
                     ) : (
-                      <AdminScope
-                        key={subject}
-                        subject={subject}
-                        catalogue={catalogue}
-                        scope={people[subject]?.scope ?? UNRESTRICTED}
-                        onChange={(next) => setScopeFor(subject, next)} />
+                      <div className="rounded-md border border-dashed border-gray-300
+                                      px-3 py-4 text-center text-xs text-gray-500">
+                        Resource groups are not switched on, so everybody can
+                        open every customer. Restricting {subject} means giving
+                        them a group.
+                        <br />
+                        <button type="button" onClick={() => setTab("groups")}
+                                className="mt-2 text-blue-700 underline-offset-2
+                                           hover:underline">
+                          Set up resource groups
+                        </button>
+                      </div>
                     )}
                   </div>
                   );
@@ -1413,10 +1288,9 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                     if (!groupsInForce) return (
                       <div className="rounded-md border border-dashed border-gray-300
                                       px-3 py-6 text-center text-xs text-gray-500">
-                        <b>{ec.name}</b> — reading by customer needs resource
-                        groups. Right now access is a bespoke list on each
-                        person, so "who can open this customer" has no answer
-                        shorter than opening everybody.
+                        <b>{ec.name}</b> — resource groups are not switched on,
+                        so everybody can open every customer. Reading and
+                        setting access by customer needs them.
                         <br />
                         <button type="button" onClick={() => setTab("groups")}
                                 className="mt-2 text-blue-700 underline-offset-2
@@ -1543,11 +1417,11 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                           .join(", ")
                         : "nothing — an empty selection means no customers"}
                     <span className="ml-1 text-gray-500">
-                      — {preview.scope.source === "person"
-                          ? "from their own entry on the People tab"
-                          : preview.scope.source === "role"
-                            ? "from their role's default, not theirs"
-                            : "nobody has set a restriction"}
+                      — {preview.scope.source === "groups"
+                          ? "the union of their resource groups"
+                          : preview.scope.source === "unplaced"
+                            ? "they hold no resource group"
+                            : "resource groups are not switched on"}
                     </span>
                   </p>
                   <p className="min-w-0 text-gray-700">
@@ -1583,7 +1457,6 @@ export default function AdminRoles({ onClose }: { onClose: () => void }) {
                           <div className="whitespace-nowrap">{c.roleLabel}</div>
                           <div className="text-[11px] font-normal text-gray-500">
                             {c.holders.length ? `${c.holders.length} person(s)` : "nobody yet"}
-                            {c.scopedHolders ? ` · ${c.scopedHolders} scoped` : ""}
                           </div>
                         </th>
                       ))}

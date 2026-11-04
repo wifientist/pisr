@@ -253,10 +253,10 @@ that": **the role they were assigned**.
   holding all three, and hidden entirely otherwise — not greyed, not
   shown-and-refused. Both the API (`require_grants`) and the SPA (`can()`)
   read that one list, so a control cannot appear for people the server refuses.
-- **SCOPE** stays PER PERSON, not on the role. On the role you would need
-  `tenant_leader_north` and `tenant_leader_south`, and the role list would grow
-  with the org chart rather than with the kinds of work people do. The role
-  carries a default; the person carries their territory.
+- **REACH** is per person, never on the role — by the resource groups assigned
+  to them (below). On the role you would need `tenant_leader_north` and
+  `tenant_leader_south`, and the role list would grow with the org chart rather
+  than with the kinds of work people do.
 
 - **TERRITORY IS A RESOURCE GROUP, AND IT IS NOT THE ROLE.** Two axes, kept
   apart deliberately: the ROLE says what somebody may RUN and SEE, the
@@ -282,11 +282,11 @@ that": **the role they were assigned**.
     granted by assignment, so somebody nobody placed reaches nothing.
   - **THE BOOTSTRAP RULE IS WHAT STOPS THAT BEING AN OUTAGE.**
     `visibility.groups_in_force` is keyed on a stored catalogue EXISTING; until
-    one does, scope answers the legacy way (person entry → role default →
-    unrestricted). So shipping this changed nothing for anybody, and switching
-    it on is a deliberate act with an on-ramp — the portal's "Carry the current
-    access across" builds a group per distinct existing territory, deduped,
-    and hands `all-access` to everyone who was unrestricted. Same shape as the
+    one does, everybody reaches every venue, which is what an unconfigured
+    deployment has always done. Switching it on is a deliberate act with an
+    on-ramp — the Resource groups tab's "Give everyone All access first" hands
+    `all-access` to everybody not yet placed, which is exactly what they had,
+    so the save that creates the first group takes nothing away. Same shape as the
     super tier's "the tier does not exist until somebody holds it". The
     compiled-in `all-access` deliberately does NOT count, or every deployment
     would have switched over on upgrade.
@@ -300,14 +300,6 @@ that": **the role they were assigned**.
     DEFAULT auth mode showing every user nothing with no screen that could fix
     it. Groups need somebody to assign them to. Same reasoning as the super
     tier, which cannot exist there either.
-  - **`PolicyStore._shadow_scope` is the rollback guard, and is why groups did
-    not need `FORMAT_VERSION` bumped.** An older PRISM refuses a version it does
-    not understand OUTRIGHT, which for scope means every restriction vanishing
-    at once. So groups ride under a key it cannot see, and the territory they
-    resolve to is ALSO written to `people[x].scope`, where it already looks.
-    Never wider than live; `all-access` resolves to "no restriction", which is
-    what that older PRISM would have done anyway. WRITE-ONLY from then on —
-    `scope_for` reads the groups.
   - **`all-access` is COMPILED IN**, like `roles._BUILTINS` and
     `baselines/ruckus.json`: an unreadable policy must still leave somebody
     able to reach the estate and repair it. It is the only group that can say
@@ -336,10 +328,15 @@ that": **the role they were assigned**.
   - **A deleted group confers nothing** — not even a fallback — and the
     assignment is KEPT rather than dropped so the mistake is visible.
     `orphanedGroups` in the policy payload, same rule as a deleted role.
-  - A role's stored `scope` default is still READ and still enforced while
-    groups are off. The portal flags it on the role row as "legacy scope"
-    rather than editing it, because it stops applying the day groups go on and
-    an invisible restriction that silently lifts is worse than a visible one.
+  - **GROUPS ARE THE ONLY REACH MODEL.** Before them, reach was a per-role
+    `scope` default and a per-person `scope` entry, resolved person → role →
+    unrestricted. Both were REMOVED (2026-11, once production had every person
+    on a group) rather than kept as a second answer to "what can Dana open".
+    `_load` ignores them, the next save drops them, and `_warn_retired_scope`
+    logs an ERROR for the one dangerous file: legacy restrictions with no group
+    saved, which now silently means everybody unrestricted. Do not bring a
+    fallback back — a second model is how "why can she see that?" stops
+    having one answer.
 
 - **ADMIN-NESS IS A CAPABILITY** (`admin.portal`), which is what makes
   `install_user` first-class beside `admin` rather than second-class. It also
@@ -421,17 +418,15 @@ Read them in this order; each explains the next.
   NAME elements no role allows, so a card added in a release is visibly
   ungranted rather than quietly missing. **That is also the standing tax: a new
   card or capability is in nobody's stored role until somebody grants it.**
-- `api/scope.py` — which MSP-ECs and venues a role may reach. A different kind
-  of control with different rules; see the trap below. **Scope resolves PER
-  PERSON before per role**: an identity with an entry under
-  `visibility.PEOPLE_KEY` gets that entry INSTEAD of their role's, never in
-  addition to it. Two regional leaders with identical duties and different
-  territories is the case it exists for; a union rule would have handed each of
-  them their own ECs plus every one the role could already reach. Ask through
+- `api/scope.py` — the `Scope` value (which MSP-ECs and venues are reachable)
+  and its fail-closed rules, shared by `resource_groups.py`, which decides
+  WHOSE scope is what. A different kind of control from element visibility,
+  with different rules; see the trap below. Ask through
   `auth.scope_of(request)` — never `visibility.scope_for` directly, which has
   no default for `identity` precisely so a call site that forgets it is a
   TypeError rather than a silent widening.
-- `api/visibility.py` — the file on disk, holding both halves.
+- `api/visibility.py` — the file on disk: roles, resource groups, and each
+  person's role and group assignment.
 
 ## Testing the role model
 
@@ -529,7 +524,7 @@ covered on the next run with nothing edited.
   silently did nothing, with the value sitting in the file in plain sight.
   `_people` was exactly that, and no unit test could have caught it: the store
   read the file perfectly when constructed fresh. It took a save and a read in
-  one process. `test_a_saved_scope_takes_effect_without_a_restart` is what says
+  one process. `test_a_saved_policy_takes_effect_without_a_restart` is what says
   so now.
 
 - **`api/scripts/access_surface.py` is the DERIVED access surface**, and the

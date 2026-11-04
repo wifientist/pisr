@@ -156,8 +156,8 @@ def test_groups_decide_nothing_until_a_catalogue_is_saved():
     THE UPGRADE GUARD, and the most important test here. Every existing
     deployment has people with no group. If the model switched on the moment
     this code shipped, all of them would see nothing on deploy morning — an
-    outage that reads as an authentication failure. So scope keeps answering
-    the old way until somebody saves a group.
+    outage that reads as an authentication failure. So everybody is
+    unrestricted until somebody saves a group.
     """
     store = _store(people={"dana": {"role": "user"}})
     assert not store.groups_in_force
@@ -166,24 +166,46 @@ def test_groups_decide_nothing_until_a_catalogue_is_saved():
         "upgrade into an outage")
 
 
-def test_the_legacy_rules_still_answer_while_groups_are_off():
-    """Person entry beats role default beats unrestricted, exactly as before."""
+RETIRED = {"unrestricted": False, "ecs": {"roleTenant": "*"}}
+
+
+def test_the_retired_scope_fields_decide_nothing():
+    """
+    A role scope default and a per-person `scope` were how reach worked before
+    resource groups. Neither is read any more — with groups off, everybody is
+    unrestricted whatever those fields say. That is a WIDENING for a file that
+    still relies on them, which is why `_load` logs it as an error; this test
+    holds the rule itself, so nobody quietly brings the old resolution back.
+    """
     store = _store(
-        scope={"user": {"unrestricted": False, "ecs": {"roleTenant": "*"}}},
-        people={"dana": {"role": "user",
-                         "scope": {"unrestricted": False,
-                                   "ecs": {"danaTenant": "*"}}},
+        scope={"user": RETIRED},
+        people={"dana": {"role": "user", "scope": RETIRED},
                 "sam": {"role": "user"}})
-    assert store.scope_for("dana").allows_ec("danaTenant")
-    assert not store.scope_for("dana").allows_ec("roleTenant"), (
-        "a person's entry was unioned with their role's instead of replacing it")
-    assert store.scope_for("sam").allows_ec("roleTenant"), (
-        "somebody with no entry of their own lost their role's default")
+    assert not store.groups_in_force
+    assert store.scope_for("dana", "user").unrestricted, (
+        "a retired per-person scope was still enforced")
+    assert store.scope_for("sam", "user").unrestricted, (
+        "a retired role scope default was still enforced")
+    assert "scope" not in store.policy(), "the retired block is still served"
+    assert "scope" not in store.policy()["people"]["dana"]
+
+
+def test_the_retired_scope_fields_are_dropped_on_save():
+    """The next save leaves one description of reach on disk, not two."""
+    store = _store(
+        resourceGroups={"north": NORTH},
+        scope={"user": RETIRED},
+        people={"dana": {"role": "user", "groups": ["north"], "scope": RETIRED}})
+    store.save({}, "tester", resource_groups={"north": NORTH})
+    written = json.loads(Path(store.path).read_text())
+    assert "scope" not in written, "the retired role default was written back"
+    assert written["people"]["dana"] == {"role": "user", "groups": ["north"]}, (
+        written["people"]["dana"])
 
 
 def test_saving_a_group_turns_the_model_on():
     store = _store()
-    store.save({}, None, "tester", roles={}, people={},
+    store.save({}, "tester", roles={}, people={},
                resource_groups={"north": NORTH})
     assert store.groups_in_force
 
@@ -268,7 +290,7 @@ def test_a_saved_group_takes_effect_without_a_restart():
     `_groups` is the third field with the same shape.
     """
     store = _store()
-    store.save({}, None, "tester", roles={}, people={"dana": {"groups": ["north"]}},
+    store.save({}, "tester", roles={}, people={"dana": {"groups": ["north"]}},
                resource_groups={"north": NORTH})
     assert store.scope_for("dana").allows_ec("tenantA"), (
         "a group saved in this process was not in force until a restart")
@@ -281,59 +303,13 @@ def test_the_builtin_is_not_written_back():
     and an unreadable file has no fallback left.
     """
     store = _store()
-    store.save({}, None, "tester", roles={}, people={},
+    store.save({}, "tester", roles={}, people={},
                resource_groups={**{"north": NORTH},
                                 rg.BUILTIN_ALL: rg.builtins()[rg.BUILTIN_ALL].public()})
     written = json.loads(Path(store.path).read_text())
     assert rg.BUILTIN_ALL not in written.get("resourceGroups", {}), (
         "the compiled-in group was persisted onto the volume")
     assert "north" in written["resourceGroups"]
-
-
-def test_the_rollback_shadow_is_written_and_is_never_wider():
-    """
-    Groups ride under a key an older PRISM cannot see, so the territory they
-    resolve to is ALSO written where that older PRISM already looks. Without
-    it a rollback reads "no scope entry" as unrestricted, which is the one
-    direction this control must never fail in.
-    """
-    store = _store()
-    store.save({}, None, "tester", roles={},
-               people={"dana": {"groups": ["north"]},
-                       "wide": {"groups": [rg.BUILTIN_ALL]},
-                       "none": {"groups": []}},
-               resource_groups={"north": NORTH})
-    written = json.loads(Path(store.path).read_text())["people"]
-
-    shadow = written["dana"]["scope"]
-    assert shadow["ecs"]["tenantA"] == "*", "the shadow lost a customer"
-    assert sorted(shadow["ecs"]["tenantB"]) == ["v1", "v2"]
-
-    # all-access resolves to "no restriction", which is what an older PRISM
-    # would already have done for somebody with no entry. Nothing is given
-    # away by it, and writing an id list instead would be NARROWER than the
-    # group and would go stale.
-    assert "scope" not in written["wide"]
-
-    # And the fail-closed case survives the rollback as itself.
-    assert written["none"]["scope"] == {"unrestricted": False, "ecs": {}}
-
-
-def test_the_shadow_leaves_pre_groups_people_alone():
-    """
-    Somebody carried forward with a scope entry and no groups has not been
-    placed yet. Resolving a territory for them would be the store guessing,
-    and the guess would be "nothing".
-    """
-    store = _store(people={"legacy": {"scope": {"unrestricted": False,
-                                                "ecs": {"old": "*"}}}})
-    store.save({}, None, "tester", roles={},
-               people={"legacy": {"scope": {"unrestricted": False,
-                                            "ecs": {"old": "*"}}}},
-               resource_groups={"north": NORTH})
-    written = json.loads(Path(store.path).read_text())["people"]
-    assert written["legacy"]["scope"]["ecs"] == {"old": "*"}, (
-        "a person who predates groups had their scope overwritten")
 
 
 def test_the_policy_names_what_is_broken():

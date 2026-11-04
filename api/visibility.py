@@ -1,18 +1,20 @@
 """
-The policy file: what a non-admin may reach, and what they are shown of it.
+The policy file: what somebody may run, what they are shown, and whose venues
+they may run it against.
 
-TWO HALVES, WITH DIFFERENT RULES. They share this file because they are set
-from one portal and changed by one person, but do not let that make them feel
-like one thing:
+TWO KINDS OF CONTROL, WITH DIFFERENT RULES. They share this file because they
+are set from one portal and changed by one person, but do not let that make
+them feel like one thing:
 
-  `hidden`  which report SECTIONS a role is shown. De-cluttering. Fails OPEN —
-            see the note below, and api/sections.py.
-  `scope`   which MSP-ECs and VENUES a role may report on at all. Access.
-            Fails CLOSED once set — see api/scope.py, which owns that logic and
-            explains why the two differ.
+  `roles`            what somebody may RUN (capabilities) and SEE (an allow
+                     list of report elements). See api/roles.py.
+  `resourceGroups`   which MSP-ECs and VENUES somebody may report on at all,
+  + people[x].groups by the groups assigned to them. Access. Fails CLOSED once
+                     a catalogue exists — see api/resource_groups.py and
+                     api/scope.py, which own that logic.
 
-Everything below about failing open describes the FIRST of those. The scope
-block is parsed by `scope.parse`, which has its own rules and its own reasons.
+Everything below about failing open describes element visibility, never
+reach. Reach has its own rules and its own reasons.
 
 THIS IS THE ONE PLACE PRISM WRITES TO DISK, and it is a deliberate exception to
 the rule in CLAUDE.md rather than an erosion of it. That rule — no snapshot
@@ -31,20 +33,25 @@ guessed at:
 
     {
       "version": 2,
-      "hidden": {"user": ["wired.port-errors", "devices.aps"]},
-      "scope": {"user": {"unrestricted": false,
-                         "ecs": {"<tenantId>": "*",
-                                 "<tenantId>": ["<venueId>", "<venueId>"]}}},
+      "roles": {"install_user": {"label": …, "grants": […], "visible": […]}},
+      "resourceGroups": {"north": {"label": "North", "allAccess": false,
+                                   "ecs": {"<tenantId>": "*",
+                                           "<tenantId>": ["<venueId>"]}}},
+      "people": {"dana": {"role": "install_user", "groups": ["north"]}},
       "updatedAt": "2026-08-28T10:04:00Z",
       "updatedBy": "someone@corp.example"
     }
 
-An OLDER version is read, not rejected: a version-1 file simply has no scope
-block, which means no restriction, which is exactly what a version-1
-deployment had. A NEWER one is refused, because a file written by a later PRISM
-may mean something by a key this code would silently ignore — and silently
-ignoring a key in the scope block is how you serve one customer's venue to
-another.
+A NEWER version is refused, because a file written by a later PRISM may mean
+something by a key this code would silently ignore — and silently ignoring a
+key that decides reach is how you serve one customer's venue to another.
+
+RETIRED KEYS ARE IGNORED, AND SAID SO. Before resource groups, reach was a
+`scope` block (a default territory per role) and a `scope` on each person.
+Groups replaced both (2026-11) and neither is read any more; the next save
+drops them. The one dangerous file is a legacy-scoped deployment that never
+switched groups on — ignoring its restrictions WIDENS everybody — so `_load`
+logs that case as an error rather than letting it pass quietly.
 
 `hidden` is keyed by role and holds ONE list per role — the sections that role
 does not see. Not two lists, not a per-section allow/deny pair: two lists can
@@ -88,48 +95,13 @@ logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = 2
 
-# The only role that can have anything hidden from it. Admins see everything by
-# construction — there is no policy entry that could hide a section from the
-# person who edits the policy, which removes the "locked myself out" failure
-# entirely. A third role would be a new key here and a new column in the portal.
-#: RETIRED. Before roles existed this was the one role a policy could hide
-#: things from. The list a role hides now lives ON the role, so there is no
-#: fixed set of "manageable" ones — an admin creates as many as they need.
-#:
-#: Kept as a name only because `PEOPLE_KEY`'s assertion below reads better
-#: against it, and because a stored `hidden: {"user": [...]}` block is still
-#: read forward onto the role of that id. See `_migrate_hidden`.
-MANAGED_ROLES: Tuple[str, ...] = ("user",)
-
-# Where PER-PERSON policy lives: a top-level map of identity -> {role,
-# scope}. R1 shipped it as `scope.people` (scope only); both are read, and the
-# top-level one is written. See `_clean_people`.
+# Where PER-PERSON policy lives: a top-level map of identity -> {role, groups}.
 #
-# ONE PLACE FOR "WHAT IS DANA'S POLICY", deliberately. Her role and her
-# scope are two answers to one question an admin asks in one sitting, and
-# splitting them across two blocks means two places to look and two places to
-# forget when somebody leaves.
+# ONE PLACE FOR "WHAT IS DANA'S POLICY", deliberately. Her role and her groups
+# are two answers to one question an admin asks in one sitting, and splitting
+# them across two blocks means two places to look and two places to forget
+# when somebody leaves.
 PEOPLE_BLOCK = "people"
-
-# The legacy nesting of the same map, inside `scope`, beside the role keys.
-#
-# NESTED UNDER A RESERVED KEY RATHER THAN IN A NEW TOP-LEVEL SHAPE, and that is
-# a rollback decision rather than an aesthetic one. Restructuring `scope` into
-# `{"roles": …, "people": …}` would need FORMAT_VERSION bumped, and a PRISM one
-# version older refuses a file it does not understand OUTRIGHT — which for
-# scope means every restriction silently vanishing on a rollback, the one
-# direction this control must never fail in. A key that is simply not a
-# managed role is invisible to an older reader: it keeps every role
-# restriction it already understood and merely does not see the per-person
-# ones. Worse than the current binary, better than unrestricted.
-#
-# The obvious hazard is a future role actually called "people", which would
-# make one person's scope look like a role's. `test_sections.py` would not
-# catch it and nor would anything else, so it is asserted below.
-PEOPLE_KEY = "people"
-assert PEOPLE_KEY not in MANAGED_ROLES, (
-    f"{PEOPLE_KEY!r} is the reserved per-person scope key and cannot also be "
-    "a managed role — see visibility.PEOPLE_KEY")
 
 # Section ids that have been renamed, old -> new.
 #
@@ -182,7 +154,6 @@ class PolicyStore:
         self.path = Path(path) if path else None
         self._lock = threading.Lock()
         self._cache: Dict[str, List[str]] = {}
-        self._scope: Dict[str, Dict[str, Any]] = {}
         # INITIALISED HERE AND NOT ONLY IN `_load`, because `_load` returns
         # early when there is no path at all — the unconfigured deployment —
         # and every reader would then hit an AttributeError rather than the
@@ -244,7 +215,6 @@ class PolicyStore:
             # No file yet — the normal state of a fresh deployment, not an
             # error. Nothing is hidden until an admin hides something.
             self._cache = {}
-            self._scope = {}
             self._roles = {}
             self._groups = {}
             self._people = {}
@@ -280,15 +250,15 @@ class PolicyStore:
             # writes the current version; until then an older file is simply an
             # older file, and rewriting one on read would mean a container
             # restart silently modifies a mounted volume.
-            logger.info("visibility: %s is version %d; reading it as one with "
-                        "no scope restriction.", self.path, version)
+            logger.info("visibility: %s is version %d; reading it forward.",
+                        self.path, version)
 
         self._cache = self._clean(raw.get("hidden"))
-        self._scope = self._clean_scope(raw.get("scope"))
         self._roles = self._migrate_hidden(
             role_rules.clean(raw.get("roles")), self._cache)
         self._groups = group_rules.clean(raw.get("resourceGroups"))
         self._people = self._clean_people(raw, role_rules.resolve(self._roles))
+        self._warn_retired_scope(raw)
         self._meta = {"updatedAt": raw.get("updatedAt"),
                       "updatedBy": raw.get("updatedBy")}
         self._stamp = stamp
@@ -376,59 +346,57 @@ class PolicyStore:
                 "save writes it there.", len(ids), len(allowed), role_id)
         return {k: v for k, v in migrated.items() if v is not None}
 
-    @staticmethod
-    def _clean_scope(raw, known_roles=None) -> Dict[str, Dict[str, Any]]:
+    def _warn_retired_scope(self, raw) -> None:
         """
-        Keep only managed roles' scope blocks, each validated by `scope.clean`.
+        Say so when a file still carries the reach model groups replaced.
 
-        A role whose block says "no restriction" is dropped rather than stored
-        as an explicit unrestricted marker, so the file has exactly one way to
-        say it and `scope_for` has exactly one thing to test.
+        Harmless once groups are in force — those fields were already ignored
+        then, and the next save drops them. NOT harmless on a deployment that
+        restricted people that way and never saved a group: their territory is
+        now ignored, so they reach everything. That is the widening this
+        control must never do quietly, so it is an ERROR naming the fix.
         """
-        if not isinstance(raw, dict):
-            return {}
-        cleaned: Dict[str, Dict[str, Any]] = {}
-        for key, value in raw.items():
-            if not isinstance(key, str) or key == PEOPLE_KEY:
-                continue
-            # Keyed by ROLE ID now. An id for a role that no longer exists is
-            # kept rather than dropped: the restriction was deliberate, and
-            # dropping it would widen whoever holds that role if it comes back.
-            block = scope_rules.clean(value)
-            if block is not None:
-                cleaned[key] = block
-        return cleaned
+        retired_roles = isinstance(raw.get("scope"), dict) and any(
+            scope_rules.clean(v) is not None for k, v in raw["scope"].items()
+            if k != PEOPLE_BLOCK)
+        people = raw.get(PEOPLE_BLOCK) if isinstance(raw.get(PEOPLE_BLOCK), dict) else {}
+        retired_people = sum(
+            1 for e in people.values()
+            if isinstance(e, dict) and scope_rules.clean(e.get("scope")) is not None)
+        if not (retired_roles or retired_people):
+            return
+        if self._groups:
+            logger.info(
+                "visibility: %s still carries pre-resource-group scope fields; "
+                "they are ignored and the next save drops them.", self.path)
+        else:
+            logger.error(
+                "visibility: %s restricts reach the OLD way (a role scope "
+                "default, and/or %d person(s) with their own scope), and that "
+                "is no longer read. With no resource group saved, EVERYBODY "
+                "NOW REACHES EVERY VENUE. Create resource groups in the portal "
+                "and assign them to restore the restrictions.",
+                self.path, retired_people)
 
     @staticmethod
     def _clean_people(raw, known_roles) -> Dict[str, Dict[str, Any]]:
         """
-        Per-person policy — role and scope — keyed by the identity PRISM
-        knows somebody by.
+        Per-person policy — role and resource groups — keyed by the identity
+        PRISM knows somebody by.
 
         That is the username in accounts mode and the verified address in proxy
         mode. PASSPHRASE MODE HAS NO IDENTITY AT ALL — a shared secret proves
         somebody knew it, never who — so nothing here can ever match there and
-        every caller falls back to their role's policy. That is not a gap to
+        every caller gets their role's policy and the unrestricted reach that
+        passphrase mode always has (see `scope_for`). That is not a gap to
         fix; it is what a shared secret means.
 
         CASE-FOLDED ON THE WAY IN, for the reason `_role_for_identity` folds:
         an identity provider's idea of an address's case is not stable, and
         losing a restriction to a capital letter fails in the wrong direction.
 
-        CARRIES THREE THINGS NOW: the role, the resource groups, and the
-        legacy scope map. The last of those is the COMPATIBILITY SHADOW once
-        groups are in force — written so that a rollback to a PRISM that has
-        never heard of groups still enforces the last resolved territory
-        rather than reading an absent scope as "unrestricted", which for the
-        fail-closed half is the one direction it must never fail in. It is
-        write-only from that point: `scope_for` reads the groups.
-
-        READS TWO SHAPES AND WRITES ONE. The top-level `people` map is current;
-        `scope.people` is where R1 put the scope half before roles existed.
-        Both are merged, top-level winning, so a file written by the previous
-        release keeps working and the next save tidies it. An entry with
-        neither a role nor a scope is dropped, so the file has one way to
-        say "nothing special about this person".
+        An entry with neither a role nor a group list is dropped, so the file
+        has one way to say "nothing special about this person".
 
         A ROLE ID THAT NO LONGER EXISTS IS KEPT, NOT DROPPED. Dropping it
         would silently return that person to the role default — more visible
@@ -442,16 +410,13 @@ class PolicyStore:
 
         merged: Dict[str, Dict[str, Any]] = {}
 
-        def note(identity: Any, role_id: Any, block: Any, groups: Any = None) -> None:
+        def note(identity: Any, role_id: Any, groups: Any) -> None:
             if not isinstance(identity, str) or not identity.strip():
                 return
             key = identity.strip().casefold()
             entry = merged.setdefault(key, {})
             if isinstance(role_id, str) and role_id:
                 entry["role"] = role_id
-            parsed = scope_rules.clean(block)
-            if parsed is not None:
-                entry["scope"] = parsed
             # AN EMPTY LIST IS NOT THE SAME AS NO LIST, and this is the one
             # place that distinction is made. `[]` is an admin saying "this
             # person reaches nothing" and must survive a round trip; absent
@@ -461,17 +426,12 @@ class PolicyStore:
             if isinstance(groups, (list, tuple)):
                 entry["groups"] = group_rules.clean_assignment(groups)
 
-        legacy = (raw.get("scope") or {}) if isinstance(raw.get("scope"), dict) else {}
-        for identity, block in (legacy.get(PEOPLE_KEY) or {}).items():
-            note(identity, None, block)
-
         current = raw.get(PEOPLE_BLOCK)
         if isinstance(current, dict):
             for identity, entry in current.items():
                 if not isinstance(entry, dict):
                     continue
-                note(identity, entry.get("role"), entry.get("scope"),
-                     entry.get("groups"))
+                note(identity, entry.get("role"), entry.get("groups"))
 
         if known_roles is not None:
             missing = sorted({e["role"] for e in merged.values()
@@ -486,51 +446,6 @@ class PolicyStore:
                     len(missing), ", ".join(missing))
 
         return {k: v for k, v in merged.items() if v}
-
-    @staticmethod
-    def _shadow_scope(people: Dict[str, Dict[str, Any]],
-                      groups: Dict[str, Any]) -> None:
-        """
-        Write each person's RESOLVED territory into the legacy `scope` field.
-
-        A ROLLBACK GUARD, and the reason groups did not need `FORMAT_VERSION`
-        bumped. A PRISM one version older refuses a file whose version it does
-        not understand OUTRIGHT, which for scope means every restriction
-        vanishing at once — the single direction this control must never fail
-        in. So the groups go in under a key an older reader simply does not
-        see, and the territory they resolve to is ALSO written where that
-        older reader already looks.
-
-        What a rolled-back PRISM then enforces is the last resolved snapshot:
-        correct for a group naming ids, and NEVER WIDER than the live answer,
-        because a group cannot resolve to more than the ids it names. The one
-        case that loses precision is `all-access`, which resolves to "no
-        restriction" — the same thing the older PRISM would have done for
-        somebody with no entry, so nothing is given away.
-
-        WRITE-ONLY FROM HERE. `scope_for` reads the GROUPS once they are in
-        force and never this field, so the two cannot disagree about who is
-        in charge. Mutates in place, like the rest of the save path.
-        """
-        if not groups:
-            # Groups are not in force, so `scope` is still the real setting
-            # and must not be overwritten by a resolution of nothing.
-            return
-        known = group_rules.resolve(groups)
-        for entry in people.values():
-            assigned = entry.get("groups")
-            if assigned is None:
-                # A person carried forward from before groups: their own scope
-                # entry is left exactly as it was. They are unplaced under the
-                # new model and `scope_for` says so; silently materialising a
-                # territory for them would be this file guessing.
-                continue
-            resolved = group_rules.union(known.get(g) for g in assigned)
-            block = scope_rules.clean(resolved.as_json())
-            if block is None:
-                entry.pop("scope", None)
-            else:
-                entry["scope"] = block
 
     def people_scoped(self) -> Tuple[str, ...]:
         """Every identity with an entry of its own, for the portal to draw."""
@@ -728,7 +643,8 @@ class PolicyStore:
         no venues — which is a reversal of what every existing deployment
         does, so switching it on cannot be something an upgrade does to
         somebody overnight. It is keyed on whether a group CATALOGUE has been
-        saved: until one has, scope resolves the way it always did.
+        saved: until one has, everybody reaches every venue, which is what an
+        unconfigured deployment has always done.
 
         That also means turning it off is possible and is a deliberate act:
         delete every group and the deployment reverts. `admin_router` refuses
@@ -755,66 +671,51 @@ class PolicyStore:
 
     def scope_for(self, identity: Optional[str], role_id: Optional[str] = None):
         """
-        Which customers and venues this caller may reach.
+        Which customers and venues this caller may reach. RESOURCE GROUPS ONLY.
 
-        TWO MODELS LIVE HERE, and which one answers depends on
-        `groups_in_force`. They are not blended — a caller gets one answer
-        from one of them, because a union of the two would mean an admin
-        turning groups on could not take anything away.
+        ONCE A CATALOGUE EXISTS: the person's assigned groups, UNIONED — see
+        `resource_groups.union` for why union is right here. **No group means
+        NO VENUES**, the deliberate reversal the model rests on: reach is
+        granted by assignment, so somebody nobody has placed reaches nothing
+        rather than everything. The role is never consulted; a role says what
+        somebody may RUN, never whose network they may run it on.
 
-        RESOURCE GROUPS (once a catalogue exists). The person's assigned
-        groups, UNIONED — see `resource_groups.union` for why union is right
-        here and wrong between a person and a role. **No group means NO
-        VENUES**, which is the deliberate reversal the whole model rests on:
-        reach is granted by assignment, so somebody nobody has placed reaches
-        nothing rather than everything. The role is not consulted at all; a
-        role says what somebody may RUN, never whose network they may run it
-        on, and the two were separated on purpose.
-
-        LEGACY (before any group is saved). Person's own entry, else their
-        role's default, else unrestricted — what every deployment does today.
-        A person's entry REPLACES their role's rather than adding to it, so
-        "what can Dana reach" has one answer; under a union rule, naming her
-        ECs would have handed her hers PLUS everything her role could already
-        reach, which is the opposite of what an admin typing a territory into
-        a box means.
+        BEFORE ANY GROUP IS SAVED: unrestricted, for everybody. That is the
+        bootstrap rule (`groups_in_force`) — a fresh deployment works before
+        anybody has drawn a territory, and switching groups on is a
+        deliberate act in the portal rather than something an install does.
 
         PASSPHRASE MODE NEVER FAILS CLOSED HERE, and that is not a hole. That
         mode has no identities — a shared secret proves somebody knew it,
-        never who — so a per-person assignment can never match, and applying
-        the fail-closed rule would mean PRISM's DEFAULT auth mode shows every
-        user nothing, permanently, with no screen that could fix it. Groups
-        need somebody to assign them to; where there is nobody, the legacy
-        answer stands. Same reasoning as the super tier, which cannot exist
-        there either.
+        never who — so an assignment can never match, and applying the
+        fail-closed rule would leave PRISM's DEFAULT auth mode showing every
+        user nothing with no screen that could fix it.
 
-        THERE IS NO ADMIN SHORT-CIRCUIT in either model. An administrator with
-        no group reaches no venue — and can still reach `/api/admin`, which is
-        gated on the role and never on scope, so the screen that fixes it is
-        always open. `scope.spec.ts` has a test for exactly that.
+        THERE IS NO ADMIN SHORT-CIRCUIT. An administrator with no group
+        reaches no venue — and can still reach `/api/admin`, which is gated on
+        the role and never on scope, so the screen that fixes it is always
+        open. `scope.spec.ts` has a test for exactly that.
+
+        `role_id` is accepted and unused, so every call site keeps passing
+        both facts about a caller (`auth.scope_of`) and a future rule that
+        does need the role cannot be added at a site that forgot it.
         """
         with self._lock:
             self._load()
             folded = identity.strip().casefold() if identity else None
-            entry = (self._people.get(folded) or {}) if folded else {}
-
-            if self._groups and folded:
-                known = group_rules.resolve(self._groups)
-                assigned = entry.get("groups")
-                if assigned is None:
-                    # Never placed. Under the group model that is nothing, and
-                    # it is logged because it presents to the person as "I can
-                    # see no venues" with nothing on screen explaining why.
-                    logger.info(
-                        "scope: %s holds no resource group, so no venue is "
-                        "reachable. Assign one in the portal.", folded)
-                    return scope_rules.Scope(unrestricted=False, ecs={})
-                return group_rules.union(known.get(g) for g in assigned)
-
-            if entry.get("scope") is not None:
-                return scope_rules.parse(entry["scope"])
-            resolved_id = role_id or entry.get("role")
-            return scope_rules.parse(self._scope.get(resolved_id or ""))
+            if not (self._groups and folded):
+                return scope_rules.UNRESTRICTED
+            known = group_rules.resolve(self._groups)
+            assigned = (self._people.get(folded) or {}).get("groups")
+            if assigned is None:
+                # Never placed. Under the group model that is nothing, and
+                # it is logged because it presents to the person as "I can
+                # see no venues" with nothing on screen explaining why.
+                logger.info(
+                    "scope: %s holds no resource group, so no venue is "
+                    "reachable. Assign one in the portal.", folded)
+                return scope_rules.Scope(unrestricted=False, ecs={})
+            return group_rules.union(known.get(g) for g in assigned)
 
     def hidden_for(self, identity: Optional[str],
                    role_id: Optional[str] = None) -> Tuple[str, ...]:
@@ -843,12 +744,6 @@ class PolicyStore:
             self._load()
             return {
                 "version": FORMAT_VERSION,
-                # NOT EMITTED ANY MORE. Visibility lives on the role, as an
-                # allow list, and there is nothing else for a portal to edit.
-                # The stored block is still READ — once, to migrate — and
-                # `_migrate_hidden` is the only thing that looks at it.
-                "scope": {role: scope_rules.parse(block).as_json()
-                          for role, block in self._scope.items()},
                 "roles": role_rules.catalogue(role_rules.resolve(self._roles).values()),
                 # THE SECOND AXIS. Emitted RESOLVED, so the compiled-in
                 # `all-access` is in the list the portal draws and an admin
@@ -866,8 +761,6 @@ class PolicyStore:
                         "role": entry.get("role"),
                         "groups": list(entry["groups"]) if entry.get("groups") is not None
                                   else None,
-                        "scope": (scope_rules.parse(entry["scope"]).as_json()
-                                  if entry.get("scope") is not None else None),
                     }
                     for identity, entry in sorted(self._people.items())
                 },
@@ -899,7 +792,7 @@ class PolicyStore:
 
     # ── writing ──────────────────────────────────────────────────────
 
-    def save(self, hidden: Dict[str, List[str]], scope: Optional[Dict[str, Any]],
+    def save(self, hidden: Optional[Dict[str, List[str]]],
              actor: Optional[str],
              roles: Optional[Any] = None,
              people: Optional[Any] = None,
@@ -933,8 +826,6 @@ class PolicyStore:
             self._load()
             if hidden is None:
                 hidden = dict(self._cache)
-            if scope is None and self._scope:
-                scope = dict(self._scope)
             if roles is None:
                 roles = {rid: r.public() for rid, r in self._roles.items()}
             if people is None:
@@ -944,15 +835,11 @@ class PolicyStore:
                                    for gid, g in self._groups.items()}
 
         cleaned = self._clean(hidden)
-        cleaned_scope = self._clean_scope(scope)
         # The SAME migration `_load` applies, and it has to be here too: the
         # cache is refreshed in place below rather than re-read, so a step this
         # skipped would be correct on disk and wrong in memory until the
         # container restarted. `_people` was exactly that bug once already.
         cleaned_roles = self._migrate_hidden(role_rules.clean(roles), cleaned)
-        # Both shapes are accepted on the way in — a caller may still send the
-        # per-person scope nested under `scope`, which is where R1 put it — and
-        # only the top-level one is written. `_clean_people` does the merge.
         # Built-ins are NOT written back: `resolve` compiles `all-access` in,
         # so a portal echoing the catalogue would otherwise persist a copy of
         # it and the compiled-in one would stop being the thing that answers.
@@ -964,9 +851,7 @@ class PolicyStore:
             if g != group_rules.builtins().get(gid)
         }
         cleaned_people = self._clean_people(
-            {"scope": scope, PEOPLE_BLOCK: people},
-            role_rules.resolve(cleaned_roles))
-        self._shadow_scope(cleaned_people, cleaned_groups)
+            {PEOPLE_BLOCK: people}, role_rules.resolve(cleaned_roles))
         payload = {
             "version": FORMAT_VERSION,
             # The pre-roles `hidden` block is NOT written back. It is read on
@@ -976,7 +861,6 @@ class PolicyStore:
             # Each block omitted entirely when empty, so an unrestricted
             # deployment's file stays readable at a glance and a version-1 file
             # round-trips to something that looks the same.
-            **({"scope": cleaned_scope} if cleaned_scope else {}),
             **({"roles": {rid: r.public()
                              for rid, r in sorted(cleaned_roles.items())}}
                if cleaned_roles else {}),
@@ -1031,7 +915,6 @@ class PolicyStore:
         # `_people` was exactly that bug.
         with self._lock:
             self._cache = cleaned
-            self._scope = cleaned_scope
             self._roles = cleaned_roles
             self._groups = cleaned_groups
             self._people = cleaned_people
@@ -1044,11 +927,10 @@ class PolicyStore:
             "visibility: policy saved by %s — %s", payload["updatedBy"],
             "; ".join(
                 f"{rid}: {len(role.grants)} capability(ies), "
-                f"{len(role.visible)} element(s) visible, "
-                + ("unrestricted scope" if rid not in cleaned_scope else
-                   f"{len(cleaned_scope[rid].get('ecs') or {})} EC(s) allowed")
+                f"{len(role.visible)} element(s) visible"
                 for rid, role in sorted(cleaned_roles.items())) or "no roles"
             + (f"; {len(cleaned_roles)} role(s)" if cleaned_roles else "")
+            + (f"; {len(cleaned_groups)} resource group(s)" if cleaned_groups else "")
             + (f"; {len(cleaned_people)} person(s) with their own entry"
                if cleaned_people else ""))
         return self.policy()

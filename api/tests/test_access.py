@@ -681,21 +681,24 @@ def test_a_tagged_user_reads_a_roll_up_of_their_scope_and_no_more():
     tmp = tempfile.mkdtemp()
     policy = f"{tmp}/visibility.json"
     with open(policy, "w", encoding="utf-8") as fh:
-        json.dump({"version": 2, "hidden": {"user": []},
-                   "scope": {"user": {"unrestricted": False,
-                                      "ecs": {"ec-mine": ["v1"]}}}}, fh)
+        json.dump({"version": 2,
+                   "resourceGroups": {"mine": {"label": "Mine",
+                                               "ecs": {"ec-mine": ["v1"]}}},
+                   "people": {"boss": {"groups": ["all-access"]},
+                              "desk": {"groups": ["mine"]}}}, fh)
 
     original_batch, original_policy = batch_runs.STORE, visibility.STORE
     batch_runs.STORE = batch_runs.BatchStore(_seeded_batch(tmp))
     visibility.STORE = visibility.PolicyStore(policy)
     try:
-        def state(role, tags, tenant="ec-mine"):
+        def state(role, who, tenant="ec-mine"):
+            request = _request("/api/msp/batch/state", role=role)
+            request.state.prism_user = who
             return asyncio.run(batch_router.get_state(
-                _request("/api/msp/batch/state", role=role, tags=tags),
-                tenant_id=tenant, days=3650))
+                request, tenant_id=tenant, days=3650))
 
-        admin = state("admin", ("msp",))
-        user = state("user", ("msp",))
+        admin = state("admin", "boss")
+        user = state("user", "desk")
 
         assert admin["msp"]["tenantCount"] == 2, admin["msp"]["tenantCount"]
         assert admin["tenant"]["venueCount"] == 2
@@ -709,7 +712,7 @@ def test_a_tagged_user_reads_a_roll_up_of_their_scope_and_no_more():
         # And a tenant outside the scope is REFUSED, not silently empty: an
         # empty roll-up is indistinguishable from a batch that never ran.
         try:
-            state("user", ("msp",), tenant="ec-theirs")
+            state("user", "desk", tenant="ec-theirs")
         except HTTPException as exc:
             assert exc.status_code == 403, exc.status_code
         else:
@@ -803,16 +806,13 @@ def test_the_built_in_admin_role_can_always_repair_a_broken_policy():
         sections.ALL_ELEMENT_IDS)
 
 
-def test_a_persons_scope_replaces_their_roles():
+def test_a_persons_groups_decide_their_reach():
     """
     Two regional leaders, identical duties, different territories — the case
-    per-person scope exists for.
-
-    REPLACES, does not union. Under a union rule, naming Dana's ECs would hand
-    her her own PLUS everything the `user` role could already reach, which is
-    the opposite of what an admin typing a territory into a box means. It also
-    gives "what can Dana see" one answer rather than two that have to be
-    combined in the reader's head.
+    resource groups exist for. Reach comes from the person's GROUPS and never
+    from their role, identities are case-folded on both sides (an identity
+    provider's idea of an address's case is not stable), and a caller with no
+    identity at all — passphrase mode — is unrestricted.
     """
     import json
     import tempfile
@@ -823,41 +823,32 @@ def test_a_persons_scope_replaces_their_roles():
     with open(path, "w", encoding="utf-8") as fh:
         json.dump({
             "version": visibility.FORMAT_VERSION,
-            "hidden": {"user": []},
-            "scope": {
-                "user": {"unrestricted": False, "ecs": {"ec-common": "*"}},
-                visibility.PEOPLE_KEY: {
-                    "dana": {"unrestricted": False, "ecs": {"ec-north": "*"}},
-                    # Stored folded; looked up folded. An IDP's idea of an
-                    # address's case is not stable.
-                    "SAM@Corp.Example": {"unrestricted": False,
-                                         "ecs": {"ec-south": ["v1"]}},
-                },
+            "resourceGroups": {
+                "north": {"label": "North", "ecs": {"ec-north": "*"}},
+                "south-v1": {"label": "South, one site", "ecs": {"ec-south": ["v1"]}},
+            },
+            visibility.PEOPLE_BLOCK: {
+                "dana": {"role": "user", "groups": ["north"]},
+                "SAM@Corp.Example": {"role": "user", "groups": ["south-v1"]},
             },
         }, fh)
 
     original = visibility.STORE
     visibility.STORE = visibility.PolicyStore(path)
     try:
-        # No entry of their own: the role's scope, unchanged.
-        plain = visibility.scope_for("morgan", "user")
-        assert plain.allows_ec("ec-common")
-        assert not plain.allows_ec("ec-north")
-
-        # Dana's entry replaces it — she does NOT keep the role's ec-common.
         dana = visibility.scope_for("dana", "user")
-        assert dana.allows_ec("ec-north")
-        assert not dana.allows_ec("ec-common"), \
-            "a person's scope was unioned with their role's, not substituted"
+        assert dana.allows_ec("ec-north") and not dana.allows_ec("ec-south")
 
-        # Case-folded on both sides, and venue lists survive the round trip.
         sam = visibility.scope_for("sam@CORP.example", "user")
         assert sam.allows_venue("ec-south", "v1")
         assert not sam.allows_venue("ec-south", "v2")
         assert not sam.allows_ec("ec-north")
 
-        # No identity at all — passphrase mode — falls back to the role.
-        assert visibility.scope_for(None, "user").allows_ec("ec-common")
+        # Somebody nobody placed reaches nothing, whatever their role.
+        assert not visibility.scope_for("morgan", "user").allows_ec("ec-north")
+
+        # No identity at all — passphrase mode — never fails closed.
+        assert visibility.scope_for(None, "user").unrestricted
 
         assert visibility.STORE.people_scoped() == ("dana", "sam@corp.example")
     finally:
@@ -963,7 +954,7 @@ def test_a_refusal_says_what_is_missing_and_not_how_it_is_configured():
     assert grants.label(grants.GRANT_ADMIN_PORTAL) in messages["require_admin"]
 
 
-def test_a_saved_scope_takes_effect_without_a_restart():
+def test_a_saved_policy_takes_effect_without_a_restart():
     """
     `save` refreshes the in-memory cache in place and advances `_stamp` so that
     `_load` will not re-read — which means every field `_load` sets has to be
@@ -982,26 +973,24 @@ def test_a_saved_scope_takes_effect_without_a_restart():
     tmp = tempfile.mkdtemp()
     path = f"{tmp}/visibility.json"
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump({"version": visibility.FORMAT_VERSION, "hidden": {"user": []}}, fh)
+        json.dump({"version": visibility.FORMAT_VERSION}, fh)
 
     store = visibility.PolicyStore(path)
     assert store.scope_for("dana").unrestricted
 
     store.save(
-        hidden={"user": []},
-        scope={"user": {"unrestricted": False, "ecs": {"ec-common": "*"}},
-               visibility.PEOPLE_KEY: {
-                   "dana": {"unrestricted": False, "ecs": {"ec-north": "*"}}}},
-        actor="test")
+        hidden=None, actor="test",
+        resource_groups={"north": {"label": "North", "ecs": {"ec-north": "*"}}},
+        people={"dana": {"role": "user", "groups": ["north"]}})
 
     # Same process, same store object, no reload.
+    assert store.groups_in_force, "a saved catalogue did not switch groups on"
     dana = store.scope_for("dana")
-    assert not dana.unrestricted, "a saved person scope did not take effect"
+    assert not dana.unrestricted, "a saved assignment did not take effect"
     assert dana.allows_ec("ec-north")
-    assert not dana.allows_ec("ec-common")
+    assert not store.scope_for("morgan").allows_ec("ec-north")
     assert store.people_scoped() == ("dana",)
-    assert store.policy()[visibility.PEOPLE_BLOCK]["dana"]["scope"]["ecs"] == {
-        "ec-north": "*"}
+    assert store.policy()[visibility.PEOPLE_BLOCK]["dana"]["groups"] == ["north"]
 
 
 def _role_store(tmp, role_body, assignment, role_hidden=("wireless.ssids",)):
@@ -1019,7 +1008,7 @@ def _role_store(tmp, role_body, assignment, role_hidden=("wireless.ssids",)):
         json.dump({"version": visibility.FORMAT_VERSION,
                    "hidden": {"user": list(role_hidden)}}, fh)
     store = visibility.PolicyStore(path)
-    store.save(hidden={"user": list(role_hidden)}, scope=None, actor="test",
+    store.save(hidden={"user": list(role_hidden)}, actor="test",
                roles=role_body, people=assignment)
     return store
 
@@ -1086,7 +1075,7 @@ def test_a_deleted_role_withholds_everything():
         {"dana": {"role": rid}})
     assert sorted(store.grants_for("dana")) == ["msp.rollup"]
 
-    store.save(hidden={}, scope=None, actor="test",
+    store.save(hidden={}, actor="test",
                roles={}, people={"dana": {"role": rid}})
 
     assert store.grants_for("dana") == frozenset(), \
@@ -1131,50 +1120,6 @@ def test_a_role_drops_ids_it_does_not_recognise():
     # ...but a missing LABEL is cosmetic, so it falls back to the id and stays
     # assignable, looking obviously unfinished in the portal.
     assert role_rules.clean_one({"id": pid}).label == pid
-
-
-def test_a_policy_written_before_roles_still_reads():
-    """
-    R1 stored per-person scope under `scope.people`; R2 moved it to a top-level
-    `people` map that also carries the role. A file written by the previous
-    release has to keep working — a deploy that silently dropped everyone's
-    scope would fail open, which is the one direction this control must not.
-
-    Read from both shapes, written in the new one, so the next save tidies it.
-    """
-    import json
-    import tempfile
-    import visibility
-
-    tmp = tempfile.mkdtemp()
-    path = f"{tmp}/visibility.json"
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump({
-            "version": visibility.FORMAT_VERSION,
-            "hidden": {"user": ["wireless.ssids"]},
-            "scope": {
-                "user": {"unrestricted": False, "ecs": {"ec-role": "*"}},
-                visibility.PEOPLE_KEY: {
-                    "dana": {"unrestricted": False, "ecs": {"ec-north": "*"}}},
-            },
-        }, fh)
-
-    store = visibility.PolicyStore(path)
-    dana = store.scope_for("dana")
-    assert dana.allows_ec("ec-north"), "an R1 per-person scope was lost"
-    assert not dana.allows_ec("ec-role")
-    assert store.scope_for("morgan").allows_ec("ec-role")
-
-    # And the next save writes the new shape without losing it.
-    policy = store.policy()
-    store.save(hidden={"user": ["wireless.ssids"]},
-               scope=policy["scope"], actor="test",
-               people=policy[visibility.PEOPLE_BLOCK])
-    with open(path, encoding="utf-8") as fh:
-        written = json.load(fh)
-    assert visibility.PEOPLE_BLOCK in written, "the migration did not rewrite"
-    assert written[visibility.PEOPLE_BLOCK]["dana"]["scope"]["ecs"] == {"ec-north": "*"}
-    assert store.scope_for("dana").allows_ec("ec-north")
 
 
 def test_grants_come_from_the_role_and_nowhere_else():
@@ -1329,7 +1274,7 @@ def test_the_super_tier_does_not_exist_until_somebody_holds_it():
     _with_policy(store, check_open)
 
     # Now somebody holds it.
-    store.save(hidden={"user": []}, scope=None, actor="test",
+    store.save(hidden={"user": []}, actor="test",
                roles={pid: {"id": pid, "label": "Super",
                                "grants": [grants.GRANT_ADMIN_ROLES]}},
                people={"alex": {"role": pid}})
@@ -1605,7 +1550,7 @@ def test_a_deleted_profile_confers_nothing_not_even_the_defaults():
     store = _role_store(
         tmp, {pid: {"label": "Gone", "grants": ["msp.rollup"], "visible": []}},
         {"dana": {"role": pid}})
-    store.save(hidden={"user": []}, scope=None, actor="test",
+    store.save(hidden={"user": []}, actor="test",
                roles={}, people={"dana": {"role": pid}})
 
     assert store.grants_for("dana") == frozenset(), \

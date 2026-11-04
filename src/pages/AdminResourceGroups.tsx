@@ -23,9 +23,8 @@ import {
  * and profiles into one concept.
  *
  * THE CATALOGUE FAILS CLOSED AND THE MODEL SWITCHES ON WITH IT. Until the
- * first group is saved, scope answers the way it always did (person entry,
- * else role default, else unrestricted). The moment a catalogue exists,
- * groups decide — and somebody with no group reaches NOTHING. That reversal
+ * first group is saved, everybody reaches every venue. The moment a catalogue
+ * exists, groups decide — and somebody with no group reaches NOTHING. That reversal
  * is why the banner below exists and why saving the first group is called out
  * rather than being an ordinary save: it changes what every unassigned person
  * on the deployment can see, at once.
@@ -51,7 +50,7 @@ export function groupSummary(
 
 export default function AdminResourceGroups({
   groups, onChange, catalogue, undeletable, holdersOf, inForce, readOnly,
-  onBuildFromScopes, carryOverCount,
+  onPlaceEveryone, unplacedCount,
 }: {
   groups: ResourceGroup[];
   onChange: (next: ResourceGroup[]) => void;
@@ -62,10 +61,10 @@ export default function AdminResourceGroups({
   /** Whether groups already decide scope here. False before the first save. */
   inForce: boolean;
   readOnly: boolean;
-  /** Propose a catalogue from the per-person lists in force today. */
-  onBuildFromScopes: () => void;
-  /** How many people that would place. */
-  carryOverCount: number;
+  /** Propose `all-access` for everybody not yet placed — what they have today. */
+  onPlaceEveryone: () => void;
+  /** How many people have no group, and so would be shut out by the switch. */
+  unplacedCount: number;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const { rows, nameOf } = catalogue;
@@ -123,32 +122,34 @@ export default function AdminResourceGroups({
           <p className="flex items-start gap-1.5 text-xs text-amber-900">
             <TriangleAlert size={13} className="mt-0.5 shrink-0" />
             <span>
-              <b>Groups are not deciding anything yet.</b> Until the first one
-              is saved, access works the old way — each person's own customer
-              list, and everybody else unrestricted. Saving a group{" "}
-              <b>switches that over</b>: from then on anybody with no group
-              assigned can open <b>no venue at all</b>.
+              <b>Groups are not deciding anything yet</b>, so everybody can open
+              every customer. Saving a group <b>switches that over</b>: from
+              then on anybody with no group assigned can open <b>no venue at
+              all</b>.
             </span>
           </p>
           {/*
             THE ON-RAMP. Fail-closed plus an empty catalogue is an outage, so
-            the screen that switches the model on is also the screen that
-            offers to carry today's access across. Nothing is written until
-            Save, so this is a proposal an administrator reads.
+            the screen that switches the model on also offers to place
+            everybody first. Nothing is written until Save.
           */}
-          <button type="button" onClick={onBuildFromScopes} disabled={readOnly}
-                  className="mt-2 rounded-md border border-amber-400 bg-white px-2.5
-                             py-1 text-xs font-medium text-amber-900
-                             hover:bg-amber-100 disabled:opacity-50">
-            Carry the current access across
-          </button>
-          <p className="mt-1 text-[11px] text-amber-800">
-            Builds a group for each distinct territory people already have —
-            identical lists become <b>one</b> group, which is usually the first
-            time that duplication is visible — and gives everybody who was
-            unrestricted <b>All access</b>. {carryOverCount} person(s) would be
-            placed. Review and Save, or close the dialog to discard.
-          </p>
+          {unplacedCount > 0 && (
+            <>
+              <button type="button" onClick={onPlaceEveryone} disabled={readOnly}
+                      className="mt-2 rounded-md border border-amber-400 bg-white px-2.5
+                                 py-1 text-xs font-medium text-amber-900
+                                 hover:bg-amber-100 disabled:opacity-50">
+                Give everyone All access first
+              </button>
+              <p className="mt-1 text-[11px] text-amber-800">
+                Assigns <b>All access</b> to the {unplacedCount} person(s) with no
+                group — exactly what they can open today — so switching groups
+                on takes nothing from anybody. Narrow people afterwards by
+                giving them a different group. Review and Save, or close the
+                dialog to discard.
+              </p>
+            </>
+          )}
         </div>
       )}
 
@@ -241,7 +242,6 @@ export default function AdminResourceGroups({
                   <div className="mt-3 border-t border-gray-100 pt-3">
                     <fieldset disabled={readOnly} className="min-w-0">
                       <AdminScope
-                        kind="group"
                         subject={group.label}
                         catalogue={catalogue}
                         scope={asScope(group)}

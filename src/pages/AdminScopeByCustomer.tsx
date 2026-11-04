@@ -8,60 +8,35 @@ import {
 /**
  * ONE CUSTOMER's people — the by-customer direction.
  *
- * WHY BOTH DIRECTIONS EXIST. An administrator asks two questions about scope
+ * WHY BOTH DIRECTIONS EXIST. An administrator asks two questions about reach
  * and only one of them was answerable. "Dana changed territories" is
- * per-person and is what `AdminScope` does. "We just won this customer, who
- * works on it?" and "who can see this customer?" are per-customer, and
- * answering either used to mean opening all forty people in turn and
- * remembering what you saw. The second question is also the one an audit asks.
+ * per-person. "We just won this customer, who works on it?" and "who can see
+ * this customer?" are per-customer, and answering either used to mean opening
+ * all forty people in turn and remembering what you saw. The second question
+ * is also the one an audit asks.
  *
- * IT IS A TRANSPOSITION, NOT A SECOND STORE. The policy is keyed by person
- * (`people[identity].scope`), and this view reads and writes exactly that, so
- * there is nothing to keep in step and no migration. The PUT body is
- * unchanged.
+ * IT IS A TRANSPOSITION, NOT A SECOND STORE. Reach is people[x].groups against
+ * the group catalogue, and this view reads and writes exactly that — so there
+ * is nothing to keep in step.
  *
  * NOT A GRID, DELIBERATELY. The obvious rendering of "people × customers" is a
  * matrix, and it was the first design. Twenty customers against forty people
- * is eight hundred cells and, far worse, forty name columns — some 3,500px
- * wide, so the one screen that is supposed to let you scan the estate is the
- * one you read by scrolling sideways. Two lists and a direction toggle keep
- * every axis vertical at any size.
+ * is eight hundred cells and some 3,500px of name columns, so the one screen
+ * that is supposed to let you scan the estate is the one you read by
+ * scrolling sideways. Two lists and a direction toggle keep every axis
+ * vertical at any size.
  *
- * FOUR GROUPS, BECAUSE THERE ARE FOUR ANSWERS TO "CAN THEY OPEN THIS?" and
- * they are not interchangeable — `visibility.scope_for` resolves person →
- * role default → unrestricted, so somebody reaching this customer may be
- * doing it for any of three reasons, and what an admin may safely do about it
- * differs in each:
+ * THREE ANSWERS TO "CAN THEY OPEN THIS?", and each row NAMES THE GROUP that
+ * lets them in — because "how do I stop them" is never "untick this person"
+ * under groups: it is taking a group off them, or the customer out of a
+ * group, and those have very different blast radii.
  *
- *   own        their own entry names it. Fully editable, down to venues.
- *   via role   their ROLE's default names it and they have no entry of their
- *              own. Editable, but any edit DETACHES them from the role — so
- *              the group says so rather than letting it happen quietly.
- *   not here   restricted, by either route, and this customer is not in it.
- *   every      resolves unrestricted. Listed, barely editable; see below.
+ *   reaches    one of their groups covers this customer.
+ *   not here   they hold groups, none of which covers it.
+ *   unplaced   they hold no group at all, so they reach nothing anywhere.
  *
- * Reading the role default is not optional cosmetics. Without it everybody
- * under a scoped role lands in "reaches every customer" — the opposite of
- * true, on the screen an audit reads, and wrong by the exact amount that
- * matters.
- *
- * THE UNRESTRICTED GROUP IS LISTED BUT NOT TICKABLE, and that is the one piece
- * of real design here rather than layout. Somebody with no entry and no role
- * default genuinely can open this customer — so leaving them out would make
- * this view lie to an audit, which is half of what it is for. But they cannot
- * be UNTICKED here, because there is no honest way to store it: "not this one"
- * would have to be written as "every customer that exists right now, except
- * this one", and the next customer onboarded would then silently exclude them
- * where before it included them. A local-looking click would flip them from
- * open to closed across the whole estate. So the only thing offered is the
- * explicit, storable version — narrow them to this customer alone — and
- * anything subtler is a click through to their own page.
- *
- * THE VIA-ROLE GROUP *IS* TICKABLE, and the difference is worth stating
- * because it looks arbitrary. A role default is a FINITE NAMED LIST, so
- * "everything the role allows except this one" is a document that can be
- * written down and will still mean the same thing next month. "Everything
- * except this one" is not.
+ * Only rendered once groups are switched on; before that everybody reaches
+ * every customer and there is nothing to read by customer.
  */
 
 export default function AdminScopeByCustomer({
@@ -72,7 +47,7 @@ export default function AdminScopeByCustomer({
   catalogue: ScopeCatalogue;
   /** Every identity this portal knows about. */
   roster: string[];
-  /** What they actually reach and why — `resolveGroups`. */
+  /** What they actually reach and why — `resolvedOf` in AdminRoles. */
   resolvedOf: (identity: string) => Resolved;
   /** Their assigned groups: null means never placed, [] means nothing. */
   groupsOf: (identity: string) => string[] | null;

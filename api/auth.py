@@ -141,12 +141,9 @@ if AUTH.access_team and AUTH.access_aud:
 
 COOKIE_NAME = "prism_session"
 
-# The two roles. Deliberately two: "admin" edits the visibility policy and is
-# never subject to it, "user" is everyone else and sees what the policy allows.
-# A third would be a new entry in visibility.MANAGED_ROLES and a column in the
-# portal — but resist it until something actually needs one. Per-person
-# visibility is a permissions system, and a permissions system wants the user
-# table this tool deliberately does not have.
+# The two BUILT-IN role ids, compiled into roles._BUILTINS. Every other role is
+# data an administrator builds; these two are what an unreadable policy falls
+# back to, and what a passphrase session's two secrets map onto.
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 
