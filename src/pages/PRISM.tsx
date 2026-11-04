@@ -2971,8 +2971,7 @@ function PortList({ report }: { report: any }) {
   const errs = (row: any) => (row.crc || 0) + (row.inErr || 0) + (row.outErr || 0);
   const vlanText = (v: any) => (Array.isArray(v) ? v.join(", ") : v);
 
-  const tableRows = shown.map((row) => ({
-    switch: row.unit ? `${row.switch ?? "—"} · unit ${row.unit}` : row.switch,
+  const cells = (row: any): Record<string, React.ReactNode> => ({
     port: <span className="font-mono">{row.port}</span>,
     name: row.named ? row.name
       : row.name ? <span className="text-gray-400">{row.name}</span> : null,
@@ -3011,12 +3010,76 @@ function PortList({ report }: { report: any }) {
     media: [row.media, row.optics].filter(Boolean).join(" · ") || null,
     errors: errs(row) ? <span className="text-amber-700">{fmtNum(errs(row))}</span> : null,
     flags: [row.uplink && "uplink", row.stacking && "stacking"].filter(Boolean).join(", ") || null,
-  }));
+  });
+
+  const COLUMNS: { key: string; header: string }[] = [
+    { key: "port", header: "Port" },
+    { key: "name", header: "Name" },
+    { key: "status", header: "Status" },
+    { key: "speed", header: "Speed" },
+    { key: "untagged", header: "Untagged" },
+    { key: "tagged", header: "Tagged VLANs" },
+    { key: "poe", header: "PoE" },
+    { key: "neighbor", header: "LLDP neighbour" },
+    { key: "profile", header: "Port profile" },
+    { key: "lag", header: "LAG" },
+    { key: "media", header: "Media" },
+    { key: "errors", header: "Errors" },
+    { key: "flags", header: "Flags" },
+  ];
+
+  // One block per switch, in the order the server sorted them. Grouped by
+  // name rather than serial: a stack reports each member's serial on its own
+  // ports, and splitting a stack into units here would undo the module
+  // dividers below, which are what show the units.
+  const switchKey = (row: any) => String(row.switch ?? row.switchSerial ?? "—");
+  const groups = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of rows) totals.set(switchKey(row), (totals.get(switchKey(row)) || 0) + 1);
+    const out: { key: string; model: string | null; rows: any[]; total: number }[] = [];
+    for (const row of shown) {
+      const key = switchKey(row);
+      let group = out[out.length - 1];
+      if (!group || group.key !== key) {
+        group = { key, model: row.switchModel || null, rows: [], total: totals.get(key) || 0 };
+        out.push(group);
+      }
+      group.rows.push(row);
+    }
+    return out;
+  }, [rows, shown]);
+
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
+  const anyOpen = groups.some((g) => !collapsed[g.key]);
+  const setAll = (value: boolean) =>
+    setCollapsed(Object.fromEntries(groups.map((g) => [g.key, value])));
+
+  // "1/2/10" -> unit "1", module "1/2". A change of unit (stack member) gets a
+  // firmer line than a change of module within one unit.
+  const unitOf = (port: any) => String(port ?? "").split("/")[0];
+  const moduleOf = (port: any) => {
+    const parts = String(port ?? "").split("/");
+    return parts.length >= 3 ? parts.slice(0, 2).join("/") : "";
+  };
+  const dividerClass = (row: any, prev: any) => {
+    if (!prev) return "";
+    if (unitOf(row.port) !== unitOf(prev.port)) return "border-t border-gray-300";
+    if (moduleOf(row.port) !== moduleOf(prev.port)) return "border-t border-dashed border-gray-300";
+    return "border-t border-gray-100";
+  };
+
+  const summary = (group: { rows: any[]; total: number }) => {
+    const up = group.rows.filter((r) => r.up).length;
+    const nm = group.rows.filter((r) => r.named).length;
+    const bad = group.rows.filter((r) => errs(r) > 0).length;
+    return { up, nm, bad };
+  };
 
   return (
     <Card id="wired.port-list" title={`Every switch port (${fmtNum(rows.length)})`}
           icon={<Cable size={17} className="text-gray-400" />}
-          hint={`${fmtNum(named)} named by someone; the rest are blank or just repeat the port number.`}>
+          hint={`${fmtNum(named)} named by someone; the rest are blank or just repeat the port number. Click a switch\u2019s title to fold it away.`}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded border border-gray-200 overflow-hidden text-xs">
           {(["all", "named", "unnamed"] as const).map((key) => (
@@ -3034,31 +3097,88 @@ function PortList({ report }: { report: any }) {
                  placeholder="Switch, port, name, neighbour, VLAN…"
                  className="w-full rounded border border-gray-200 pl-7 pr-2 py-1.5 text-sm" />
         </div>
+        {groups.length > 1 && (
+          <button onClick={() => setAll(anyOpen)}
+                  className="text-xs px-2.5 py-1.5 rounded border border-gray-300 hover:bg-gray-50 text-gray-600">
+            {anyOpen ? "Collapse all" : "Expand all"}
+          </button>
+        )}
         {shown.length !== rows.length && (
           <span className="text-xs text-gray-500">showing {fmtNum(shown.length)}</span>
         )}
       </div>
-      <MiniTable
-        maxHeight="36rem"
-        columns={[
-          { key: "switch", header: "Switch", className: "whitespace-nowrap" },
-          { key: "port", header: "Port" },
-          { key: "name", header: "Name" },
-          { key: "status", header: "Status" },
-          { key: "speed", header: "Speed" },
-          { key: "untagged", header: "Untagged" },
-          { key: "tagged", header: "Tagged VLANs" },
-          { key: "poe", header: "PoE" },
-          { key: "neighbor", header: "LLDP neighbour" },
-          { key: "profile", header: "Port profile" },
-          { key: "lag", header: "LAG" },
-          { key: "media", header: "Media" },
-          { key: "errors", header: "Errors" },
-          { key: "flags", header: "Flags" },
-        ]}
-        rows={tableRows}
-        empty={rows.length ? "No port matches this filter." : "No switch ports were read for this venue."}
-      />
+
+      {!shown.length ? (
+        <p className="text-sm text-gray-400">
+          {rows.length ? "No port matches this filter." : "No switch ports were read for this venue."}
+        </p>
+      ) : (
+        // Near window height: the table has to scroll sideways, which makes
+        // this box the scroll container, so the sticky switch titles pin to
+        // ITS top rather than the window's. Tall enough that it reads the same.
+        <div className="min-w-0 overflow-auto border border-gray-200 rounded" style={{ maxHeight: "75vh" }}>
+          <table className="min-w-full w-max text-sm">
+            <thead className="bg-gray-50 sticky top-0 z-20 shadow-[inset_0_-1px_0_#e5e7eb]">
+              <tr>
+                {COLUMNS.map((col) => (
+                  <th key={col.key} className="text-left font-semibold text-gray-700 px-3 py-2 whitespace-nowrap">
+                    {col.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            {groups.map((group) => {
+              const isCollapsed = !!collapsed[group.key];
+              const { up, nm, bad } = summary(group);
+              return (
+                <tbody key={group.key}>
+                  {/* The switch's title row. Sticky on the th, not the tr —
+                      a sticky tr is ignored by some browsers. It sits under
+                      the column header (top-9 ≈ its height) and the inner div
+                      is sticky-left, so the name stays put on a sideways
+                      scroll too. */}
+                  <tr>
+                    <th colSpan={COLUMNS.length}
+                        className="sticky top-9 z-10 bg-slate-100 border-y border-slate-300 px-0 py-0 text-left font-normal">
+                      <button onClick={() => toggle(group.key)}
+                              className="sticky left-0 flex items-center gap-2 px-3 py-1.5 text-left"
+                              title={isCollapsed ? "Show this switch's ports" : "Fold this switch away"}>
+                        {isCollapsed
+                          ? <ChevronRight size={14} className="shrink-0 text-slate-500" />
+                          : <ChevronDown size={14} className="shrink-0 text-slate-500" />}
+                        <span className="font-semibold text-slate-900 whitespace-nowrap">{group.key}</span>
+                        {group.model && <span className="text-xs text-slate-600 whitespace-nowrap">{group.model}</span>}
+                        <span className="text-xs text-slate-500 whitespace-nowrap">
+                          · {group.rows.length === group.total
+                              ? `${fmtNum(group.total)} ports`
+                              : `${fmtNum(group.rows.length)} of ${fmtNum(group.total)} ports`}
+                          {" · "}{fmtNum(up)} up · {fmtNum(nm)} named
+                          {bad ? <span className="text-amber-700"> · {fmtNum(bad)} counting errors</span> : null}
+                          {isCollapsed ? " · folded" : ""}
+                        </span>
+                      </button>
+                    </th>
+                  </tr>
+                  {!isCollapsed && group.rows.map((row, i) => { const rowCells = cells(row); return (
+                    <tr key={`${group.key}|${row.port}|${i}`}
+                        className={`hover:bg-gray-50 ${dividerClass(row, group.rows[i - 1])}`}>
+                      {COLUMNS.map((col) => {
+                        const value = rowCells[col.key];
+                        return (
+                          <td key={col.key} className="px-3 py-1.5 text-gray-700">
+                            {value === null || value === undefined || value === ""
+                              ? <span className="text-gray-300">—</span> : value}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ); })}
+                </tbody>
+              );
+            })}
+          </table>
+        </div>
+      )}
     </Card>
   );
 }

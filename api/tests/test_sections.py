@@ -836,6 +836,16 @@ def test_the_port_list_is_every_port_in_numeric_order():
     assert not card["list"][0]["up"], "a down port is listed, not dropped"
 
 
+def test_the_port_list_carries_the_switch_model():
+    ports = [{**_up("1/1/1", "1G"), "switchMac": "AA:BB:CC:00:00:09"},
+             {**_up("1/1/2", "1G"), "switchName": "idf-2"}]
+    switches = [{"switchMac": "aa:bb:cc:00:00:09", "name": "core", "model": "ICX8200-48P"},
+                {"switchMac": "aa:bb:cc:00:00:0a", "name": "IDF-2", "model": "ICX7150-C12P"}]
+    rows = {r["port"]: r for r in shape_mod.port_card(ports, [], switches)["list"]}
+    assert rows["1/1/1"]["switchModel"] == "ICX8200-48P", "MAC join, either case"
+    assert rows["1/1/2"]["switchModel"] == "ICX7150-C12P", "name fallback"
+
+
 def _ap_view(serial, **extra):
     view = {"name": serial, "serial": serial, "state": "online", "status": "Online",
             "clients": 0, "radios": [{"band": "5G", "channel": 36, "width": "80MHz",

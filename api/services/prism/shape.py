@@ -1357,7 +1357,8 @@ def _milliwatts_to_watts(value) -> Optional[float]:
     return round(_num(value) / 1000.0, 1)
 
 
-def _port_row(port: Dict[str, Any], link_kind) -> Dict[str, Any]:
+def _port_row(port: Dict[str, Any], link_kind,
+              model: Optional[str] = None) -> Dict[str, Any]:
     """
     One switch port, as the full-inventory table shows it. An allowlist like
     every shaper: R1 adds fields without notice and the payload should not grow
@@ -1368,6 +1369,8 @@ def _port_row(port: Dict[str, Any], link_kind) -> Dict[str, Any]:
     return {
         "switch": port.get("switchName"),
         "switchSerial": port.get("switchSerial"),
+        # From the switch list, not the port DTO — see port_card.
+        "switchModel": model,
         "unit": port.get("switchUnitId"),
         "port": port.get("portIdentifier") or port.get("portIdentifierFormatted"),
         "name": port.get("name"),
@@ -1471,7 +1474,19 @@ def port_card(ports: List[Dict[str, Any]],
         })
     errored.sort(key=lambda row: row["crc"] + row["inErr"] + row["outErr"], reverse=True)
 
-    rows = [_port_row(port, link_kind) for port in ports]
+    # The port DTO carries no model, the switch list does. Joined on the switch
+    # MAC first (a stack shares one; its members' serials differ per port) and
+    # the name second.
+    model_by_mac = {_mac(sw.get("switchMac") or sw.get("id")): sw.get("model")
+                    for sw in (switches or []) if (sw.get("switchMac") or sw.get("id"))}
+    model_by_name = {_norm(sw.get("name")): sw.get("model")
+                     for sw in (switches or []) if sw.get("name")}
+
+    def model_of(port: Dict[str, Any]) -> Optional[str]:
+        return (model_by_mac.get(_mac(port.get("switchMac")))
+                or model_by_name.get(_norm(port.get("switchName"))))
+
+    rows = [_port_row(port, link_kind, model_of(port)) for port in ports]
     rows.sort(key=_port_row_order)
 
     return {
